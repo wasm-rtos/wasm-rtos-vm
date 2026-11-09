@@ -673,6 +673,11 @@ struct WmRuntime
     uint32_t* stack;
 #if WM_HAS_MMU
     struct WmTlb* tlb;
+    /* A TLB miss the fast loop stopped for: the access of the record it stopped at. */
+    uint32_t fault_address;
+    uint32_t fault_offset;
+    uint32_t fault_cells;
+    uint8_t fault_op;
 #endif
     uint32_t* stack_end;
     uint32_t* sp;

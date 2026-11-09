@@ -741,6 +741,47 @@ static uint16_t g_fast_offsets[WM_F_COUNT];
 /* From the first handler's label to the lowest one: records count handlers from there. */
 static ptrdiff_t g_fast_shift;
 
+#if WM_HAS_MMU
+/* The fast loop stopped for a TLB miss: not an end of the call, only of its slice. */
+static const char wm_page_stop[] = "page fault";
+
+/*
+ * The miss the fast loop stopped at: make the frame and fill the TLB, so the
+ * record runs again; or make the access here, through the memory functions,
+ * and step past the record. NULL to go on, or a trap.
+ */
+static WmResult page_fault(WmRuntime* rt)
+{
+    WmMemory* memory = rt->saved.func->instance->memory;
+    uint8_t size = (uint8_t)(1u << (WM_ROM8(ACCESS + (rt->fault_op - 0x28u)) & 3u));
+    WmResult result = wm_page_fault(rt->tlb, memory, rt->fault_address, rt->fault_offset, size);
+    if (result == wm_page_emulate)
+    {
+        WmResult trap = NULL;
+        uint32_t* sp = paged_access(memory, rt->fault_op, rt->fault_offset, rt->saved.sp, &trap);
+        if (!sp)
+            result = trap;
+        else
+        {
+            rt->saved.sp = sp;
+            rt->saved.pc += rt->fault_cells * sizeof(WmCell);
+            /* The record ran: its fuel is spent. */
+            if (rt->fuel_on && rt->nesting == 1u)
+                --rt->fuel;
+            return NULL;
+        }
+    }
+#if WM_HAS_TRACE
+    if (result)
+    {
+        rt->trap_func = rt->saved.func;
+        rt->trap_depth = rt->depth;
+    }
+#endif
+    return result;
+}
+#endif
+
 WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 {
     static const void* const labels[WM_F_COUNT] = {
@@ -790,13 +831,6 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     /* The record's first cell; ip is past it, at the record's other cells. */
     uint32_t cell = 0;
     const char* base;
-#if WM_HAS_MMU
-    /* A TLB miss: the access to make again, or to make through the memory functions. */
-    uint32_t fault_address = 0;
-    uint32_t fault_offset = 0;
-    uint32_t fault_cells = 0;
-    uint8_t fault_op = 0;
-#endif
 
     if (!rt)
     {
@@ -852,8 +886,10 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 /*
  * HOST = the place of SIZE bytes at ADDRESS + OFFSET. A memory in one block
  * directly, as ever; a paged one through the TLB. A TLB miss is an
- * exception: back to the record at REC (CELLS long, an access OP), to
- * mmu_fault, which makes the frame and runs the record again.
+ * exception: back to the record at REC (CELLS long, an access OP), the
+ * loop stops as for fuel and wm_execute makes the frame; the record then
+ * runs again. Nothing is called from inside the loop for it: on Xtensa a
+ * call anywhere in the handlers costs the whole loop registers.
  */
 #if WM_HAS_MMU
 #define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS)                                                 \
@@ -871,10 +907,10 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
                 HOST = e_->frame + (ea_ & (WM_FRAME - 1u));                                                    \
             else                                                                                               \
             {                                                                                                  \
-                fault_address = (ADDRESS);                                                                     \
-                fault_offset = (OFFSET);                                                                       \
-                fault_op = (OP);                                                                               \
-                fault_cells = (CELLS);                                                                         \
+                rt->fault_address = (ADDRESS);                                                                 \
+                rt->fault_offset = (OFFSET);                                                                   \
+                rt->fault_op = (OP);                                                                           \
+                rt->fault_cells = (CELLS);                                                                     \
                 ip = (REC);                                                                                    \
                 goto mmu_fault;                                                                                \
             }                                                                                                  \
@@ -1508,25 +1544,10 @@ call:
 
 #if WM_HAS_MMU
 mmu_fault:
-{
-    /* ip is at the record again, its fuel spent: make the frame and run it again, or run it here. */
-    uint8_t size = (uint8_t)(1u << (WM_ROM8(ACCESS + (fault_op - 0x28u)) & 3u));
-    WmResult r = wm_page_fault(rt->tlb, inst->memory, fault_address, fault_offset, size);
-    if (r == wm_page_emulate)
-    {
-        uint32_t* after = paged_access(inst->memory, fault_op, fault_offset, sp, &trap);
-        if (!after)
-            TRAP(trap);
-        sp = after;
-        ip += fault_cells;
-        FAST_RELOAD();
-        FAST_NEXT();
-    }
-    if (r)
-        TRAP(r);
+    /* The record runs again: its fuel comes back. */
     ++fuel;
-    FAST_NEXT();
-}
+    stop = wm_page_stop;
+    goto suspend;
 #endif
 
 suspend:
@@ -1578,7 +1599,21 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
 {
 #if WM_PREDECODE
     if ((resume ? rt->saved.func : func)->code->fast)
-        return run_fast(rt, func, resume);
+    {
+        WmResult result = run_fast(rt, func, resume);
+#if WM_HAS_MMU
+        while (result == wm_page_stop)
+        {
+            if ((result = page_fault(rt)))
+            {
+                rt->suspended = 0;
+                return result;
+            }
+            result = run_fast(rt, func, 1);
+        }
+#endif
+        return result;
+    }
 #endif
     uint32_t entry_depth = rt->depth;
     const WmCode* code;
