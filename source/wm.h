@@ -127,7 +127,15 @@ WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages);
 WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_log2);
 void wm_memory_free(WmMemory* memory);
 uint32_t wm_memory_grow(WmMemory* memory, uint32_t delta);
+/*
+ * The memory's bytes in one block, and its size; NULL when it is paged (the
+ * heap had no block that large), and then wm_memory_read and
+ * wm_memory_write reach it.
+ */
 uint8_t* wm_memory_data(const WmMemory* memory, uint32_t* size);
+/* Copy bytes out of a memory or into it, one block or paged: a trap error when they are out of bounds. */
+WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uint32_t length);
+WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, uint32_t length);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);

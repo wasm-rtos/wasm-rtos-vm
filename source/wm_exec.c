@@ -178,6 +178,62 @@ static WM_IMM void store_bytes(uint8_t* p, uint64_t v, uint8_t size)
     }
 }
 
+#if WM_HAS_MMU
+/*
+ * A memory access through the memory functions, for paged memory off the
+ * fast path (unaligned, across frames, or no TLB to cache it). sp is before
+ * the access; the result is sp after it, or NULL with *trap set.
+ */
+static uint32_t* paged_access(WmMemory* memory, uint8_t op, uint32_t offset, uint32_t* sp, WmResult* trap)
+{
+    uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
+    uint8_t size = (uint8_t)(1u << (d & 3u));
+    uint8_t bytes[8];
+    uint64_t value = 0;
+    uint64_t ea;
+    if (op >= 0x36u)
+    {
+        if (d & 8u)
+        {
+            sp -= 2;
+            value = get64(sp);
+        }
+        else
+            value = *--sp;
+    }
+    ea = (uint64_t)*--sp + offset;
+    if (ea > 0xFFFFFFFFu)
+    {
+        *trap = T_OOB_MEMORY;
+        return NULL;
+    }
+    if (op >= 0x36u)
+    {
+        for (uint32_t i = 0; i < size; ++i)
+            bytes[i] = (uint8_t)(value >> (8u * i));
+        *trap = wm_memory_write(memory, (uint32_t)ea, bytes, size);
+        return *trap ? NULL : sp;
+    }
+    if ((*trap = wm_memory_read(memory, (uint32_t)ea, bytes, size)))
+        return NULL;
+    for (uint32_t i = 0; i < size; ++i)
+        value |= (uint64_t)bytes[i] << (8u * i);
+    if (d & 4u)
+    {
+        uint8_t shift = (uint8_t)(64u - 8u * size);
+        value = (uint64_t)((int64_t)(value << shift) >> shift);
+    }
+    if (d & 8u)
+    {
+        put64(sp, value);
+        sp += 2;
+    }
+    else
+        *sp++ = (uint32_t)value;
+    return sp;
+}
+#endif
+
 static uint32_t clz32(uint32_t x) { return x ? (uint32_t)__builtin_clzl(x) - (uint32_t)(sizeof(long) * 8u - 32u) : 32u; }
 static uint32_t ctz32(uint32_t x) { return x ? (uint32_t)__builtin_ctzl(x) : 32u; }
 
@@ -529,26 +585,6 @@ WM_OP uint32_t* op_float(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
 }
 #endif
 
-uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
-{
-    uint32_t old = mem->pages;
-    uint32_t pages = old + delta;
-    /* The size limit in this memory's pages: the 64 KiB limit, or that many bytes for 1-byte pages. */
-    wm_size limit = mem->page_log2 ? WM_MAX_PAGES : (wm_size)WM_MAX_PAGES << 16;
-    uint8_t* data;
-    if (delta > limit || pages > limit || pages < old || (mem->max_pages != WM_NONE && pages > mem->max_pages))
-        return WM_NONE;
-    if (delta == 0)
-        return old;
-    data = (uint8_t*)wm_realloc(mem->data, (size_t)(((wm_size)pages << mem->page_log2) + 1u));
-    if (!data)
-        return WM_NONE;
-    memset(data + ((wm_size)old << mem->page_log2), 0, (size_t)((wm_size)delta << mem->page_log2));
-    mem->data = data;
-    mem->pages = pages;
-    return old;
-}
-
 static uint32_t grow_table(WmTable* t, uint32_t delta, uintptr_t init)
 {
     uint32_t old = t->size;
@@ -597,8 +633,13 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             sp -= 3;
             if (wm_out_of_bounds(src, n, size) || wm_out_of_bounds(dst, n, mem_size))
                 return T_OOB_MEMORY;
+#if WM_HAS_MMU
+            if ((result = wm_memory_write(memory, dst, s->data + src, n)))
+                return result;
+#else
             for (uint32_t i = 0; i < n; ++i)
                 memory->data[dst + i] = WM_RD8(s->data + src + i);
+#endif
             break;
         }
         case 9: inst->data_dropped[a] = 1; break;
@@ -610,10 +651,15 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             sp -= 3;
             if (wm_out_of_bounds(dst, n, mem_size) || (sub == 10u && wm_out_of_bounds(src, n, mem_size)))
                 return T_OOB_MEMORY;
+#if WM_HAS_MMU
+            if ((result = sub == 10u ? wm_memory_copy(memory, dst, src, n) : wm_memory_fill(memory, dst, (uint8_t)src, n)))
+                return result;
+#else
             if (sub == 10u)
                 memmove(memory->data + dst, memory->data + src, n);
             else
                 memset(memory->data + dst, (int)(uint8_t)src, n);
+#endif
             break;
         }
 #if WM_HAS_REF_TYPES
@@ -744,6 +790,13 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     /* The record's first cell; ip is past it, at the record's other cells. */
     uint32_t cell = 0;
     const char* base;
+#if WM_HAS_MMU
+    /* A TLB miss: the access to make again, or to make through the memory functions. */
+    uint32_t fault_address = 0;
+    uint32_t fault_offset = 0;
+    uint32_t fault_cells = 0;
+    uint8_t fault_op = 0;
+#endif
 
     if (!rt)
     {
@@ -777,7 +830,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         inst = func->instance;                                                                                 \
         bytes = inst->module->bytes;                                                                           \
         mem = inst->memory ? inst->memory->data : NULL;                                                        \
-        mem_size = inst->memory ? WM_MEMORY_SIZE(inst->memory) : 0;                                            \
+        mem_size = mem ? WM_MEMORY_SIZE(inst->memory) : 0;                                                     \
     } while (0)
 /* Fuel for the record at ip, then on to its handler; a stop leaves ip at the record. */
 #define FAST_NEXT()                                                                                            \
@@ -796,6 +849,48 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         cell = (ip++)->u32;                                                                                    \
         goto *(void*)(base + (cell & 0xFFFFu));                                                          \
     } while (0)
+/*
+ * HOST = the place of SIZE bytes at ADDRESS + OFFSET. A memory in one block
+ * directly, as ever; a paged one through the TLB. A TLB miss is an
+ * exception: back to the record at REC (CELLS long, an access OP), to
+ * mmu_fault, which makes the frame and runs the record again.
+ */
+#if WM_HAS_MMU
+#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS)                                                 \
+    do                                                                                                         \
+    {                                                                                                          \
+        if (__builtin_expect(!((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size)), \
+                             1))                                                                               \
+            HOST = mem + (ADDRESS) + (OFFSET);                                                                 \
+        else if (!mem && inst->memory)                                                                         \
+        {                                                                                                      \
+            uint32_t ea_ = (ADDRESS) + (OFFSET);                                                               \
+            const WmTlbEntry* e_ = &rt->tlb->entries[(ea_ >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];          \
+            if (e_->tag == ((ea_ & (0xFFFFF000u | ((SIZE) - 1u))) | ((uint32_t)inst->memory->space << 3)) &&     \
+                ea_ >= (OFFSET))                                                                               \
+                HOST = e_->frame + (ea_ & (WM_FRAME - 1u));                                                    \
+            else                                                                                               \
+            {                                                                                                  \
+                fault_address = (ADDRESS);                                                                     \
+                fault_offset = (OFFSET);                                                                       \
+                fault_op = (OP);                                                                               \
+                fault_cells = (CELLS);                                                                         \
+                ip = (REC);                                                                                    \
+                goto mmu_fault;                                                                                \
+            }                                                                                                  \
+        }                                                                                                      \
+        else                                                                                                   \
+            TRAP(T_OOB_MEMORY);                                                                                \
+    } while (0)
+#else
+#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS)                                                 \
+    do                                                                                                         \
+    {                                                                                                          \
+        if ((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size))                   \
+            TRAP(T_OOB_MEMORY);                                                                                \
+        HOST = mem + (ADDRESS) + (OFFSET);                                                                     \
+    } while (0)
+#endif
 /* The record's 16-bit operand, unsigned and signed; a later cell's. */
 #define IMM (cell >> 16)
 #define SIMM ((int32_t)cell >> 16)
@@ -1045,30 +1140,22 @@ f_access:
     uint32_t offset = ip[0].u32;
     uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
     uint8_t size = (uint8_t)(1u << (d & 3u));
+    /* A store's value is above the address: slots of it. */
+    uint32_t above = op >= 0x36u ? ((d & 8u) ? 2u : 1u) : 0u;
     uint64_t value = 0;
-    uint32_t address;
+    uint8_t* host;
+    FAST_ADDR(sp[-1 - (int32_t)above], offset, size, host, op, ip - 1, 2u);
     ++ip;
     if (op >= 0x36u)
     {
-        if (d & 8u)
-        {
-            sp -= 2;
-            value = get64(sp);
-        }
-        else
-            value = *--sp;
-    }
-    address = *--sp;
-    if (offset > mem_size || wm_out_of_bounds(address, offset + size, mem_size))
-        TRAP(T_OOB_MEMORY);
-    address += offset;
-    if (op >= 0x36u)
-    {
-        store_bytes(mem + address, value, size);
+        value = above == 2u ? get64(sp - 2) : sp[-1];
+        sp -= above + 1u;
+        store_bytes(host, value, size);
         FAST_RELOAD();
         FAST_NEXT();
     }
-    value = load_bytes(mem + address, size);
+    --sp;
+    value = load_bytes(host, size);
     if (d & 4u)
     {
         uint8_t shift = (uint8_t)(64u - 8u * size);
@@ -1089,9 +1176,9 @@ f_i32_load:
     uint32_t offset = IMM;
     uint32_t address = tos;
     uint32_t value;
-    if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
-        TRAP(T_OOB_MEMORY);
-    __builtin_memcpy(&value, mem + address + offset, 4);
+    uint8_t* host;
+    FAST_ADDR(address, offset, 4u, host, 0x28u, ip - 1, 1u);
+    __builtin_memcpy(&value, host, 4);
     sp[-1] = tos = value;
     FAST_NEXT();
 }
@@ -1099,9 +1186,9 @@ f_i32_store:
 {
     uint32_t offset = IMM;
     uint32_t address = sp[-2];
-    if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
-        TRAP(T_OOB_MEMORY);
-    __builtin_memcpy(mem + address + offset, &tos, 4);
+    uint8_t* host;
+    FAST_ADDR(address, offset, 4u, host, 0x36u, ip - 1, 1u);
+    __builtin_memcpy(host, &tos, 4);
     sp -= 2;
     FAST_RELOAD();
     FAST_NEXT();
@@ -1276,8 +1363,9 @@ f_get_load:
     offset = IMM_OF(ip[0]);
     if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
     {
-        /* The trap belongs to the load: account for the local.get before it. */
-        TRAP(T_OOB_MEMORY);
+        /* Not in one block (a trap, or paged memory): the two records run on their own. */
+        fuel += 1u;
+        goto f_local_get1;
     }
     __builtin_memcpy(&value, mem + address + offset, 4);
     *sp++ = tos = value;
@@ -1418,6 +1506,29 @@ call:
     }
     TRAP(WM_ERR_TRAP("trap: unlinked import"));
 
+#if WM_HAS_MMU
+mmu_fault:
+{
+    /* ip is at the record again, its fuel spent: make the frame and run it again, or run it here. */
+    uint8_t size = (uint8_t)(1u << (WM_ROM8(ACCESS + (fault_op - 0x28u)) & 3u));
+    WmResult r = wm_page_fault(rt->tlb, inst->memory, fault_address, fault_offset, size);
+    if (r == wm_page_emulate)
+    {
+        uint32_t* after = paged_access(inst->memory, fault_op, fault_offset, sp, &trap);
+        if (!after)
+            TRAP(trap);
+        sp = after;
+        ip += fault_cells;
+        FAST_RELOAD();
+        FAST_NEXT();
+    }
+    if (r)
+        TRAP(r);
+    ++fuel;
+    FAST_NEXT();
+}
+#endif
+
 suspend:
     rt->saved.entry_depth = entry_depth;
     rt->saved.func = func;
@@ -1500,7 +1611,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         bytes = inst->module->bytes;                                                                           \
         side = inst->module->side;                                                                             \
         mem = inst->memory ? inst->memory->data : NULL;                                                        \
-        mem_size = inst->memory ? WM_MEMORY_SIZE(inst->memory) : 0;                                            \
+        mem_size = mem ? WM_MEMORY_SIZE(inst->memory) : 0;                                                     \
     } while (0)
 
 #define LOCAL(i) (code->local_offsets ? fp + code->local_offsets[i] : fp + (i))
@@ -1669,7 +1780,17 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         imm_u32(&pc);
         offset = imm_u32(&pc);
         if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
+        {
+#if WM_HAS_MMU
+            if (!mem && inst->memory)
+            {
+                if (!(sp = paged_access(inst->memory, 0x28u, offset, sp, &trap)))
+                    TRAP(trap);
+                continue;
+            }
+#endif
             TRAP(T_OOB_MEMORY);
+        }
         __builtin_memcpy(&value, mem + address + offset, 4);
         sp[-1] = value;
         continue;
@@ -1681,7 +1802,17 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         imm_u32(&pc);
         offset = imm_u32(&pc);
         if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
+        {
+#if WM_HAS_MMU
+            if (!mem && inst->memory)
+            {
+                if (!(sp = paged_access(inst->memory, 0x36u, offset, sp, &trap)))
+                    TRAP(trap);
+                continue;
+            }
+#endif
             TRAP(T_OOB_MEMORY);
+        }
         __builtin_memcpy(mem + address + offset, &sp[-1], 4);
         sp -= 2;
         continue;
@@ -1871,6 +2002,16 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 uint64_t value = 0;
                 uint32_t address;
                 uint32_t offset;
+#if WM_HAS_MMU
+                if (!mem && inst->memory)
+                {
+                    imm_u32(&pc);
+                    offset = imm_u32(&pc);
+                    if (!(sp = paged_access(inst->memory, op, offset, sp, &trap)))
+                        TRAP(trap);
+                    NEXT;
+                }
+#endif
                 if (op >= 0x36u)
                 {
                     if (d & 8u)

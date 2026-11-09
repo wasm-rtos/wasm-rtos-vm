@@ -213,14 +213,19 @@ WmResult wm_snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapsh
 
     if (memory)
     {
-        uint8_t* data = memory->data;
+#if WM_HAS_MMU
+#define MEMORY_BYTE(AT) (data ? data[AT] : wm_memory_byte(memory, (uint32_t)(AT)))
+#else
+#define MEMORY_BYTE(AT) (data[AT])
+#endif
+        const uint8_t* data = memory->data;
         wm_size size = WM_MEMORY_SIZE(memory);
         wm_size at = 0;
         while (at < size)
         {
             wm_size zeros = at;
             wm_size end;
-            while (zeros < size && data[zeros] == 0)
+            while (zeros < size && MEMORY_BYTE(zeros) == 0)
                 ++zeros;
             zeros -= at;
             if (zeros < MIN_ZERO_RUN && at + zeros < size)
@@ -231,7 +236,7 @@ WmResult wm_snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapsh
             while (end < size)
             {
                 wm_size run = end;
-                while (run < size && data[run] == 0 && run - end < MIN_ZERO_RUN)
+                while (run < size && MEMORY_BYTE(run) == 0 && run - end < MIN_ZERO_RUN)
                     ++run;
                 if (run - end >= MIN_ZERO_RUN || run == size)
                     break;
@@ -239,9 +244,25 @@ WmResult wm_snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapsh
             }
             put32(&s, (uint32_t)zeros);
             put32(&s, (uint32_t)(end - at));
-            put(&s, data + at, (uint32_t)(end - at));
+#if WM_HAS_MMU
+            if (!data)
+            {
+                /* Paged: through a buffer, the same bytes as from one block. */
+                uint8_t chunk[64];
+                for (wm_size k = at; k < end;)
+                {
+                    uint32_t n = end - k < sizeof(chunk) ? (uint32_t)(end - k) : (uint32_t)sizeof(chunk);
+                    wm_memory_read(memory, (uint32_t)k, chunk, n);
+                    put(&s, chunk, n);
+                    k += n;
+                }
+            }
+            else
+#endif
+                put(&s, data + at, (uint32_t)(end - at));
             at = end;
         }
+#undef MEMORY_BYTE
     }
 
     for (uint32_t i = m->global_imports; i < m->global_count; ++i)
@@ -294,14 +315,10 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
         return wm_snapshot_invalid;
     if (memory && pages != memory->pages)
     {
-        uint8_t* data;
         if (pages < memory->pages || (memory->max_pages != WM_NONE && pages > memory->max_pages))
             return wm_snapshot_invalid;
-        data = (uint8_t*)wm_realloc(memory->data, (size_t)((wm_size)pages << page_log2) + 1u);
-        if (!data)
+        if (wm_memory_grow(memory, pages - memory->pages) == WM_NONE)
             return WM_ERR_EXHAUSTION("exhaustion: out of memory");
-        memory->data = data;
-        memory->pages = pages;
     }
 
     saved->entry = func_at(inst, entry);
@@ -323,7 +340,12 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
     {
         wm_size size = WM_MEMORY_SIZE(memory);
         wm_size at = 0;
-        memset(memory->data, 0, (size_t)size);
+#if WM_HAS_MMU
+        if (!memory->data)
+            wm_memory_fill(memory, 0, 0, (uint32_t)size);
+        else
+#endif
+            memset(memory->data, 0, (size_t)size);
         while (at < size && !s.error)
         {
             uint32_t zeros = get32(&s);
@@ -331,7 +353,22 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
             if (s.error || zeros > size - at || length > size - at - zeros)
                 return s.error ? s.error : wm_snapshot_invalid;
             at += zeros;
-            get(&s, memory->data + at, length);
+#if WM_HAS_MMU
+            if (!memory->data)
+            {
+                uint8_t chunk[64];
+                for (uint32_t k = 0; k < length;)
+                {
+                    uint32_t n = length - k < sizeof(chunk) ? length - k : (uint32_t)sizeof(chunk);
+                    get(&s, chunk, n);
+                    if (wm_memory_write(memory, (uint32_t)at + k, chunk, n))
+                        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+                    k += n;
+                }
+            }
+            else
+#endif
+                get(&s, memory->data + at, length);
             at += length;
             if (zeros == 0 && length == 0)
                 return wm_snapshot_invalid;
