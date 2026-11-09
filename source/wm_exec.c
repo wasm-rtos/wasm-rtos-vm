@@ -690,7 +690,10 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
  * starting with its handler's address. Called with rt NULL it only hands
  * out the handlers' addresses for the predecoder.
  */
-static const void* const* g_fast_labels;
+static const uint16_t* g_fast_handlers;
+static uint16_t g_fast_offsets[WM_F_COUNT];
+/* From the first handler's label to the lowest one: records count handlers from there. */
+static ptrdiff_t g_fast_shift;
 
 WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 {
@@ -703,7 +706,8 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         [WM_F_LOCAL_TEE] = &&f_local_tee, [WM_F_GLOBAL_GET] = &&f_global_get, [WM_F_GLOBAL_SET] = &&f_global_set,
         [WM_F_TABLE_GET] = &&f_table_get, [WM_F_TABLE_SET] = &&f_table_set, [WM_F_ACCESS] = &&f_access,
         [WM_F_I32_LOAD] = &&f_i32_load, [WM_F_I32_STORE] = &&f_i32_store, [WM_F_MEMORY_SIZE] = &&f_memory_size,
-        [WM_F_MEMORY_GROW] = &&f_memory_grow, [WM_F_CONST32] = &&f_const32, [WM_F_CONST64] = &&f_const64,
+        [WM_F_MEMORY_GROW] = &&f_memory_grow, [WM_F_CONST16] = &&f_const16, [WM_F_CONST32] = &&f_const32,
+        [WM_F_CONST64] = &&f_const64,
         [WM_F_NUMERIC] = &&f_numeric, [WM_F_EQZ] = &&f_eqz, [WM_F_EQ] = &&f_eq, [WM_F_NE] = &&f_ne,
         [WM_F_LT_S] = &&f_lt_s, [WM_F_LT_U] = &&f_lt_u, [WM_F_GT_S] = &&f_gt_s, [WM_F_GT_U] = &&f_gt_u,
         [WM_F_LE_S] = &&f_le_s, [WM_F_LE_U] = &&f_le_u, [WM_F_GE_S] = &&f_ge_s, [WM_F_GE_U] = &&f_ge_u,
@@ -737,12 +741,31 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     const WmCell* target;
     uint32_t keep;
     uint32_t drop;
+    /* The record's first cell; ip is past it, at the record's other cells. */
+    uint32_t cell = 0;
+    const char* base;
 
     if (!rt)
     {
-        g_fast_labels = labels;
+        const char* lowest = NULL;
+        const char* highest = NULL;
+        for (uint32_t k = 0; k < WM_F_COUNT; ++k)
+            if (labels[k])
+            {
+                if (!lowest || (const char*)labels[k] < lowest)
+                    lowest = (const char*)labels[k];
+                if (!highest || (const char*)labels[k] > highest)
+                    highest = (const char*)labels[k];
+            }
+        if (!lowest || highest - lowest > 0xFFFF)
+            return NULL;
+        for (uint32_t k = 0; k < WM_F_COUNT; ++k)
+            g_fast_offsets[k] = labels[k] ? (uint16_t)((const char*)labels[k] - lowest) : 0u;
+        g_fast_shift = lowest - (const char*)&&f_unreachable;
+        g_fast_handlers = g_fast_offsets;
         return NULL;
     }
+    base = (const char*)&&f_unreachable + g_fast_shift;
     entry_depth = rt->depth;
     fuel_on = rt->fuel_on && rt->nesting == 1u;
     fuel = fuel_on ? rt->fuel : WM_NONE;
@@ -770,8 +793,14 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
             }                                                                                                  \
             fuel = WM_NONE - 1u;                                                                               \
         }                                                                                                      \
-        goto *(ip++)->label;                                                                                   \
+        cell = (ip++)->u32;                                                                                    \
+        goto *(void*)(base + (cell & 0xFFFFu));                                                          \
     } while (0)
+/* The record's 16-bit operand, unsigned and signed; a later cell's. */
+#define IMM (cell >> 16)
+#define SIMM ((int32_t)cell >> 16)
+#define IMM_OF(C) ((C).u32 >> 16)
+#define SIMM_OF(C) ((C).s32 >> 16)
 /* After code that changed the stack in memory only. */
 #define FAST_RELOAD() (tos = sp[-1])
 #define FAST_BINARY(NAME, EXPR)                                                                                \
@@ -813,14 +842,13 @@ f_nop:
 {
     /* The rest of the run at once when there is fuel for it, else the next one. */
 #if WM_NOP_RUNS
-    uint32_t rest = ip[0].u32 - 1u;
+    uint32_t rest = IMM - 1u;
     if (fuel >= rest)
     {
         fuel -= rest;
-        ip += 2u * rest;
+        ip += rest;
     }
 #endif
-    ++ip;
     FAST_NEXT();
 }
 f_if:
@@ -828,11 +856,11 @@ f_if:
     uint32_t c = tos;
     --sp;
     FAST_RELOAD();
-    ip = c ? ip + 1 : ip->target;
+    ip = c ? ip : ip - 1 + SIMM;
     FAST_NEXT();
 }
 f_jump:
-    ip = ip->target;
+    ip = ip - 1 + SIMM;
     FAST_NEXT();
 f_br_if:
 {
@@ -841,15 +869,15 @@ f_br_if:
     FAST_RELOAD();
     if (!c)
     {
-        ip += 3;
+        ++ip;
         FAST_NEXT();
     }
 }
     /* fall through */
 f_br:
-    target = ip[0].target;
-    keep = ip[1].u32;
-    drop = ip[2].u32;
+    target = ip - 1 + SIMM;
+    keep = ip[0].u32 & 0xFFFFu;
+    drop = ip[0].u32 >> 16;
 take:
     if (drop)
     {
@@ -861,14 +889,14 @@ take:
     FAST_NEXT();
 f_br_table:
 {
-    uint32_t count = ip[0].u32;
+    uint32_t count = IMM;
     uint32_t index = tos;
-    const WmCell* e = ip + 1 + 3u * (index < count ? index : count);
+    const WmCell* e = ip + 2u * (index < count ? index : count);
     --sp;
     FAST_RELOAD();
-    target = e[0].target;
-    keep = e[1].u32;
-    drop = e[2].u32;
+    target = ip - 1 + e[0].s32;
+    keep = e[1].u32 & 0xFFFFu;
+    drop = e[1].u32 >> 16;
     goto take;
 }
 f_return:
@@ -892,15 +920,15 @@ f_return:
     FAST_NEXT();
 }
 f_call:
-    callee = inst->funcs[(ip++)->u32];
+    callee = inst->funcs[IMM];
     goto call;
 f_call_indirect:
 {
-    const WmType* type = &inst->module->types[ip[0].u32];
-    WmTable* table = inst->tables[ip[1].u32];
+    const WmType* type = &inst->module->types[IMM];
+    WmTable* table = inst->tables[ip[0].u32];
     uint32_t index = tos;
     --sp;
-    ip += 2;
+    ++ip;
     if (index >= table->size)
         TRAP(WM_ERR_TRAP("trap: undefined element"));
     callee = (WmFunc*)table->elems[index];
@@ -911,12 +939,12 @@ f_call_indirect:
     goto call;
 }
 f_drop:
-    sp -= (ip++)->u32;
+    sp -= IMM;
     FAST_RELOAD();
     FAST_NEXT();
 f_select:
 {
-    uint32_t n = (ip++)->u32;
+    uint32_t n = IMM;
     if (!*--sp)
         copy_slots(sp - 2u * n, sp - n, n);
     sp -= n;
@@ -924,31 +952,31 @@ f_select:
     FAST_NEXT();
 }
 f_local_get1:
-    *sp++ = tos = fp[(ip++)->u32];
+    *sp++ = tos = fp[IMM];
     FAST_NEXT();
 f_local_set1:
-    fp[(ip++)->u32] = tos;
+    fp[IMM] = tos;
     --sp;
     FAST_RELOAD();
     FAST_NEXT();
 f_local_tee1:
-    fp[(ip++)->u32] = tos;
+    fp[IMM] = tos;
     FAST_NEXT();
 f_local_get:
-    copy_slots(sp, fp + ip[0].u32, ip[1].u32);
-    sp += ip[1].u32;
-    ip += 2;
+    copy_slots(sp, fp + IMM, ip[0].u32);
+    sp += ip[0].u32;
+    ++ip;
     FAST_RELOAD();
     FAST_NEXT();
 f_local_set:
-    sp -= ip[1].u32;
-    copy_slots(fp + ip[0].u32, sp, ip[1].u32);
-    ip += 2;
+    sp -= ip[0].u32;
+    copy_slots(fp + IMM, sp, ip[0].u32);
+    ++ip;
     FAST_RELOAD();
     FAST_NEXT();
 f_local_tee:
-    copy_slots(fp + ip[0].u32, sp - ip[1].u32, ip[1].u32);
-    ip += 2;
+    copy_slots(fp + IMM, sp - ip[0].u32, ip[0].u32);
+    ++ip;
     FAST_NEXT();
 f_global_get:
     keep = 1;
@@ -957,7 +985,7 @@ f_global_set:
     keep = 0;
 global:
 {
-    WmGlobal* g = inst->globals[ip[0].u32];
+    WmGlobal* g = inst->globals[IMM];
     uint32_t n = wm_type_slots(g->type);
     if (keep)
     {
@@ -975,7 +1003,6 @@ global:
         else
             __builtin_memcpy(&g->value, sp, 8);
     }
-    ++ip;
     FAST_RELOAD();
     FAST_NEXT();
 }
@@ -987,11 +1014,10 @@ f_table_set:
 table:
 #if WM_HAS_REF_TYPES
 {
-    WmTable* t = inst->tables[ip[0].u32];
+    WmTable* t = inst->tables[IMM];
     int set = keep != 0;
     uintptr_t r = 0;
     uint32_t i;
-    ++ip;
     if (set)
     {
         sp -= WM_REF_SLOTS;
@@ -1015,13 +1041,13 @@ table:
 #endif
 f_access:
 {
-    uint8_t op = (uint8_t)ip[0].u32;
-    uint32_t offset = ip[1].u32;
+    uint8_t op = (uint8_t)IMM;
+    uint32_t offset = ip[0].u32;
     uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
     uint8_t size = (uint8_t)(1u << (d & 3u));
     uint64_t value = 0;
     uint32_t address;
-    ip += 2;
+    ++ip;
     if (op >= 0x36u)
     {
         if (d & 8u)
@@ -1060,7 +1086,7 @@ f_access:
 }
 f_i32_load:
 {
-    uint32_t offset = (ip++)->u32;
+    uint32_t offset = IMM;
     uint32_t address = tos;
     uint32_t value;
     if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
@@ -1071,7 +1097,7 @@ f_i32_load:
 }
 f_i32_store:
 {
-    uint32_t offset = (ip++)->u32;
+    uint32_t offset = IMM;
     uint32_t address = sp[-2];
     if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
         TRAP(T_OOB_MEMORY);
@@ -1087,6 +1113,9 @@ f_memory_grow:
     sp[-1] = tos = wm_memory_grow(inst->memory, tos);
     FAST_REFRESH();
     FAST_NEXT();
+f_const16:
+    *sp++ = tos = (uint32_t)SIMM;
+    FAST_NEXT();
 f_const32:
     *sp++ = tos = (ip++)->u32;
     FAST_NEXT();
@@ -1098,7 +1127,7 @@ f_const64:
     FAST_NEXT();
 f_numeric:
 {
-    uint8_t op = (uint8_t)(ip++)->u32;
+    uint8_t op = (uint8_t)IMM;
     uint8_t d = WM_ROM8(wm_numeric + (op - 0x45u));
     switch (d & 3u)
     {
@@ -1150,7 +1179,7 @@ f_ref_is_null:
     FAST_RELOAD();
     FAST_NEXT();
 f_ref_func:
-    put_ref(sp, (uintptr_t)inst->funcs[(ip++)->u32]);
+    put_ref(sp, (uintptr_t)inst->funcs[IMM]);
     sp += WM_REF_SLOTS;
     FAST_RELOAD();
     FAST_NEXT();
@@ -1163,7 +1192,7 @@ f_ref_func:
 f_sat:
 #if WM_HAS_FLOAT
 {
-    uint32_t sub = (ip++)->u32;
+    uint32_t sub = IMM;
     uint8_t d = (uint8_t)(((sub & 2u) ? WM_NUM_F64 : WM_NUM_F32) | (sub >= 4u ? WM_NUM_WIDE : 0));
     sp = op_float((uint8_t)(0xE0u + sub), d, sp, &trap);
     if (!sp)
@@ -1175,9 +1204,10 @@ f_sat:
     TRAP(WM_ERR_TRAP("trap: illegal opcode"));
 #endif
     /*
-     * Fused runs. ip is at the first record's operand; the records after it
-     * follow as usual (local.get, i32.const, i32.load, local.set: two cells;
-     * add, and, sub: one). Without fuel for all, only the first runs.
+     * Fused runs. cell is the first record's and ip at the record after it;
+     * the records after it follow as usual, one cell each here (local.get,
+     * local.set, i32.const that fits, i32.load with a small offset, add, and,
+     * sub; br_if is two). Without fuel for all, only the first runs.
      */
 #define FUSED(EXTRA, FIRST)                                                                                    \
     if (fuel < (EXTRA))                                                                                        \
@@ -1185,55 +1215,55 @@ f_sat:
     fuel -= (EXTRA)
 f_get_const_add:
     FUSED(2u, f_local_get1);
-    *sp++ = tos = fp[ip[0].u32] + ip[2].u32;
-    ip += 4;
+    *sp++ = tos = fp[IMM] + (uint32_t)SIMM_OF(ip[0]);
+    ip += 2;
     FAST_NEXT();
 f_get_get_add:
     FUSED(2u, f_local_get1);
-    *sp++ = tos = fp[ip[0].u32] + fp[ip[2].u32];
-    ip += 4;
+    *sp++ = tos = fp[IMM] + fp[IMM_OF(ip[0])];
+    ip += 2;
     FAST_NEXT();
 f_get_const:
     FUSED(1u, f_local_get1);
-    sp[0] = fp[ip[0].u32];
-    sp[1] = tos = ip[2].u32;
+    sp[0] = fp[IMM];
+    sp[1] = tos = (uint32_t)SIMM_OF(ip[0]);
     sp += 2;
-    ip += 3;
+    ++ip;
     FAST_NEXT();
 f_get_get:
     FUSED(1u, f_local_get1);
-    sp[0] = fp[ip[0].u32];
-    sp[1] = tos = fp[ip[2].u32];
+    sp[0] = fp[IMM];
+    sp[1] = tos = fp[IMM_OF(ip[0])];
     sp += 2;
-    ip += 3;
+    ++ip;
     FAST_NEXT();
 f_set_get:
     FUSED(1u, f_local_set1);
-    fp[ip[0].u32] = tos;
-    sp[-1] = tos = fp[ip[2].u32];
-    ip += 3;
+    fp[IMM] = tos;
+    sp[-1] = tos = fp[IMM_OF(ip[0])];
+    ++ip;
     FAST_NEXT();
 f_const_add:
-    FUSED(1u, f_const32);
-    sp[-1] = tos = tos + ip[0].u32;
-    ip += 2;
+    FUSED(1u, f_const16);
+    sp[-1] = tos = tos + (uint32_t)SIMM;
+    ++ip;
     FAST_NEXT();
 f_const_and:
-    FUSED(1u, f_const32);
-    sp[-1] = tos = tos & ip[0].u32;
-    ip += 2;
+    FUSED(1u, f_const16);
+    sp[-1] = tos = tos & (uint32_t)SIMM;
+    ++ip;
     FAST_NEXT();
 f_const_sub:
-    FUSED(1u, f_const32);
-    sp[-1] = tos = tos - ip[0].u32;
-    ip += 2;
+    FUSED(1u, f_const16);
+    sp[-1] = tos = tos - (uint32_t)SIMM;
+    ++ip;
     FAST_NEXT();
 f_add_set:
-    /* i32.add has no operand: ip is at the local.set record, its index after its label. */
+    /* i32.add has no operand: ip is at the local.set record. */
     FUSED(1u, f_add);
-    fp[ip[1].u32] = sp[-2] + tos;
+    fp[IMM_OF(ip[0])] = sp[-2] + tos;
     sp -= 2;
-    ip += 2;
+    ++ip;
     FAST_RELOAD();
     FAST_NEXT();
 f_get_load:
@@ -1242,8 +1272,8 @@ f_get_load:
     uint32_t offset;
     uint32_t value;
     FUSED(1u, f_local_get1);
-    address = fp[ip[0].u32];
-    offset = ip[2].u32;
+    address = fp[IMM];
+    offset = IMM_OF(ip[0]);
     if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
     {
         /* The trap belongs to the load: account for the local.get before it. */
@@ -1251,41 +1281,41 @@ f_get_load:
     }
     __builtin_memcpy(&value, mem + address + offset, 4);
     *sp++ = tos = value;
-    ip += 3;
+    ++ip;
     FAST_NEXT();
 }
 #if WM_FUSE
-    /* Branches fused with what decides them: the br_if record is label, target, keep, drop. */
+    /* Branches fused with what decides them: the br_if record, at ip + AT, is its head and its slots. */
 #define FAST_TAKE_BR_IF(AT)                                                                                    \
-    target = ip[(AT) + 1].target;                                                                              \
-    keep = ip[(AT) + 2].u32;                                                                                   \
-    drop = ip[(AT) + 3].u32;                                                                                   \
+    target = ip + (AT) + SIMM_OF(ip[(AT)]);                                                                    \
+    keep = ip[(AT) + 1].u32 & 0xFFFFu;                                                                         \
+    drop = ip[(AT) + 1].u32 >> 16;                                                                             \
     goto take
 f_tee_br_if:
 {
     uint32_t c = tos;
     FUSED(1u, f_local_tee1);
-    fp[ip[0].u32] = c;
+    fp[IMM] = c;
     --sp;
     FAST_RELOAD();
     if (!c)
     {
-        ip += 5;
+        ip += 2;
         FAST_NEXT();
     }
-    FAST_TAKE_BR_IF(1);
+    FAST_TAKE_BR_IF(0);
 }
 f_set_get_br_if:
     FUSED(2u, f_local_set1);
-    fp[ip[0].u32] = tos;
+    fp[IMM] = tos;
     --sp;
     FAST_RELOAD();
-    if (!fp[ip[2].u32])
+    if (!fp[IMM_OF(ip[0])])
     {
-        ip += 7;
+        ip += 3;
         FAST_NEXT();
     }
-    FAST_TAKE_BR_IF(3);
+    FAST_TAKE_BR_IF(1);
 #define FAST_CMP_BR_IF(NAME, FIRST, POP, A, EXPR)                                                               \
     NAME:                                                                                                      \
     {                                                                                                          \
@@ -1296,12 +1326,12 @@ f_set_get_br_if:
         FAST_RELOAD();                                                                                         \
         if (!(EXPR))                                                                                           \
         {                                                                                                      \
-            ip += 4;                                                                                           \
+            ip += 2;                                                                                           \
             FAST_NEXT();                                                                                       \
         }                                                                                                      \
         FAST_TAKE_BR_IF(0);                                                                                    \
     }
-/* The if record is label, target: on to the record after it, or to the target. */
+/* The if record, at ip, is one cell: on to the record after it, or to its target. */
 #define FAST_CMP_IF(NAME, FIRST, POP, A, EXPR)                                                                  \
     NAME:                                                                                                      \
     {                                                                                                          \
@@ -1310,7 +1340,7 @@ f_set_get_br_if:
         FUSED(1u, FIRST);                                                                                      \
         sp -= (POP);                                                                                           \
         FAST_RELOAD();                                                                                         \
-        ip = (EXPR) ? ip + 2 : ip[1].target;                                                                   \
+        ip = (EXPR) ? ip + 1 : ip + SIMM_OF(ip[0]);                                                            \
         FAST_NEXT();                                                                                           \
     }
     FAST_CMP_BR_IF(f_eq_br_if, f_eq, 2, sp[-2], a == b)
@@ -1328,9 +1358,9 @@ f_set_get_br_if:
 #undef FUSED
 f_misc:
 {
-    const uint8_t* immediates = bytes + ip[1].u32;
-    uint32_t sub = ip[0].u32;
-    ip += 2;
+    const uint8_t* immediates = bytes + ip[0].u32;
+    uint32_t sub = IMM;
+    ++ip;
     if ((trap = misc(inst, sub, &immediates, &sp)))
         TRAP(trap);
     FAST_REFRESH();
@@ -1400,16 +1430,20 @@ suspend:
     rt->suspended = 1;
     return stop;
 #undef FAST_BINARY
+#undef IMM
+#undef SIMM
+#undef IMM_OF
+#undef SIMM_OF
 #undef FAST_RELOAD
 #undef FAST_NEXT
 #undef FAST_REFRESH
 }
 
-const void* const* wm_fast_labels(void)
+const uint16_t* wm_fast_handlers(void)
 {
-    if (!g_fast_labels)
+    if (!g_fast_handlers)
         run_fast(NULL, NULL, 0);
-    return g_fast_labels;
+    return g_fast_handlers;
 }
 #endif
 
