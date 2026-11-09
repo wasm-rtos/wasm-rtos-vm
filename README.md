@@ -38,13 +38,16 @@ with `tools/avr-size.sh [mcu] [flags]`:
 
 With `WM_PREDECODE` (the default where labels can be values, except on
 AVR) each function is also written at load as records, one per
-instruction: the address of its handler, its immediates decoded, its branch
-targets resolved; the side table is freed then. The records follow the
-instructions one to one, so fuel counts the module's instructions and a
-snapshot position converts to an offset in the module and back: snapshots
-move between predecoding builds and ones that run the bytes in place. The
-cost is RAM, about four times the code on a 32-bit chip (CoreMark: 7.2 KB
-of code, 29.5 KB of records).
+instruction, in 32-bit cells: the first holds the handler and a 16-bit
+operand (a local's index, a small constant, a call's function, a branch's
+distance), so most instructions take one cell and branches two; the side
+table is freed then. The records follow the instructions one to one, so
+fuel counts the module's instructions and a snapshot position converts to
+an offset in the module and back: snapshots move between predecoding
+builds and ones that run the bytes in place. The cost is RAM, about twice
+the code (CoreMark: 7.2 KB of code, 16.7 KB of records). A module whose
+operands do not fit, or a chip without the memory for its records, runs
+the bytes in place.
 
 ## Fuel and suspension
 
