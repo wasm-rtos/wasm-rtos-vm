@@ -292,11 +292,15 @@ typedef struct WmSide
 #endif
 #endif
 
+/*
+ * A predecoded cell: 32 bits on every target. A record's first cell holds
+ * its handler, as an offset from the first handler, in the low 16 bits and
+ * a small operand in the high 16; the cells after it hold what does not fit.
+ */
 typedef union WmCell
 {
-    const void* label;
     uint32_t u32;
-    const union WmCell* target;
+    int32_t s32;
 } WmCell;
 
 /* The predecoded records' kinds, each the code of one handler. */
@@ -329,6 +333,7 @@ enum
     WM_F_I32_STORE,
     WM_F_MEMORY_SIZE,
     WM_F_MEMORY_GROW,
+    WM_F_CONST16,
     WM_F_CONST32,
     WM_F_CONST64,
     WM_F_NUMERIC,
@@ -629,7 +634,8 @@ struct WmRuntime
 extern const uint8_t wm_numeric[128];
 
 /* Predecoding: the handlers' addresses, writing a function's records, and positions both ways. */
-const void* const* wm_fast_labels(void);
+/* Each handler's offset from the first, by kind; NULL when they span more than 16 bits can reach. */
+const uint16_t* wm_fast_handlers(void);
 WmResult wm_predecode(WmModule* module, WmCode* code);
 void wm_module_predecode(WmModule* module);
 int wm_fast_position(const WmModule* module, const WmCode* code, const WmCell* ip, uint32_t* offset, uint32_t* side);

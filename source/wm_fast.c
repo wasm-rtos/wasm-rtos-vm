@@ -1,9 +1,11 @@
 /*
  * Predecoding: each function written once more as cells, one record per
- * WebAssembly instruction, for the interpreter's fast loop. A record is the
- * address of its handler, then its immediates decoded; branches hold their
- * target record and the slots to keep and drop. Rare instructions keep
- * their bytes and run through the same helpers as in place.
+ * WebAssembly instruction, for the interpreter's fast loop. A record's first
+ * cell is its handler (an offset from the first handler) and a 16-bit
+ * operand; what does not fit follows in cells of its own. Branches hold
+ * their target as a distance in cells and the slots to keep and drop. Rare
+ * instructions keep their bytes and run through the same helpers as in
+ * place. A module whose operands do not fit is not predecoded.
  *
  * Records follow instructions one to one: positions convert both ways, so
  * fuel and snapshots stay those of the module's instructions.
@@ -74,9 +76,22 @@ static uint8_t fast_numeric(uint8_t op)
     }
 }
 
+/* Whether a constant fits a record's signed 16-bit operand. */
+static int fits16(int64_t value)
+{
+    return value >= -32768 && value <= 32767;
+}
+
+/* Slots of local index: 1 unless the function has locals that take more. */
+static uint32_t local_width(const WmCode* code, uint32_t index)
+{
+    return code->local_offsets ? code->local_offsets[index + 1u] - code->local_offsets[index] : 1u;
+}
+
 /*
  * One instruction at p: where the next one starts, the cells its record
- * takes and the side table entries it owns.
+ * takes and the side table entries it owns. The cells follow from the
+ * bytes alone, so positions convert both ways.
  */
 static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells, uint32_t* sides)
 {
@@ -84,36 +99,27 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
     *sides = 0;
     *cells = 1;
     if (op >= 0x45u && op <= 0xC4u)
-    {
-        *cells = fast_numeric(op) ? 1u : 2u;
         return p;
-    }
     switch (op)
     {
-        /* nop, block, loop and end: the count of them in a row, from this one on. */
-        case 0x01:
-        case 0x0B: *cells = 2; break;
         case 0x02:
-        case 0x03:
-            skip_block_type(&p);
-            *cells = 2;
-            break;
+        case 0x03: skip_block_type(&p); break;
         case 0x04:
             skip_block_type(&p);
-            *cells = 2, *sides = 1;
+            *sides = 1;
             break;
-        case 0x05: *cells = 2, *sides = 1; break;
+        case 0x05: *sides = 1; break;
         case 0x0C:
         case 0x0D:
             leb_u32(&p);
-            *cells = 4, *sides = 1;
+            *cells = 2, *sides = 1;
             break;
         case 0x0E:
         {
             uint32_t count = leb_u32(&p);
             for (uint32_t i = 0; i <= count; ++i)
                 leb_u32(&p);
-            *cells = 2u + 3u * (count + 1u), *sides = count + 1u;
+            *cells = 1u + 2u * (count + 1u), *sides = count + 1u;
             break;
         }
         case 0x10:
@@ -121,45 +127,44 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
         case 0x24:
         case 0x25:
         case 0x26:
-        case 0xD2:
-            leb_u32(&p);
-            *cells = 2;
-            break;
+        case 0xD2: leb_u32(&p); break;
         case 0x11:
             leb_u32(&p);
             leb_u32(&p);
-            *cells = 3;
+            *cells = 2;
             break;
         case 0x1A:
-        case 0x1B: *cells = 2, *sides = 1; break;
+        case 0x1B: *sides = 1; break;
         case 0x1C:
         {
             uint32_t count = leb_u32(&p);
             p += count;
-            *cells = 2;
             break;
         }
         case 0x20:
         case 0x21:
         case 0x22:
-            leb_u32(&p);
-            *cells = code->local_offsets ? 3u : 2u;
+            *cells = local_width(code, leb_u32(&p)) == 1u ? 1u : 2u;
             break;
         case 0x3F:
         case 0x40:
         case 0xD0: ++p; break;
         case 0x41:
-            leb_s64(&p);
-            *cells = 2;
+            *cells = fits16((int64_t)leb_s64(&p)) ? 1u : 2u;
             break;
         case 0x42:
             leb_s64(&p);
             *cells = 3;
             break;
         case 0x43:
+        {
+            uint32_t bits = 0;
+            for (uint32_t i = 0; i < 4u; ++i)
+                bits |= (uint32_t)WM_RD8(p + i) << (8u * i);
             p += 4;
-            *cells = 2;
+            *cells = fits16((int32_t)bits) ? 1u : 2u;
             break;
+        }
         case 0x44:
             p += 8;
             *cells = 3;
@@ -168,12 +173,9 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
         {
             uint32_t sub = leb_u32(&p);
             if (sub <= 7u)
-            {
-                *cells = 2;
                 break;
-            }
             /* The rest keep their immediates in the module: a record of the opcode and where they are. */
-            *cells = 3;
+            *cells = 2;
             switch (sub)
             {
                 case 8: leb_u32(&p); ++p; break;
@@ -188,9 +190,10 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
         default:
             if (op >= 0x28u && op <= 0x3Eu)
             {
+                uint32_t offset;
                 leb_u32(&p);
-                leb_u32(&p);
-                *cells = op == 0x28u || op == 0x36u ? 2u : 3u;
+                offset = leb_u32(&p);
+                *cells = (op == 0x28u || op == 0x36u) && offset <= 0xFFFFu ? 1u : 2u;
             }
     }
     return p;
@@ -214,8 +217,8 @@ static int is_branch(uint8_t op)
     return op == 0x04u || op == 0x05u || op == 0x0Cu || op == 0x0Du || op == 0x0Eu;
 }
 
-/* The record a branch to the module offset pc lands on; NULL if no instruction starts there. */
-static WmCell* record_at(const WmCode* code, const WmTarget* targets, uint32_t count, uint32_t pc)
+/* The record a branch to the module offset pc lands on, as a cell index; UINT32_MAX if no instruction starts there. */
+static uint32_t record_at(const WmTarget* targets, uint32_t count, uint32_t pc)
 {
     uint32_t low = 0, high = count;
     while (low < high)
@@ -226,9 +229,9 @@ static WmCell* record_at(const WmCode* code, const WmTarget* targets, uint32_t c
         else
             high = mid;
     }
-    if (low == count || targets[low].pc != pc || targets[low].cell == UINT32_MAX)
-        return NULL;
-    return code->fast + targets[low].cell;
+    if (low == count || targets[low].pc != pc)
+        return UINT32_MAX;
+    return targets[low].cell;
 }
 
 static int is_nop(const WmCode* code, const uint8_t* p)
@@ -241,7 +244,7 @@ static int is_nop(const WmCode* code, const uint8_t* p)
 static uint32_t nop_run(const WmCode* code, const uint8_t* p)
 {
     uint32_t n = 0;
-    while (p <= code->end && is_nop(code, p))
+    while (p <= code->end && is_nop(code, p) && n < 0xFFFFu)
     {
         uint32_t cells, sides;
         p = step(code, p, &cells, &sides);
@@ -250,13 +253,24 @@ static uint32_t nop_run(const WmCode* code, const uint8_t* p)
     return n;
 }
 
-/* A branch's target record and slot counts, from its side entry. */
-static int put_branch(WmCell* out, const WmCode* code, const WmSide* e, const WmTarget* targets, uint32_t count)
+/* A record's first cell: the handler of kind and a 16-bit operand. */
+static WmCell head(const uint16_t* handlers, uint8_t kind, uint32_t operand)
 {
-    out[0].target = record_at(code, targets, count, e->pc);
-    out[1].u32 = e->keep;
-    out[2].u32 = e->drop;
-    return out[0].target != NULL;
+    WmCell c;
+    c.u32 = (uint32_t)handlers[kind] | (operand << 16);
+    return c;
+}
+
+/* The distance in cells from the record at cell to a branch's target, and its slots, from a side entry. */
+static int branch_to(const WmSide* e, const WmTarget* targets, uint32_t count, uint32_t cell, int32_t* distance,
+                     uint32_t* slots)
+{
+    uint32_t to = record_at(targets, count, e->pc);
+    if (to == UINT32_MAX || e->keep > 0xFFFFu || e->drop > 0xFFFFu)
+        return 0;
+    *distance = (int32_t)(to - cell);
+    *slots = e->keep | (e->drop << 16);
+    return 1;
 }
 
 /*
@@ -264,15 +278,15 @@ static int put_branch(WmCell* out, const WmCode* code, const WmSide* e, const Wm
  * theirs, so a branch, a stop or a snapshot that lands inside the run finds
  * ordinary records. Kinds after the end of the function are WM_F_COUNT.
  */
-static void fuse(const void* const* labels, WmCell* record, uint8_t first, uint8_t second, uint8_t third)
+static void fuse(const uint16_t* handlers, WmCell* record, uint8_t first, uint8_t second, uint8_t third)
 {
     static const struct
     {
         uint8_t first, second, third, fused;
     } runs[] = {
-        {WM_F_LOCAL_GET1, WM_F_CONST32, WM_F_ADD, WM_F_GET_CONST_ADD},
+        {WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_ADD, WM_F_GET_CONST_ADD},
         {WM_F_LOCAL_GET1, WM_F_LOCAL_GET1, WM_F_ADD, WM_F_GET_GET_ADD},
-        {WM_F_LOCAL_GET1, WM_F_CONST32, WM_F_COUNT, WM_F_GET_CONST},
+        {WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_COUNT, WM_F_GET_CONST},
         {WM_F_LOCAL_GET1, WM_F_LOCAL_GET1, WM_F_COUNT, WM_F_GET_GET},
 #if WM_FUSE
         /* Branches with what decides them: a loss where branch prediction is good. */
@@ -290,9 +304,9 @@ static void fuse(const void* const* labels, WmCell* record, uint8_t first, uint8
         {WM_F_NE, WM_F_IF, WM_F_COUNT, WM_F_NE_IF},
         {WM_F_EQZ, WM_F_IF, WM_F_COUNT, WM_F_EQZ_IF},
 #endif
-        {WM_F_CONST32, WM_F_ADD, WM_F_COUNT, WM_F_CONST_ADD},
-        {WM_F_CONST32, WM_F_AND, WM_F_COUNT, WM_F_CONST_AND},
-        {WM_F_CONST32, WM_F_SUB, WM_F_COUNT, WM_F_CONST_SUB},
+        {WM_F_CONST16, WM_F_ADD, WM_F_COUNT, WM_F_CONST_ADD},
+        {WM_F_CONST16, WM_F_AND, WM_F_COUNT, WM_F_CONST_AND},
+        {WM_F_CONST16, WM_F_SUB, WM_F_COUNT, WM_F_CONST_SUB},
         {WM_F_ADD, WM_F_LOCAL_SET1, WM_F_COUNT, WM_F_ADD_SET},
         {WM_F_LOCAL_GET1, WM_F_I32_LOAD, WM_F_COUNT, WM_F_GET_LOAD},
     };
@@ -302,10 +316,12 @@ static void fuse(const void* const* labels, WmCell* record, uint8_t first, uint8
         if (runs[r].first == first && runs[r].second == second &&
             (runs[r].third == WM_F_COUNT || runs[r].third == third))
         {
-            record->label = labels[runs[r].fused];
+            record->u32 = (record->u32 & 0xFFFF0000u) | handlers[runs[r].fused];
             return;
         }
 }
+
+#define E_DOES_NOT_FIT WM_ERR_UNSUPPORTED("unsupported: an operand too large for predecoding")
 
 /*
  * Besides the records themselves it needs RAM only for the branch targets,
@@ -313,7 +329,7 @@ static void fuse(const void* const* labels, WmCell* record, uint8_t first, uint8
  */
 WmResult wm_predecode(WmModule* m, WmCode* code)
 {
-    const void* const* labels = wm_fast_labels();
+    const uint16_t* handlers = wm_fast_handlers();
     uint32_t cells = 0, count = 0, k = 0;
     const uint8_t* p;
     const WmSide* st = m->side + code->side;
@@ -322,6 +338,8 @@ WmResult wm_predecode(WmModule* m, WmCode* code)
     /* The last two records, waiting for the kinds after them to see whether they start a run. */
     WmCell* last[2] = {NULL, NULL};
     uint8_t last_kind[2] = {WM_F_COUNT, WM_F_COUNT};
+    if (!handlers)
+        return WM_ERR_UNSUPPORTED("unsupported: handlers too far apart for predecoding");
     for (p = code->body; p <= code->end;)
     {
         uint32_t n, sides;
@@ -331,6 +349,9 @@ WmResult wm_predecode(WmModule* m, WmCode* code)
         if (is_branch(op))
             count += sides;
     }
+    /* Branch distances within a record's 16-bit operand. */
+    if (cells > 0x7FFFu)
+        return E_DOES_NOT_FIT;
     if (count)
     {
         targets = (WmTarget*)wm_malloc((size_t)count * sizeof(WmTarget));
@@ -375,7 +396,9 @@ WmResult wm_predecode(WmModule* m, WmCode* code)
         const uint8_t* start = p;
         uint8_t op = WM_RD8(p++);
         uint8_t kind;
-        int resolved = 1;
+        uint32_t operand = 0;
+        uint32_t cell = (uint32_t)(out - code->fast);
+        int fits = 1;
         uint32_t n, sides;
         step(code, start, &n, &sides);
         if (op >= 0x45u && op <= 0xC4u)
@@ -384,7 +407,7 @@ WmResult wm_predecode(WmModule* m, WmCode* code)
             if (!kind)
             {
                 kind = WM_F_NUMERIC;
-                out[1].u32 = op;
+                operand = op;
             }
         }
         else
@@ -395,89 +418,112 @@ WmResult wm_predecode(WmModule* m, WmCode* code)
                 case 0x02:
                 case 0x03:
                     kind = WM_F_NOP;
-                    out[1].u32 = nop_run(code, start);
+                    operand = nop_run(code, start);
                     break;
                 case 0x04:
                 case 0x05:
+                {
+                    uint32_t to = record_at(targets, count, st->pc);
                     kind = op == 0x04u ? WM_F_IF : WM_F_JUMP;
-                    out[1].target = record_at(code, targets, count, st->pc);
-                    resolved = out[1].target != NULL;
+                    fits = to != UINT32_MAX;
+                    operand = (uint32_t)(int32_t)(to - cell) & 0xFFFFu;
                     break;
+                }
                 case 0x0B:
                     kind = start == code->end ? WM_F_RETURN : WM_F_NOP;
-                    out[1].u32 = nop_run(code, start);
+                    operand = start == code->end ? 0u : nop_run(code, start);
                     break;
                 case 0x0C:
                 case 0x0D:
+                {
+                    int32_t distance = 0;
                     kind = op == 0x0Cu ? WM_F_BR : WM_F_BR_IF;
-                    resolved = put_branch(out + 1, code, st, targets, count);
+                    fits = branch_to(st, targets, count, cell, &distance, &out[1].u32);
+                    operand = (uint32_t)distance & 0xFFFFu;
                     break;
+                }
                 case 0x0E:
                 {
                     uint32_t table = sides - 1u;
                     kind = WM_F_BR_TABLE;
-                    out[1].u32 = table;
-                    for (uint32_t i = 0; i <= table; ++i)
-                        resolved &= put_branch(out + 2 + 3u * i, code, st + i, targets, count);
+                    operand = table;
+                    fits = table <= 0xFFFFu;
+                    for (uint32_t i = 0; fits && i <= table; ++i)
+                        fits = branch_to(st + i, targets, count, cell, &out[1u + 2u * i].s32, &out[2u + 2u * i].u32);
                     break;
                 }
                 case 0x0F: kind = WM_F_RETURN; break;
                 case 0x10:
                     kind = WM_F_CALL;
-                    out[1].u32 = leb_u32(&p);
+                    operand = leb_u32(&p);
                     break;
                 case 0x11:
                     kind = WM_F_CALL_INDIRECT;
+                    operand = leb_u32(&p);
                     out[1].u32 = leb_u32(&p);
-                    out[2].u32 = leb_u32(&p);
                     break;
                 case 0x1A:
                     kind = WM_F_DROP;
-                    out[1].u32 = st->keep;
+                    operand = st->keep;
                     break;
                 case 0x1B:
                     kind = WM_F_SELECT;
-                    out[1].u32 = st->keep;
+                    operand = st->keep;
                     break;
                 case 0x1C:
                     leb_u32(&p);
                     kind = WM_F_SELECT;
-                    out[1].u32 = wm_type_slots(WM_RD8(p));
+                    operand = wm_type_slots(WM_RD8(p));
                     break;
                 case 0x20:
                 case 0x21:
                 case 0x22:
                 {
                     uint32_t index = leb_u32(&p);
-                    if (!code->local_offsets)
-                    {
+                    uint32_t width = local_width(code, index);
+                    operand = code->local_offsets ? code->local_offsets[index] : index;
+                    if (width == 1u)
                         kind = (uint8_t)(WM_F_LOCAL_GET1 + (op - 0x20u));
-                        out[1].u32 = index;
-                    }
                     else
                     {
                         kind = (uint8_t)(WM_F_LOCAL_GET + (op - 0x20u));
-                        out[1].u32 = code->local_offsets[index];
-                        out[2].u32 = code->local_offsets[index + 1u] - code->local_offsets[index];
+                        out[1].u32 = width;
                     }
                     break;
                 }
                 case 0x23:
                 case 0x24:
                     kind = op == 0x23u ? WM_F_GLOBAL_GET : WM_F_GLOBAL_SET;
-                    out[1].u32 = leb_u32(&p);
+                    operand = leb_u32(&p);
                     break;
                 case 0x25:
                 case 0x26:
                     kind = op == 0x25u ? WM_F_TABLE_GET : WM_F_TABLE_SET;
-                    out[1].u32 = leb_u32(&p);
+                    operand = leb_u32(&p);
                     break;
                 case 0x3F: kind = WM_F_MEMORY_SIZE; break;
                 case 0x40: kind = WM_F_MEMORY_GROW; break;
                 case 0x41:
-                    kind = WM_F_CONST32;
-                    out[1].u32 = (uint32_t)leb_s64(&p);
+                case 0x43:
+                {
+                    uint32_t value = 0;
+                    if (op == 0x41u)
+                        value = (uint32_t)leb_s64(&p);
+                    else
+                        for (uint32_t i = 0; i < 4u; ++i)
+                            value |= (uint32_t)WM_RD8(p + i) << (8u * i);
+                    if (n == 1u)
+                    {
+                        kind = WM_F_CONST16;
+                        operand = value & 0xFFFFu;
+                    }
+                    else
+                    {
+                        kind = WM_F_CONST32;
+                        out[1].u32 = value;
+                    }
                     break;
+                }
                 case 0x42:
                 case 0x44:
                 {
@@ -492,59 +538,54 @@ WmResult wm_predecode(WmModule* m, WmCode* code)
                     out[2].u32 = (uint32_t)(value >> 32);
                     break;
                 }
-                case 0x43:
-                {
-                    uint32_t value = 0;
-                    for (uint32_t i = 0; i < 4u; ++i)
-                        value |= (uint32_t)WM_RD8(p + i) << (8u * i);
-                    kind = WM_F_CONST32;
-                    out[1].u32 = value;
-                    break;
-                }
                 case 0xD0: kind = WM_F_REF_NULL; break;
                 case 0xD1: kind = WM_F_REF_IS_NULL; break;
                 case 0xD2:
                     kind = WM_F_REF_FUNC;
-                    out[1].u32 = leb_u32(&p);
+                    operand = leb_u32(&p);
                     break;
                 case 0xFC:
                 {
                     uint32_t sub = leb_u32(&p);
                     kind = sub <= 7u ? WM_F_SAT : WM_F_MISC;
-                    out[1].u32 = sub;
+                    operand = sub;
                     if (sub > 7u)
-                        out[2].u32 = (uint32_t)(p - m->bytes);
+                        out[1].u32 = (uint32_t)(p - m->bytes);
                     break;
                 }
                 default:
+                {
                     /* Memory accesses: the common i32 ones with their own handlers. */
+                    uint32_t offset;
                     leb_u32(&p);
-                    if (op == 0x28u || op == 0x36u)
+                    offset = leb_u32(&p);
+                    if (n == 1u)
                     {
                         kind = op == 0x28u ? WM_F_I32_LOAD : WM_F_I32_STORE;
-                        out[1].u32 = leb_u32(&p);
+                        operand = offset;
                     }
                     else
                     {
                         kind = WM_F_ACCESS;
-                        out[1].u32 = op;
-                        out[2].u32 = leb_u32(&p);
+                        operand = op;
+                        out[1].u32 = offset;
                     }
+                }
             }
-        if (!resolved)
+        if (!fits || operand > 0xFFFFu)
         {
             wm_free(targets);
-            return WM_ERR_MALFORMED("malformed: branch target");
+            return E_DOES_NOT_FIT;
         }
-        out[0].label = labels[kind];
-        fuse(labels, last[0], last_kind[0], last_kind[1], kind);
+        out[0] = head(handlers, kind, operand);
+        fuse(handlers, last[0], last_kind[0], last_kind[1], kind);
         last[0] = last[1], last_kind[0] = last_kind[1];
         last[1] = out, last_kind[1] = kind;
         st += sides;
         out += n;
         p = step(code, start, &n, &sides);
     }
-    fuse(labels, last[0], last_kind[0], last_kind[1], WM_F_COUNT);
+    fuse(handlers, last[0], last_kind[0], last_kind[1], WM_F_COUNT);
     wm_free(targets);
     return NULL;
 }
