@@ -111,8 +111,8 @@ faster).
 
 `-DWM_IRAM` (off by default) places the interpreter loop in IRAM, about
 10 KB of heap less. Code runs from flash through a 32 KB cache, and with
-the loop there a kernel that switches programs often keeps both in the
-cache: on a classic ESP32 with wasm-rtos, 500 round trips between two
-programs through a queue take 43 ms with it and 169 ms without. A program
-that runs alone gains little (CoreMark 12.76 against 12.58). Turn it on
+the loop in IRAM a kernel that switches programs often has the cache to
+itself: on a classic ESP32 with wasm-rtos, 500 round trips between two
+programs through a queue take 27 ms with it and 52 ms without. A program
+that runs alone gains nothing (CoreMark 12.97 against 12.96). Turn it on
 when programs talk to each other a lot and the heap can spare it.
