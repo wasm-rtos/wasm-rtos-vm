@@ -107,5 +107,12 @@ skips the checks that invalid programs are refused.
 Arduino and ESP-IDF build with `-fno-jump-tables -fno-tree-switch-conversion`,
 which turns the interpreter's `switch` into a chain of comparisons. Build
 the engine's files with `-fjump-tables -ftree-switch-conversion` (about 20%
-faster). `-DWM_IRAM` places the interpreter loop in IRAM (8 KB), which gains
-little.
+faster).
+
+`-DWM_IRAM` (off by default) places the interpreter loop in IRAM, about
+10 KB of heap less. Code runs from flash through a 32 KB cache, and with
+the loop there a kernel that switches programs often keeps both in the
+cache: on a classic ESP32 with wasm-rtos, 500 round trips between two
+programs through a queue take 43 ms with it and 169 ms without. A program
+that runs alone gains little (CoreMark 12.76 against 12.58). Turn it on
+when programs talk to each other a lot and the heap can spare it.
