@@ -99,6 +99,25 @@ static int limits_match(uint32_t size, uint32_t max, int has_max, const WmLimits
     return 1;
 }
 
+int wm_module_import_type(const WmModule* m, const char* name, const uint8_t** params, uint32_t* param_count,
+                          const uint8_t** results, uint32_t* result_count)
+{
+    for (uint32_t i = 0; i < m->import_count; ++i)
+    {
+        const WmImport* imp = &m->imports[i];
+        if (imp->kind == WM_EXTERN_FUNC && (const char*)imp->name == name)
+        {
+            const WmType* t = &m->types[m->func_types[imp->index]];
+            *params = t->params;
+            *param_count = t->param_count;
+            *results = t->results;
+            *result_count = t->result_count;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 #define E_INCOMPATIBLE WM_ERR_UNLINKABLE("unlinkable: incompatible import type")
 
 static WmResult link_imports(WmInstance* inst, WmResolver resolver, void* context)

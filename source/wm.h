@@ -80,6 +80,13 @@ uint32_t wm_module_code_bytes(const WmModule* module);
  */
 typedef WmResult (*WmResolver)(void* context, const char* module, uint32_t module_length, const char* name,
                                uint32_t name_length, uint8_t kind, WmExtern* out);
+/*
+ * The type a function import declares, for a resolver that makes the
+ * function itself: name is the pointer the resolver was given. 0 when it
+ * names no function import of the module.
+ */
+int wm_module_import_type(const WmModule* module, const char* name, const uint8_t** params, uint32_t* param_count,
+                          const uint8_t** results, uint32_t* result_count);
 
 /*
  * Instantiate: imports, segments, then the start function, run on runtime.
