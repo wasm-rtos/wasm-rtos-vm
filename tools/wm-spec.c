@@ -385,7 +385,7 @@ static WmResult test_write(void* context, uint32_t* slot, const uint8_t* frame)
     (void)context;
     if (*slot != 0xFFFFFFFFu)
     {
-        memcpy(g_slots[*slot], frame, 4096);
+        memcpy(g_slots[*slot], frame, wm_frame_size());
         return NULL;
     }
     while (i < g_slot_count && g_slots[i])
@@ -399,9 +399,9 @@ static WmResult test_write(void* context, uint32_t* slot, const uint8_t* frame)
         g_slots = slots;
         g_slot_count = g_slot_count * 2u + 8u;
     }
-    if (!(g_slots[i] = (uint8_t*)malloc(4096)))
+    if (!(g_slots[i] = (uint8_t*)malloc(wm_frame_size())))
         return "exhaustion: no storage";
-    memcpy(g_slots[i], frame, 4096);
+    memcpy(g_slots[i], frame, wm_frame_size());
     *slot = i;
     return NULL;
 }
@@ -409,7 +409,7 @@ static WmResult test_write(void* context, uint32_t* slot, const uint8_t* frame)
 static WmResult test_read(void* context, uint32_t slot, uint8_t* frame)
 {
     (void)context;
-    memcpy(frame, g_slots[slot], 4096);
+    memcpy(frame, g_slots[slot], wm_frame_size());
     ++g_back;
     return NULL;
 }

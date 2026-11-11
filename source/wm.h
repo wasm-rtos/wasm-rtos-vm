@@ -232,7 +232,7 @@ WmMemory* wm_memory_next(WmMemory* after);
  * it out (wm_memory_frame_look, wm_memory_frame_take).
  */
 int wm_pager_hand(WmMemory** memory, uint32_t* index);
-/* A memory's frames, 4 KiB each. */
+/* A memory's frames, of wm_frame_size() bytes each. */
 uint32_t wm_memory_frames(const WmMemory* memory);
 /*
  * Whether frame index may be taken out of RAM: -1 when it is not in RAM or
@@ -254,6 +254,8 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index);
 WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta);
 /* Frames in RAM across all memories with a pager. */
 uint32_t wm_pager_resident(void);
+/* The size of a frame in bytes, as built (WM_FRAME_SIZE); 0 when memory is always one block. */
+uint32_t wm_frame_size(void);
 /* A background read the pager started has ended: the frame is in RAM (result NULL) or back in storage. */
 void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result);
 /* A background write the pager started has ended: the frame's RAM goes (result NULL), or it stays, dirty. */

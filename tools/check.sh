@@ -53,6 +53,17 @@ for mode in "-fsanitize=address" "-fsanitize=address,undefined" "-fsanitize=addr
     cc -std=gnu99 -O1 -g $mode source/*.c test/state.c -lm -o build/state || exit 1
     build/state >/dev/null && echo "state snapshot: ok ($mode)" || { echo "state snapshot: FAIL $mode"; fail=1; }
 done
+# Other frame sizes: the spec suite swapped through 3 frames, and the paging tests.
+for size in 256 1024 65536; do
+    cc -std=gnu99 -O1 -g -fsanitize=address -DWM_FRAME_SIZE=$size -DWM_SPEC_PAGER=3 source/*.c tools/wm-spec.c -lm -o build/wm-spec-frames || exit 1
+    python3 tools/spec.py build/wm-spec-frames "$SPEC" >/dev/null 2>&1 || { echo "frames $size: FAIL spec swapped"; fail=1; continue; }
+    ok=1
+    for t in paged swap state; do
+        cc -std=gnu99 -O1 -g -fsanitize=address -DWM_FRAME_SIZE=$size source/*.c test/$t.c -lm -o build/frames-$t || exit 1
+        build/frames-$t >/dev/null || { echo "frames $size: FAIL $t"; ok=0; fail=1; }
+    done
+    [ $ok = 1 ] && echo "frames $size:  ok (spec swapped, paged, swap, state)"
+done
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 echo "kernel tests:  $(tools/kernel-tests.sh | tail -1)"
 echo "kernel tests (paged): $(CFLAGS=-DWM_MEMORY_ALWAYS_PAGED=1 tools/kernel-tests.sh | tail -1)"

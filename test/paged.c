@@ -117,8 +117,9 @@ int main(int argc, char** argv)
         uint8_t* p = NULL;
         uint8_t bytes[8];
         uint32_t value = 0;
-        check(!wm_memory_pointer(memory, 65536 + 100, 1000, &p) && p != NULL, "a range inside one frame has a pointer");
-        check(!wm_memory_pointer(memory, 65536 + 4090, 20, &p) && p == NULL, "a range across frames has none");
+        check(!wm_memory_pointer(memory, 65536 + 8, wm_frame_size() / 2u, &p) && p != NULL,
+              "a range inside one frame has a pointer");
+        check(!wm_memory_pointer(memory, 65536 + wm_frame_size() - 6u, 20, &p) && p == NULL, "a range across frames has none");
         check(!wm_memory_pointer(memory, 100, 3000, &p) && p != NULL,
               "a range in the frames of the former block has a pointer");
         check(wm_memory_pointer(memory, 4 * 65536 - 4, 8, &p) != NULL && p == NULL, "a range past the end is an error");
@@ -140,7 +141,8 @@ int main(int argc, char** argv)
         WmMemory* memory = wm_instance_memory(inst);
         uint32_t resident = wm_memory_resident(memory);
         uint32_t sum = call1(rt, inst, "sum", 4, 0, 0);
-        g_allocations_left = 5;
+        /* About half the frames of a page: some are made before the heap runs out. */
+        g_allocations_left = (long)(65536u / wm_frame_size() + 1u) / 2;
         check(call1(rt, inst, "grow", 1, 0, 0) == 0xFFFFFFFFu, "memory.grow fails when the heap runs out of frames");
         g_allocations_left = -1;
         check(wm_memory_resident(memory) == resident && call1(rt, inst, "sum", 4, 0, 0) == sum,
