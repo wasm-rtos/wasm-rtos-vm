@@ -6,6 +6,8 @@
 
 static int g_failures;
 static size_t g_block_limit = (size_t)-1;
+/* How many more allocations succeed, like a heap that is running out; -1: no end. */
+static long g_allocations_left = -1;
 
 static void check(int ok, const char* what)
 {
@@ -21,7 +23,11 @@ static void* limited(void* ptr, size_t size)
         free(ptr);
         return NULL;
     }
-    return size > g_block_limit ? NULL : realloc(ptr, size);
+    if (size > g_block_limit || g_allocations_left == 0)
+        return NULL;
+    if (g_allocations_left > 0)
+        --g_allocations_left;
+    return realloc(ptr, size);
 }
 
 static uint32_t call1(WmRuntime* rt, WmInstance* inst, const char* name, uint32_t a, uint32_t b, uint32_t c)
@@ -63,7 +69,7 @@ int main(int argc, char** argv)
     g_block_limit = 100u * 1024u;
     check(call1(rt, inst, "grow", 3, 0, 0) == 1, "memory.grow to 4 pages succeeds");
     check(wm_memory_data(wm_instance_memory(inst), NULL) == NULL, "the memory is paged now");
-    check(wm_memory_resident(wm_instance_memory(inst)) == 65536, "the pages it grew by take no RAM until touched");
+    check(wm_memory_resident(wm_instance_memory(inst)) == 4 * 65536, "the pages it grew by are in RAM at once");
     check(call1(rt, inst, "sum", 1, 0, 0) == flat_sum, "what was written in one block reads back paged");
     call1(rt, inst, "fill", 4, 0, 0);
     paged_sum = call1(rt, inst, "sum", 4, 0, 0);
@@ -127,6 +133,20 @@ int main(int argc, char** argv)
         check(!wm_memory_write(memory, 2 * 65536 + 4094, &value, 4) && !wm_memory_read(memory, 2 * 65536 + 4094, bytes, 4) &&
                   memcmp(bytes, &value, 4) == 0 && call1(rt, inst, "peek", 2 * 65536 + 4094, 0, 0) == value,
               "a write across frames reads back, by the host and by the program");
+    }
+
+    /* A heap that runs out during memory.grow: it says no, and the memory stays as it was. */
+    {
+        WmMemory* memory = wm_instance_memory(inst);
+        uint32_t resident = wm_memory_resident(memory);
+        uint32_t sum = call1(rt, inst, "sum", 4, 0, 0);
+        g_allocations_left = 5;
+        check(call1(rt, inst, "grow", 1, 0, 0) == 0xFFFFFFFFu, "memory.grow fails when the heap runs out of frames");
+        g_allocations_left = -1;
+        check(wm_memory_resident(memory) == resident && call1(rt, inst, "sum", 4, 0, 0) == sum,
+              "the memory keeps its size and contents");
+        check(call1(rt, inst, "grow", 1, 0, 0) == 4 && wm_memory_resident(memory) == resident + 65536,
+              "it grows once there is room again");
     }
 
     wm_instance_free(inst);

@@ -1,9 +1,10 @@
 /*
  * Linear memory. A memory is one block when the heap has room for it; when
- * it has not, it is paged: 4 KiB frames, each allocated the first time it is
- * touched, so it never needs a large free block and untouched memory costs
- * nothing. A block that cannot grow becomes paged without a copy: its
- * frames stay where they are.
+ * it has not, it is paged: 4 KiB frames anywhere in the heap, so it never
+ * needs a large free block. Every frame is made when the memory is made or
+ * grows, so a memory.grow that succeeds has the memory behind it and an
+ * access never runs out. A block that cannot grow becomes paged without a
+ * copy: its frames stay where they are.
  *
  * The interpreter reaches a one-block memory directly and a paged one
  * through the TLB (wm_exec.c); everything else (segments, bulk
@@ -145,6 +146,28 @@ static int make_paged(WmMemory* memory, uint32_t frame_count)
     return 1;
 }
 
+/*
+ * Make the frames from first up to count, all still missing; none stay
+ * made when one cannot be.
+ */
+static int make_frames(WmMemory* memory, uint32_t first, uint32_t count)
+{
+    for (uint32_t i = first; i < count; ++i)
+    {
+        memory->frames[i] = (uint8_t*)wm_calloc(WM_FRAME, 1);
+        if (!memory->frames[i])
+        {
+            while (i-- > first)
+            {
+                wm_free(memory->frames[i]);
+                memory->frames[i] = NULL;
+            }
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* More frame slots for a paged memory that grows. */
 static int grow_frames(WmMemory* memory, uint32_t frame_count)
 {
@@ -183,11 +206,12 @@ WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_l
 #if WM_HAS_MMU
     if (!mem->data)
     {
-        /* No block that large: paged, every frame made when first touched. */
+        /* No block that large: paged. */
         uint32_t count = frames_for(size);
         mem->frames = (uint8_t**)wm_calloc(count + 1u, sizeof(uint8_t*));
-        if (!mem->frames)
+        if (!mem->frames || !make_frames(mem, 0, count))
         {
+            wm_free(mem->frames);
             wm_free(mem);
             return NULL;
         }
@@ -273,7 +297,9 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
 #endif
     }
 #if WM_HAS_MMU
-    if (!grow_frames(mem, frames_for(size)))
+    /* The frames past the old end are all new: make them now, or memory.grow fails. */
+    if (!grow_frames(mem, frames_for(size)) ||
+        !make_frames(mem, frames_for((wm_size)old << mem->page_log2), frames_for(size)))
         return WM_NONE;
     mem->pages = pages;
     return old;

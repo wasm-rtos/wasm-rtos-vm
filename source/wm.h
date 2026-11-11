@@ -146,7 +146,7 @@ WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, u
  * until the memory grows.
  */
 WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, uint8_t** out);
-/* The bytes of a memory in RAM now: all of a one-block memory, the frames a paged one has touched. */
+/* The bytes of a memory in RAM: all of a one-block memory, the frames of a paged one. */
 uint32_t wm_memory_resident(const WmMemory* memory);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */

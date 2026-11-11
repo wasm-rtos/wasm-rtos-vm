@@ -286,7 +286,7 @@ typedef struct WmSide
  */
 /*
  * Paged memory (WM_HAS_MMU, off on AVR): a memory the heap has no block
- * for is paged instead, 4 KiB frames made when first touched.
+ * for is paged instead, in 4 KiB frames, all made when it is made or grows.
  * WM_MEMORY_ALWAYS_PAGED pages every memory, for tests.
  */
 #ifndef WM_HAS_MMU
@@ -574,7 +574,7 @@ struct WmMemory
 #if WM_HAS_MMU
     /* Its address space number in TLB keys, 1..511; 0 when none was free (never cached). */
     uint16_t space;
-    /* Paged: a 4 KiB frame per slot, NULL until first touched. */
+    /* Paged: a 4 KiB frame per slot (a NULL slot is made when touched). */
     uint8_t** frames;
     uint32_t frame_count;
     /* A former one-block memory: its first block_frames frames are in it. */
