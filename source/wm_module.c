@@ -1602,6 +1602,18 @@ void wm_module_free(WmModule* m)
     wm_free(m);
 }
 
+WmResult wm_module_predecoded(const WmModule* m)
+{
+#if WM_PREDECODE
+    if (!m->predecode_tried)
+        return WM_ERR_UNSUPPORTED("unsupported: not predecoded before its first instance");
+    return m->predecode_result;
+#else
+    (void)m;
+    return WM_ERR_UNSUPPORTED("unsupported: built without WM_PREDECODE");
+#endif
+}
+
 uint32_t wm_module_code_bytes(const WmModule* m)
 {
     size_t bytes;
@@ -1635,6 +1647,7 @@ void wm_module_predecode(WmModule* m)
     m->predecode_tried = 1;
     for (uint32_t i = 0; !predecoded && i < defined; ++i)
         predecoded = wm_predecode(m, &m->codes[i]);
+    m->predecode_result = predecoded;
     if (predecoded)
         for (uint32_t i = 0; i < defined; ++i)
         {

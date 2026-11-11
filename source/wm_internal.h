@@ -531,6 +531,8 @@ struct WmModule
     /* References can be on the value stack (in signatures, locals or operands): its layout follows WM_REF_SLOTS. */
     uint8_t stack_refs;
     uint8_t predecode_tried;
+    /* Why predecoding failed and the functions run in place; NULL when it worked. */
+    WmResult predecode_result;
 };
 
 struct WmFunc

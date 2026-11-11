@@ -72,6 +72,13 @@ WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size);
 void wm_module_free(WmModule* module);
 /* Bytes the module's code takes besides the module itself: side table, predecoded records, local offsets. */
 uint32_t wm_module_code_bytes(const WmModule* module);
+/*
+ * NULL when the module's functions run predecoded, the fast way (done when
+ * its first instance is made); otherwise why they run in place, two to
+ * three times slower: built without it, no memory for the records, or an
+ * interpreter too large for them (as UBSan makes it). Worth a warning.
+ */
+WmResult wm_module_predecoded(const WmModule* module);
 
 /*
  * Finds what an import binds to. Returning an error fails the
