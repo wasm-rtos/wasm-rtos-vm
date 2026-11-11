@@ -16,7 +16,6 @@ static int g_failures;
 static int32_t g_reserved, g_reserve_limit = 1 << 30;
 static uint8_t* g_slots[4096];
 static unsigned long g_taken, g_back, g_written;
-static uint32_t g_hand;
 /* Dirty frames being written in the background: at most MAX_WRITES, ended by end_write. */
 #define MAX_WRITES 4u
 static struct
@@ -49,27 +48,15 @@ static int reserve(void* context, int32_t frames)
 /* CLOCK over every frame of every memory with the pager. */
 static int take_one(void)
 {
-    uint32_t total = 0;
-    for (WmMemory* m = wm_memory_next(NULL); m; m = wm_memory_next(m))
-        total += wm_memory_frames(m);
-    for (uint32_t step = 0; total && step < 3u * total; ++step)
-    {
-        uint32_t at = g_hand++ % total;
-        for (WmMemory* m = wm_memory_next(NULL); m; m = wm_memory_next(m))
+    WmMemory* m;
+    uint32_t at;
+    for (uint32_t step = 0; step < 3u * wm_pager_resident() && wm_pager_hand(&m, &at); ++step)
+        if (wm_memory_frame_look(m, at) == 0)
         {
-            if (at < wm_memory_frames(m))
-            {
-                if (wm_memory_frame_look(m, at) == 0)
-                {
-                    WmResult r = wm_memory_frame_take(m, at);
-                    if (!r || r == wm_page_wait)
-                        return (int)++g_taken;
-                }
-                break;
-            }
-            at -= wm_memory_frames(m);
+            WmResult r = wm_memory_frame_take(m, at);
+            if (!r || r == wm_page_wait)
+                return (int)++g_taken;
         }
-    }
     return 0;
 }
 

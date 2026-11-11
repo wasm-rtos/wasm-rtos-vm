@@ -212,8 +212,15 @@ typedef struct WmPager
 } WmPager;
 /* The pager memories made from now on use; NULL: none, memories stay in RAM. */
 void wm_set_pager(const WmPager* pager);
-/* Paged memories with a pager, one after another from NULL; the host takes frames from them. */
+/* Paged memories with a pager, one after another from NULL. */
 WmMemory* wm_memory_next(WmMemory* after);
+/*
+ * The pager's CLOCK hand: the next frame in RAM, going round the frames in
+ * RAM of all memories with a pager (only those, however much is in
+ * storage). 0 when none is in RAM. The host looks at the frame and may take
+ * it out (wm_memory_frame_look, wm_memory_frame_take).
+ */
+int wm_pager_hand(WmMemory** memory, uint32_t* index);
 /* A memory's frames, 4 KiB each. */
 uint32_t wm_memory_frames(const WmMemory* memory);
 /*

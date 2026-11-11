@@ -592,6 +592,8 @@ struct WmMemory
     const struct WmPager* pager;
     uint16_t* marks;
     uint32_t* slots;
+    /* Each frame's place in the pager's ring of frames in RAM (WM_NONE: not in it). */
+    uint32_t* ring_place;
     struct WmMemory* next;
 #endif
 };

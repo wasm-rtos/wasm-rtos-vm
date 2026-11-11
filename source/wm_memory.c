@@ -104,6 +104,76 @@ void wm_set_pager(const WmPager* pager) { g_pager = pager; }
 
 uint32_t wm_pager_resident(void) { return g_resident; }
 
+/*
+ * The frames in RAM of every memory with a pager, as a ring the pager's
+ * CLOCK hand goes round (an OS's core map): taking a frame out looks only
+ * at frames that are in RAM, however much is in storage. A memory keeps
+ * each frame's place in the ring (ring_place), so a frame leaves it at once.
+ */
+typedef struct WmRingEntry
+{
+    WmMemory* memory;
+    uint32_t index;
+} WmRingEntry;
+static WmRingEntry* g_ring;
+static uint32_t g_ring_count, g_ring_size, g_ring_hand;
+
+/* Room in the ring for one more frame: 0 when the heap has none. */
+static int ring_room(void)
+{
+    WmRingEntry* ring;
+    uint32_t size;
+    if (g_ring_count < g_ring_size)
+        return 1;
+    size = g_ring_size ? 2u * g_ring_size : 16u;
+    if (!(ring = (WmRingEntry*)wm_realloc(g_ring, (size_t)size * sizeof(WmRingEntry))))
+        return 0;
+    g_ring = ring;
+    g_ring_size = size;
+    return 1;
+}
+
+static void ring_add(WmMemory* memory, uint32_t index)
+{
+    if (!memory->ring_place || !ring_room())
+        return;
+    g_ring[g_ring_count].memory = memory;
+    g_ring[g_ring_count].index = index;
+    memory->ring_place[index] = g_ring_count++;
+}
+
+static void ring_remove(WmMemory* memory, uint32_t index)
+{
+    uint32_t place;
+    if (!memory->ring_place || (place = memory->ring_place[index]) == WM_NONE)
+        return;
+    memory->ring_place[index] = WM_NONE;
+    /* The last frame in the ring takes its place. */
+    if (place != --g_ring_count)
+    {
+        g_ring[place] = g_ring[g_ring_count];
+        g_ring[place].memory->ring_place[g_ring[place].index] = place;
+    }
+    if (!g_ring_count)
+    {
+        wm_free(g_ring);
+        g_ring = NULL;
+        g_ring_size = g_ring_hand = 0;
+    }
+}
+
+int wm_pager_hand(WmMemory** memory, uint32_t* index)
+{
+    if (!g_ring_count)
+        return 0;
+    if (g_ring_hand >= g_ring_count)
+        g_ring_hand = 0;
+    *memory = g_ring[g_ring_hand].memory;
+    *index = g_ring[g_ring_hand].index;
+    ++g_ring_hand;
+    return 1;
+}
+
 WmMemory* wm_memory_next(WmMemory* after) { return after ? after->next : g_swapped; }
 
 static int frame_out(const uint8_t* frame) { return frame == WM_FRAME_OUT; }
@@ -141,7 +211,7 @@ static uint8_t* new_frame(const WmPager* pager)
     uint8_t* frame;
     if (!pager)
         return (uint8_t*)wm_calloc(WM_FRAME, 1);
-    if (pager->room && !pager->room(pager->context, 0))
+    if (!ring_room() || (pager->room && !pager->room(pager->context, 0)))
         return NULL;
     while (!(frame = (uint8_t*)wm_calloc(WM_FRAME, 1)))
         if (!pager->room || !pager->room(pager->context, 1))
@@ -161,6 +231,7 @@ static int finish_loading(WmMemory* memory, uint32_t index)
     memory->marks[index] &= (uint16_t)~WM_MARK_LOADING;
     if (!(g_frame_error = memory->pager->finish(memory->pager->context, memory->slots[index])))
         return 1;
+    ring_remove(memory, index);
     wm_free(memory->frames[index]);
     memory->frames[index] = WM_FRAME_OUT;
     --g_resident;
@@ -188,6 +259,7 @@ static void free_frame(WmMemory* memory, uint32_t index)
     }
     if (frame_here(frame))
     {
+        ring_remove(memory, index);
         wm_free(frame);
         if (memory->pager)
             --g_resident;
@@ -226,6 +298,7 @@ uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
             return NULL;
         }
         memory->frames[index] = frame = made;
+        ring_add(memory, index);
     }
     if (memory->marks)
         memory->marks[index] |= (uint16_t)(WM_MARK_TOUCHED | (write ? WM_MARK_DIRTY : 0u));
@@ -286,21 +359,26 @@ static int take_pager(WmMemory* memory)
         return 1;
     memory->marks = (uint16_t*)wm_calloc(memory->frame_count + 1u, sizeof(uint16_t));
     memory->slots = (uint32_t*)wm_malloc(((size_t)memory->frame_count + 1u) * sizeof(uint32_t));
-    if (!memory->marks || !memory->slots || !g_pager->reserve(g_pager->context, (int32_t)reserved))
+    memory->ring_place = (uint32_t*)wm_malloc(((size_t)memory->frame_count + 1u) * sizeof(uint32_t));
+    if (!memory->marks || !memory->slots || !memory->ring_place || !g_pager->reserve(g_pager->context, (int32_t)reserved))
     {
         wm_free(memory->marks);
         wm_free(memory->slots);
+        wm_free(memory->ring_place);
         memory->marks = NULL;
         memory->slots = NULL;
+        memory->ring_place = NULL;
         return 0;
     }
     memset(memory->slots, 0xFF, ((size_t)memory->frame_count + 1u) * sizeof(uint32_t));
+    memcpy(memory->ring_place, memory->slots, ((size_t)memory->frame_count + 1u) * sizeof(uint32_t));
     /* Frames it has already (a copied partial frame) have no copy in storage. */
     for (uint32_t i = memory->block_frames; i < memory->frame_count; ++i)
         if (frame_here(memory->frames[i]))
         {
             ++g_resident;
             memory->marks[i] = WM_MARK_DIRTY;
+            ring_add(memory, i);
         }
     memory->pager = g_pager;
     memory->next = g_swapped;
@@ -368,6 +446,14 @@ static int grow_frames(WmMemory* memory, uint32_t frame_count)
         memset(slots + memory->frame_count, 0xFF, (size_t)(frame_count - memory->frame_count) * sizeof(uint32_t));
         memory->slots = slots;
     }
+    if (memory->ring_place)
+    {
+        uint32_t* places = (uint32_t*)wm_realloc(memory->ring_place, ((size_t)frame_count + 1u) * sizeof(uint32_t));
+        if (!places)
+            return 0;
+        memset(places + memory->frame_count, 0xFF, (size_t)(frame_count - memory->frame_count) * sizeof(uint32_t));
+        memory->ring_place = places;
+    }
     memory->frame_count = frame_count;
     return 1;
 }
@@ -428,6 +514,7 @@ void wm_memory_free(WmMemory* mem)
     wm_free(mem->frames);
     wm_free(mem->marks);
     wm_free(mem->slots);
+    wm_free(mem->ring_place);
     wm_free(mem->block);
 #endif
     wm_free(mem->data);
@@ -538,6 +625,7 @@ static WmResult start_loading(WmMemory* memory, uint32_t index)
         return result;
     }
     memory->frames[index] = made;
+    ring_add(memory, index);
     if (result)
         memory->marks[index] |= WM_MARK_LOADING;
     return result;
@@ -556,6 +644,7 @@ void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result)
         memory->marks[index] |= WM_MARK_DIRTY;
         return;
     }
+    ring_remove(memory, index);
     wm_free(memory->frames[index]);
     memory->frames[index] = WM_FRAME_OUT;
     --g_resident;
@@ -568,6 +657,7 @@ void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result)
     memory->marks[index] &= (uint16_t)~WM_MARK_LOADING;
     if (result)
     {
+        ring_remove(memory, index);
         wm_free(memory->frames[index]);
         memory->frames[index] = WM_FRAME_OUT;
         --g_resident;
@@ -667,6 +757,7 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
         memory->slots[index] = slot;
         memory->marks[index] &= (uint16_t)~WM_MARK_DIRTY;
     }
+    ring_remove(memory, index);
     memory->frames[index] = slot != WM_NONE ? WM_FRAME_OUT : NULL;
     wm_free(frame);
     --g_resident;
@@ -704,6 +795,7 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
 
 void wm_set_pager(const WmPager* pager) { (void)pager; }
 uint32_t wm_pager_resident(void) { return 0; }
+int wm_pager_hand(WmMemory** memory, uint32_t* index) { (void)memory, (void)index; return 0; }
 void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result) { (void)memory, (void)index, (void)result; }
 void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result) { (void)memory, (void)index, (void)result; }
 WmMemory* wm_memory_next(WmMemory* after) { (void)after; return NULL; }
