@@ -8,6 +8,9 @@ mkdir -p build
 fail=0
 cc -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec || exit 1
 echo "spec:          $(python3 tools/spec.py build/wm-spec "$SPEC" | tail -1)" ; python3 tools/spec.py build/wm-spec "$SPEC" >/dev/null || fail=1
+# A plain optimized build must predecode, or every program runs in place.
+cc -std=gnu99 -O2 source/*.c test/predecoded.c -lm -o build/predecoded || exit 1
+build/predecoded >/dev/null && echo "predecoded:    ok (-O2)" || { echo "predecoded:    FAIL $(build/predecoded)"; fail=1; }
 # UBSan makes the interpreter too large to predecode, so the runs above go
 # through the code in place; these, with ASan only, run the predecoded loop.
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast || exit 1

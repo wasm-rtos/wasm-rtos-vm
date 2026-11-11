@@ -1526,7 +1526,8 @@ call:
         if (fuel_on)
             rt->fuel = fuel;
         TRACE_CLEAR();
-        if ((trap = callee->host(rt, callee->user, args, inst->memory)))
+        rt->host_trap = NULL;
+        if ((trap = callee->host(rt, callee->user, args, inst->memory)) || (trap = rt->host_trap))
             TRAP_AFTER_HOST(trap);
         fuel_on = rt->fuel_on && rt->nesting == 1u;
         fuel = fuel_on ? rt->fuel : WM_NONE;
@@ -2188,7 +2189,8 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             if (fuel_on)
                 rt->fuel = fuel;
             TRACE_CLEAR();
-            if ((trap = callee->host(rt, callee->user, args, inst->memory)))
+            rt->host_trap = NULL;
+            if ((trap = callee->host(rt, callee->user, args, inst->memory)) || (trap = rt->host_trap))
                 TRAP_AFTER_HOST(trap);
             fuel_on = rt->fuel_on && rt->nesting == 1u;
             fuel = fuel_on ? rt->fuel : WM_NONE;
