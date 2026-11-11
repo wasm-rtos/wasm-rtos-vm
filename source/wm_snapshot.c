@@ -11,7 +11,9 @@
  *            stands (function, offset, side index, frame and stack slots)
  *   frames   the calls below it, outermost first
  *   stack    the used slots
- *   memory   runs of (zero bytes, data bytes, data)
+ *   memory   runs of (zero bytes, data bytes, data); or, for a state
+ *            snapshot that leaves the memory where it is, one run of
+ *            (0xFFFFFFFF, 0xFFFFFFFF)
  *   globals  the module's own mutable globals
  *   tables   the module's own tables: size, then each element
  *   dropped  one byte per element segment, then per data segment
@@ -176,7 +178,11 @@ static WmResult get_ref_index(const WmInstance* inst, uint8_t type, uint64_t val
     return NULL;
 }
 
-WmResult wm_snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapshotWrite write, void* context)
+/* The memory section of a state snapshot: the memory stays where it is. */
+#define KEPT_MEMORY 0xFFFFFFFFu
+
+static WmResult snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapshotWrite write, void* context,
+                               int with_memory)
 {
     const WmModule* m = inst->module;
     const WmSuspended* saved = &rt->saved;
@@ -211,7 +217,12 @@ WmResult wm_snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapsh
     for (uint32_t i = 0; i < stack_slots; ++i)
         put32(&s, rt->stack[i]);
 
-    if (memory)
+    if (memory && !with_memory && WM_MEMORY_SIZE(memory))
+    {
+        put32(&s, KEPT_MEMORY);
+        put32(&s, KEPT_MEMORY);
+    }
+    else if (memory)
     {
 #if WM_HAS_MMU
 #define MEMORY_BYTE(AT) (data ? data[AT] : wm_memory_byte(memory, (uint32_t)(AT)))
@@ -287,6 +298,16 @@ WmResult wm_snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapsh
     return s.error;
 }
 
+WmResult wm_snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapshotWrite write, void* context)
+{
+    return snapshot_write(rt, inst, write, context, 1);
+}
+
+WmResult wm_snapshot_write_state(const WmRuntime* rt, const WmInstance* inst, WmSnapshotWrite write, void* context)
+{
+    return snapshot_write(rt, inst, write, context, 0);
+}
+
 WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, void* context)
 {
     const WmModule* m = inst->module;
@@ -336,20 +357,30 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
     for (uint32_t i = 0; i < stack_slots; ++i)
         rt->stack[i] = get32(&s);
 
-    if (memory)
+    if (memory && WM_MEMORY_SIZE(memory))
     {
         wm_size size = WM_MEMORY_SIZE(memory);
         wm_size at = 0;
-#if WM_HAS_MMU
-        if (!memory->data)
-            wm_memory_fill(memory, 0, 0, (uint32_t)size);
-        else
-#endif
-            memset(memory->data, 0, (size_t)size);
-        while (at < size && !s.error)
+        uint32_t zeros = get32(&s);
+        uint32_t length = get32(&s);
+        /* A state snapshot: the memory is the one it was taken with, kept where it is. */
+        int kept = zeros == KEPT_MEMORY && length == KEPT_MEMORY;
+        if (!kept)
         {
-            uint32_t zeros = get32(&s);
-            uint32_t length = get32(&s);
+#if WM_HAS_MMU
+            if (!memory->data)
+                wm_memory_fill(memory, 0, 0, (uint32_t)size);
+            else
+#endif
+                memset(memory->data, 0, (size_t)size);
+        }
+        while (!kept && at < size && !s.error)
+        {
+            if (at)
+            {
+                zeros = get32(&s);
+                length = get32(&s);
+            }
             if (s.error || zeros > size - at || length > size - at - zeros)
                 return s.error ? s.error : wm_snapshot_invalid;
             at += zeros;

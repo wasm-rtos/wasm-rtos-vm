@@ -104,6 +104,17 @@ WmResult wm_instantiate(WmInstance** out, const WmModule* module, WmRuntime* run
                         void* context);
 WmResult wm_instance_start(WmInstance* instance, WmRuntime* runtime);
 void wm_instance_free(WmInstance* instance);
+/*
+ * Keep an instance's memory past it: the instance no longer owns it, and
+ * freeing the instance leaves it (NULL when it owns none). A new instance
+ * of the same module takes it back with wm_instantiate_with_memory, which
+ * writes no data segments into it and runs no start function: the program
+ * goes on from a state snapshot (wm_snapshot_write_state). On failure the
+ * memory stays the caller's.
+ */
+WmMemory* wm_instance_detach_memory(WmInstance* instance);
+WmResult wm_instantiate_with_memory(WmInstance** out, const WmModule* module, WmMemory* memory, WmResolver resolver,
+                                    void* context);
 WmResult wm_instance_export(const WmInstance* instance, const char* name, uint32_t length, WmExtern* out);
 WmMemory* wm_instance_memory(const WmInstance* instance);
 
@@ -311,6 +322,15 @@ extern const char wm_page_wait[];
 typedef WmResult (*WmSnapshotWrite)(void* context, const void* data, uint32_t size);
 typedef WmResult (*WmSnapshotRead)(void* context, void* data, uint32_t size);
 WmResult wm_snapshot_write(const WmRuntime* runtime, const WmInstance* instance, WmSnapshotWrite write, void* context);
+/*
+ * A state snapshot: all of it but the memory's bytes, which stay in the
+ * memory. It loads only with the same memory, kept apart from the
+ * instance (wm_instance_detach_memory) and given to the new one
+ * (wm_instantiate_with_memory): a program swapped out, its memory left
+ * to the pager.
+ */
+WmResult wm_snapshot_write_state(const WmRuntime* runtime, const WmInstance* instance, WmSnapshotWrite write,
+                                 void* context);
 WmResult wm_snapshot_read(WmRuntime* runtime, WmInstance* instance, WmSnapshotRead read, void* context);
 extern const char wm_snapshot_invalid[];
 

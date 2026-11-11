@@ -75,6 +75,13 @@ programs in a 64-bit build and finishes them in a 32-bit one (emcc), with
 the same result and fuel as a run in one go. The width of references
 matters only to modules that can have them on the value stack.
 
+A state snapshot (`wm_snapshot_write_state`) is all of it but the memory's
+bytes, for a program swapped out with its memory left to the pager: the
+instance gives the memory up (`wm_instance_detach_memory`), everything else
+is freed, and a new instance of the module takes it back
+(`wm_instantiate_with_memory`, no data segments, no start function) before
+the state loads.
+
 ## dylink.0
 
 `source/wm_dylink.c` (optional) loads a position-independent program with

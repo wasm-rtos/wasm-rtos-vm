@@ -221,7 +221,7 @@ WmResult wm_table_init(WmInstance* inst, uint32_t segment, WmTable* table, uint3
     return NULL;
 }
 
-static WmResult initialize(WmInstance* inst)
+static WmResult initialize(WmInstance* inst, int kept_memory)
 {
     const WmModule* m = inst->module;
     for (uint32_t i = 0; i < m->elem_count; ++i)
@@ -249,6 +249,12 @@ static WmResult initialize(WmInstance* inst)
             offset = (uint32_t)value;
             if (wm_out_of_bounds(offset, s->size, WM_MEMORY_SIZE(inst->memory)))
                 return WM_ERR_TRAP("trap: out of bounds memory access");
+            /* A memory kept from before has its bytes already. */
+            if (kept_memory)
+            {
+                inst->data_dropped[i] = 1;
+                continue;
+            }
 #if WM_HAS_MMU
             if (wm_memory_write(inst->memory, offset, s->data, s->size))
                 return WM_ERR_EXHAUSTION("exhaustion: out of memory");
@@ -262,8 +268,9 @@ static WmResult initialize(WmInstance* inst)
     return NULL;
 }
 
-WmResult wm_instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
-                        void* context)
+/* An instance of m; with kept a memory from an earlier instance, which it takes as its own. */
+static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
+                            void* context, WmMemory* kept)
 {
     WmInstance* inst;
     WmResult result;
@@ -329,7 +336,18 @@ WmResult wm_instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime,
             return E_MEMORY;
         }
     }
-    if (m->memory_count > m->memory_imports)
+    if (kept)
+    {
+        if (m->memory_count <= m->memory_imports || kept->page_log2 != m->memory.page_log2 ||
+            !limits_match(kept->pages, kept->max_pages, kept->max_pages != WM_NONE, &m->memory))
+        {
+            wm_instance_free(inst);
+            return E_INCOMPATIBLE;
+        }
+        inst->memory = kept;
+        inst->owns_memory = 1;
+    }
+    else if (m->memory_count > m->memory_imports)
     {
         inst->memory = wm_memory_new_paged(m->memory.min, m->memory.has_max ? m->memory.max : WM_NONE, m->memory.page_log2);
         if (!inst->memory)
@@ -346,12 +364,35 @@ WmResult wm_instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime,
 #endif
     /* From here on effects can be seen through shared imports, so a failure keeps the instance. */
     *out = inst;
-    if ((result = initialize(inst)))
+    if ((result = initialize(inst, kept != NULL)))
         return result;
     /* Without a runtime the start function waits for wm_instance_start, after late linking. */
     if (runtime)
         return wm_instance_start(inst, runtime);
     return NULL;
+}
+
+WmResult wm_instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
+                        void* context)
+{
+    return instantiate(out, m, runtime, resolver, context, NULL);
+}
+
+WmResult wm_instantiate_with_memory(WmInstance** out, const WmModule* m, WmMemory* memory, WmResolver resolver,
+                                    void* context)
+{
+    WmResult result = instantiate(out, m, NULL, resolver, context, memory);
+    /* Not taken: it stays the caller's. */
+    if (!*out || (*out)->memory != memory)
+        return result ? result : E_INCOMPATIBLE;
+    return result;
+}
+
+WmMemory* wm_instance_detach_memory(WmInstance* inst)
+{
+    WmMemory* memory = inst->owns_memory ? inst->memory : NULL;
+    inst->owns_memory = 0;
+    return memory;
 }
 
 WmResult wm_instance_start(WmInstance* inst, WmRuntime* runtime)
