@@ -754,7 +754,7 @@ static WmResult page_fault(WmRuntime* rt)
 {
     WmMemory* memory = rt->saved.func->instance->memory;
     uint8_t size = (uint8_t)(1u << (WM_ROM8(ACCESS + (rt->fault_op - 0x28u)) & 3u));
-    WmResult result = wm_page_fault(rt->tlb, memory, rt->fault_address, rt->fault_offset, size);
+    WmResult result = wm_page_fault(rt->tlb, memory, rt->fault_address, rt->fault_offset, size, rt->fault_op >= 0x36u);
     if (result == wm_page_emulate)
     {
         WmResult trap = NULL;
@@ -892,7 +892,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
  * call anywhere in the handlers costs the whole loop registers.
  */
 #if WM_HAS_MMU
-#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS)                                                 \
+#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, TAG)                                            \
     do                                                                                                         \
     {                                                                                                          \
         if (__builtin_expect(!((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size)), \
@@ -902,7 +902,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         {                                                                                                      \
             uint32_t ea_ = (ADDRESS) + (OFFSET);                                                               \
             const WmTlbEntry* e_ = &rt->tlb->entries[(ea_ >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];          \
-            if (e_->tag == ((ea_ & (0xFFFFF000u | ((SIZE) - 1u))) | ((uint32_t)inst->memory->space << 3)) &&     \
+            if ((TAG) == ((ea_ & (0xFFFFF000u | ((SIZE) - 1u))) | ((uint32_t)inst->memory->space << 3)) &&       \
                 ea_ >= (OFFSET))                                                                               \
                 HOST = e_->frame + (ea_ & (WM_FRAME - 1u));                                                    \
             else                                                                                               \
@@ -919,7 +919,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
             TRAP(T_OOB_MEMORY);                                                                                \
     } while (0)
 #else
-#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS)                                                 \
+#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, TAG)                                            \
     do                                                                                                         \
     {                                                                                                          \
         if ((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size))                   \
@@ -1180,7 +1180,8 @@ f_access:
     uint32_t above = op >= 0x36u ? ((d & 8u) ? 2u : 1u) : 0u;
     uint64_t value = 0;
     uint8_t* host;
-    FAST_ADDR(sp[-1 - (int32_t)above], offset, size, host, op, ip - 1, 2u);
+    /* Loads by the TLB's load tag, stores by its store tag. */
+    FAST_ADDR(sp[-1 - (int32_t)above], offset, size, host, op, ip - 1, 2u, (above ? e_->wtag : e_->tag));
     ++ip;
     if (op >= 0x36u)
     {
@@ -1213,7 +1214,7 @@ f_i32_load:
     uint32_t address = tos;
     uint32_t value;
     uint8_t* host;
-    FAST_ADDR(address, offset, 4u, host, 0x28u, ip - 1, 1u);
+    FAST_ADDR(address, offset, 4u, host, 0x28u, ip - 1, 1u, e_->tag);
     __builtin_memcpy(&value, host, 4);
     sp[-1] = tos = value;
     FAST_NEXT();
@@ -1223,7 +1224,7 @@ f_i32_store:
     uint32_t offset = IMM;
     uint32_t address = sp[-2];
     uint8_t* host;
-    FAST_ADDR(address, offset, 4u, host, 0x36u, ip - 1, 1u);
+    FAST_ADDR(address, offset, 4u, host, 0x36u, ip - 1, 1u, e_->wtag);
     __builtin_memcpy(host, &tos, 4);
     sp -= 2;
     FAST_RELOAD();

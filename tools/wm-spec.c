@@ -396,6 +396,11 @@ static WmResult test_write(void* context, uint32_t* slot, const uint8_t* frame)
 {
     uint32_t i = 0;
     (void)context;
+    if (*slot != 0xFFFFFFFFu)
+    {
+        memcpy(g_slots[*slot], frame, 4096);
+        return NULL;
+    }
     while (i < g_slot_count && g_slots[i])
         ++i;
     if (i == g_slot_count)
@@ -419,8 +424,6 @@ static WmResult test_read(void* context, uint32_t slot, uint8_t* frame)
     (void)context;
     memcpy(frame, g_slots[slot], 4096);
     ++g_back;
-    free(g_slots[slot]);
-    g_slots[slot] = NULL;
     return NULL;
 }
 

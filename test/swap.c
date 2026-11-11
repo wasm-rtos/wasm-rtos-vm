@@ -14,7 +14,7 @@ static int g_failures;
 /* Frames promised to memories, and how many the pager will promise. */
 static int32_t g_reserved, g_reserve_limit = 1 << 30;
 static uint8_t* g_slots[4096];
-static unsigned long g_taken, g_back;
+static unsigned long g_taken, g_back, g_written;
 static uint32_t g_hand;
 
 static void check(int ok, const char* what)
@@ -70,6 +70,12 @@ static WmResult store(void* context, uint32_t* slot, const uint8_t* frame)
 {
     uint32_t i = 0;
     (void)context;
+    ++g_written;
+    if (*slot != 0xFFFFFFFFu)
+    {
+        memcpy(g_slots[*slot], frame, 4096);
+        return NULL;
+    }
     while (i < 4096u && g_slots[i])
         ++i;
     if (i == 4096u || !(g_slots[i] = (uint8_t*)malloc(4096)))
@@ -83,8 +89,6 @@ static WmResult load(void* context, uint32_t slot, uint8_t* frame)
 {
     (void)context;
     memcpy(frame, g_slots[slot], 4096);
-    free(g_slots[slot]);
-    g_slots[slot] = NULL;
     ++g_back;
     return NULL;
 }
@@ -153,6 +157,12 @@ int main(int argc, char** argv)
     check(wm_memory_stored(memory) > 0 && wm_memory_stored(memory) + wm_memory_resident(memory) <= 4 * 65536,
           "the memory is part in RAM, part stored");
     check(call1(rt, inst, "peek", 4 * 65536 - 4, 0, 0) == 0, "an untouched page reads as zeros");
+    {
+        /* Reading only: frames leave RAM clean, so nothing is written but the few dirty at the start. */
+        unsigned long written = g_written, taken = g_taken;
+        call1(rt, inst, "sum", 4, 0, 0);
+        check(g_taken - taken > 30 && g_written - written <= BUDGET, "frames that were only read leave without a write");
+    }
 
     /* A second memory shares the same RAM. */
     check(!wm_instantiate(&other, module, rt, NULL, NULL), "instantiate a second memory");
@@ -186,7 +196,7 @@ int main(int argc, char** argv)
     wm_instance_free(inst);
     check(g_reserved == 0 && wm_pager_resident() == 0 && slots_used() == 0 && !wm_memory_next(NULL),
           "freed memories leave no frames, slots or reservations");
-    printf("  %lu frames taken out, %lu brought back\n", g_taken, g_back);
+    printf("  %lu frames taken out, %lu written, %lu brought back\n", g_taken, g_written, g_back);
     wm_module_free(module);
     wm_runtime_free(rt);
     wm_set_pager(NULL);

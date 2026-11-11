@@ -156,12 +156,17 @@ uint32_t wm_memory_resident(const WmMemory* memory);
  * may take a frame out of RAM into its storage (wm_memory_frame_take), and
  * a touch brings it back. Nothing is promised that cannot be kept: making
  * or growing a memory first reserves its frames with the host, which says
- * yes only for as many as its RAM and storage hold.
+ * yes only for as many as its storage holds.
+ *
+ * A frame keeps its slot from when it is first stored until its memory
+ * goes, so a frame that came back and was not written since (clean, as a
+ * store to it was never let through) leaves RAM without being written
+ * again, and one that was never written leaves as zeros.
  */
 typedef struct WmPager
 {
     void* context;
-    /* Room for frames more (fewer when negative) in RAM and storage: nonzero says yes. */
+    /* Room for frames more (fewer when negative) in storage: nonzero says yes. */
     int (*reserve)(void* context, int32_t frames);
     /*
      * A frame is about to come into RAM: the host takes another out first
@@ -169,10 +174,10 @@ typedef struct WmPager
      * heap had no room for it. 0: it cannot make room.
      */
     int (*room)(void* context, int again);
-    /* Store a frame's bytes, choosing a slot; reading the slot back frees it. */
+    /* Store a frame's bytes: over *slot, or in a slot it chooses when *slot is 0xFFFFFFFF. */
     WmResult (*write)(void* context, uint32_t* slot, const uint8_t* frame);
     WmResult (*read)(void* context, uint32_t slot, uint8_t* frame);
-    /* A stored frame's memory went: its slot is free. */
+    /* The frame with this slot went (its memory was freed): the slot is free. */
     void (*drop)(void* context, uint32_t slot);
 } WmPager;
 /* The pager memories made from now on use; NULL: none, memories stay in RAM. */
@@ -197,7 +202,7 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index);
 WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta);
 /* Frames in RAM across all memories with a pager. */
 uint32_t wm_pager_resident(void);
-/* The bytes of a memory in the pager's storage. */
+/* The bytes of a memory that are only in the pager's storage, not in RAM. */
 uint32_t wm_memory_stored(const WmMemory* memory);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
