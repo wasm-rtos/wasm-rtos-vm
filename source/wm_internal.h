@@ -712,6 +712,8 @@ struct WmRuntime
     uint8_t fuel_on;
     /* A host function asked to stop after it returns (wm_yield). */
     uint8_t yielding;
+    /* A trap a host function asked for (wm_trap), taken when it returns. */
+    WmResult host_trap;
     uint8_t suspended;
     /* Calls in progress: only the outermost one stops for fuel. */
     uint8_t nesting;

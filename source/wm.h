@@ -266,6 +266,14 @@ int wm_is_fuel_enabled(const WmRuntime* runtime);
 
 /* From a host function: stop the program once this call returns, its results still to come. */
 WmResult wm_yield(WmRuntime* runtime);
+/*
+ * From a host function: end the program's call with trap once the host
+ * function returns, whatever it returns (the first trap said counts). For
+ * an error in the program's memory the host met on the program's behalf,
+ * such as a frame its pager could not bring back, which the program would
+ * have trapped on itself. Returns trap.
+ */
+WmResult wm_trap(WmRuntime* runtime, WmResult trap);
 
 /*
  * After a call ends in a trap: the functions it was in, innermost first.

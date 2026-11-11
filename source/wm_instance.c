@@ -580,6 +580,13 @@ WmResult wm_yield(WmRuntime* rt)
     return NULL;
 }
 
+WmResult wm_trap(WmRuntime* rt, WmResult trap)
+{
+    if (!rt->host_trap)
+        rt->host_trap = trap;
+    return trap;
+}
+
 /* After the outermost call ends: results out, stack and frames back as they were. */
 static WmResult finish(WmRuntime* rt, WmFunc* f, uint32_t* base, uint32_t depth, WmResult result, uint32_t* results)
 {
@@ -618,7 +625,10 @@ WmResult wm_call(WmRuntime* rt, WmFunc* f, const uint32_t* args, uint32_t* resul
     if (f->host)
     {
         rt->sp = base + room;
+        rt->host_trap = NULL;
         result = f->host(rt, f->user, base, f->instance ? f->instance->memory : NULL);
+        if (!result)
+            result = rt->host_trap;
         rt->yielding = 0;
     }
     else if (f->code)

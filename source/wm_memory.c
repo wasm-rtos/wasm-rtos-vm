@@ -94,6 +94,8 @@ static void space_renew(WmMemory* memory)
 #define WM_FRAME_OUT ((uint8_t*)(uintptr_t)1u)
 
 static const WmPager* g_pager;
+/* Why the last frame could not come into RAM: no heap for it, or what the pager said. */
+static WmResult g_frame_error;
 /* Memories with a pager, and their frames in RAM. */
 static WmMemory* g_swapped;
 static uint32_t g_resident;
@@ -157,7 +159,7 @@ static int finish_loading(WmMemory* memory, uint32_t index)
     if (!memory->marks || !(memory->marks[index] & WM_MARK_LOADING))
         return 1;
     memory->marks[index] &= (uint16_t)~WM_MARK_LOADING;
-    if (!memory->pager->finish(memory->pager->context, memory->slots[index]))
+    if (!(g_frame_error = memory->pager->finish(memory->pager->context, memory->slots[index])))
         return 1;
     wm_free(memory->frames[index]);
     memory->frames[index] = WM_FRAME_OUT;
@@ -211,9 +213,13 @@ uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
         /* Untouched, or in the pager's storage: into RAM now. */
         uint8_t* made = new_frame(memory->pager);
         if (!made)
+        {
+            g_frame_error = E_MEMORY;
             return NULL;
+        }
         /* Back from storage, its slot keeps a copy: clean until written. */
-        if (frame_out(memory->frames[index]) && memory->pager->read(memory->pager->context, memory->slots[index], made))
+        if (frame_out(memory->frames[index]) &&
+            (g_frame_error = memory->pager->read(memory->pager->context, memory->slots[index], made)))
         {
             wm_free(made);
             --g_resident;
@@ -594,7 +600,7 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
         return wm_page_emulate;
     frame = wm_memory_frame(memory, ea >> WM_FRAME_LOG2, write);
     if (!frame)
-        return E_MEMORY;
+        return g_frame_error ? g_frame_error : E_MEMORY;
     e = &tlb->entries[(ea >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];
     e->tag = (ea & 0xFFFFF000u) | ((uint32_t)memory->space << 3);
     /* Stores go through once the frame is dirty (or nothing stores it). */
@@ -678,12 +684,13 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
         if (delta > 0)
         {
             /* A host with a pointer may write: the frame counts as dirty. */
-            if ((memory->marks[i] & WM_MARK_PINS) == WM_MARK_PINS || !wm_memory_frame(memory, i, 1))
+            int full = (memory->marks[i] & WM_MARK_PINS) == WM_MARK_PINS;
+            if (full || !wm_memory_frame(memory, i, 1))
             {
                 /* Unpin what this call pinned. */
                 while (i-- > address >> WM_FRAME_LOG2)
                     --memory->marks[i];
-                return E_MEMORY;
+                return full || !g_frame_error ? E_MEMORY : g_frame_error;
             }
             ++memory->marks[i];
         }
@@ -737,7 +744,7 @@ WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, 
         {
             uint8_t* frame = wm_memory_frame(memory, first, 1);
             if (!frame)
-                return E_MEMORY;
+                return g_frame_error ? g_frame_error : E_MEMORY;
             *out = frame + (address & (WM_FRAME - 1u));
         }
         else if (memory->block && last < memory->block_frames)
@@ -764,7 +771,7 @@ WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uin
         uint32_t n = WM_FRAME - at < length ? WM_FRAME - at : length;
         const uint8_t* frame = frame_to_read(memory, address >> WM_FRAME_LOG2);
         if (!frame)
-            return E_MEMORY;
+            return g_frame_error ? g_frame_error : E_MEMORY;
         memcpy(to, frame + at, n);
         to += n, address += n, length -= n;
     }
@@ -789,7 +796,7 @@ WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, u
         uint32_t n = WM_FRAME - at < length ? WM_FRAME - at : length;
         uint8_t* frame = wm_memory_frame(memory, address >> WM_FRAME_LOG2, 1);
         if (!frame)
-            return E_MEMORY;
+            return g_frame_error ? g_frame_error : E_MEMORY;
         memcpy(frame + at, from, n);
         from += n, address += n, length -= n;
     }
@@ -817,7 +824,7 @@ WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint3
         {
             uint8_t* frame = wm_memory_frame(memory, index, 1);
             if (!frame)
-                return E_MEMORY;
+                return g_frame_error ? g_frame_error : E_MEMORY;
             memset(frame + at, value, n);
         }
         address += n, length -= n;
