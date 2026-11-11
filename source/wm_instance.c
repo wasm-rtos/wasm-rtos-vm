@@ -249,8 +249,13 @@ static WmResult initialize(WmInstance* inst)
             offset = (uint32_t)value;
             if (wm_out_of_bounds(offset, s->size, WM_MEMORY_SIZE(inst->memory)))
                 return WM_ERR_TRAP("trap: out of bounds memory access");
+#if WM_HAS_MMU
+            if (wm_memory_write(inst->memory, offset, s->data, s->size))
+                return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+#else
             for (uint32_t k = 0; k < s->size; ++k)
                 inst->memory->data[offset + k] = WM_RD8(s->data + k);
+#endif
             inst->data_dropped[i] = 1;
         }
     }
@@ -475,39 +480,6 @@ void wm_table_free(WmTable* t)
     wm_free(t);
 }
 
-WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages) { return wm_memory_new_paged(pages, max_pages, 16); }
-
-WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_log2)
-{
-    WmMemory* mem = (WmMemory*)wm_calloc(1, sizeof(WmMemory));
-    if (!mem)
-        return NULL;
-    mem->pages = pages;
-    mem->max_pages = max_pages;
-    mem->page_log2 = page_log2;
-    mem->data = (uint8_t*)wm_calloc((size_t)((wm_size)pages << page_log2) + 1u, 1);
-    if (!mem->data)
-    {
-        wm_free(mem);
-        return NULL;
-    }
-    return mem;
-}
-
-void wm_memory_free(WmMemory* mem)
-{
-    if (mem)
-        wm_free(mem->data);
-    wm_free(mem);
-}
-
-uint8_t* wm_memory_data(const WmMemory* mem, uint32_t* size)
-{
-    if (size)
-        *size = (uint32_t)WM_MEMORY_SIZE(mem);
-    return mem->data;
-}
-
 #if WM_HAS_ALLOCATOR
 static WmAllocator allocator;
 
@@ -550,6 +522,9 @@ WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames)
     uint32_t slots = stack_bytes / 4u;
     if (!rt)
         return NULL;
+#if WM_HAS_MMU
+    rt->tlb = &wm_tlb_default;
+#endif
     /* One slot below the stack: the fast loop reads the top of an empty stack there. */
     rt->stack = (uint32_t*)wm_calloc(slots + 2u, sizeof(uint32_t));
     if (rt->stack)

@@ -37,4 +37,9 @@ cc -std=gnu99 -O2 -DWM_PREDECODE=0 source/*.c tools/wm-snapshot.c -lm -o build/w
 other=(build/wm-snapshot-inplace)
 check test/fuel.wasm fib 25 333333
 check build/sort.wasm run 20 4567890
+# Between a memory in one block and a paged one.
+cc -std=gnu99 -O2 -DWM_MEMORY_ALWAYS_PAGED=1 source/*.c tools/wm-snapshot.c -lm -o build/wm-snapshot-paged || exit 1
+other=(build/wm-snapshot-paged)
+check test/fuel.wasm fib 25 555555
+check build/sort.wasm run 20 3456789
 exit $fail

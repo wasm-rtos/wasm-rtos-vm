@@ -24,6 +24,15 @@ for fuse in 0 1; do
     cc -std=gnu99 -O1 -g -DWM_FUSE=$fuse -fsanitize=address,undefined source/*.c test/fuel.c -lm -o build/fuel || exit 1
     build/fuel >/dev/null && echo "fuel (fuse $fuse): ok" || { echo "fuel (fuse $fuse): FAIL"; fail=1; }
 done
+cc -std=gnu99 -O1 -g -DWM_MEMORY_ALWAYS_PAGED=1 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-paged || exit 1
+python3 tools/spec.py build/wm-spec-paged "$SPEC" >/dev/null && echo "spec (paged):  ok" || { echo "spec (paged):  FAIL"; fail=1; }
+cc -std=gnu99 -O1 -DWM_MEMORY_ALWAYS_PAGED=1 -fsanitize=address,undefined source/*.c test/fuel.c -lm -o build/fuel || exit 1
+build/fuel >/dev/null && echo "fuel (paged):  ok" || { echo "fuel (paged):  FAIL"; fail=1; }
+for mode in "" "-DWM_PREDECODE=0"; do
+    cc -std=gnu99 -O1 -g $mode -fsanitize=address,undefined source/*.c test/paged.c -lm -o build/paged || exit 1
+    build/paged >/dev/null && echo "paged memory:  ok ${mode:-(predecoded)}" || { echo "paged memory:  FAIL $mode"; fail=1; }
+done
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 echo "kernel tests:  $(tools/kernel-tests.sh | tail -1)"
+echo "kernel tests (paged): $(CFLAGS=-DWM_MEMORY_ALWAYS_PAGED=1 tools/kernel-tests.sh | tail -1)"
 exit $fail

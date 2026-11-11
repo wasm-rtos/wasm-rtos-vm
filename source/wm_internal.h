@@ -284,6 +284,22 @@ typedef struct WmSide
  * positions stay those of the module's own instructions. It needs labels
  * as values, and RAM: off on AVR.
  */
+/*
+ * Paged memory (WM_HAS_MMU, off on AVR): a memory the heap has no block
+ * for is paged instead, in 4 KiB frames, all made when it is made or grows.
+ * WM_MEMORY_ALWAYS_PAGED pages every memory, for tests.
+ */
+#ifndef WM_HAS_MMU
+#ifdef __AVR__
+#define WM_HAS_MMU 0
+#else
+#define WM_HAS_MMU 1
+#endif
+#endif
+#ifndef WM_MEMORY_ALWAYS_PAGED
+#define WM_MEMORY_ALWAYS_PAGED 0
+#endif
+
 #ifndef WM_PREDECODE
 #if WM_COMPUTED_GOTO && !defined(__AVR__)
 #define WM_PREDECODE 1
@@ -550,11 +566,69 @@ struct WmTable
 
 struct WmMemory
 {
+    /* The memory in one block; NULL when it is paged. */
     uint8_t* data;
     uint32_t pages;
     uint32_t max_pages;
     uint8_t page_log2;
+#if WM_HAS_MMU
+    /* Its address space number in TLB keys, 1..511; 0 when none was free (never cached). */
+    uint16_t space;
+    /* Paged: a 4 KiB frame per slot (a NULL slot is made when touched). */
+    uint8_t** frames;
+    uint32_t frame_count;
+    /* A former one-block memory: its first block_frames frames are in it. */
+    uint8_t* block;
+    uint32_t block_frames;
+#endif
 };
+
+#if WM_HAS_MMU
+#define WM_FRAME_LOG2 12u
+#define WM_FRAME (1u << WM_FRAME_LOG2)
+
+/*
+ * A TLB, as a CPU core has one: frames of paged memories, each entry tagged
+ * with its memory's address space number in key bits 3..11, which no
+ * frame address sets. A runtime uses one; by default all share
+ * wm_tlb_default, and a host that runs programs on several threads gives
+ * each its own (wm_tlb_init).
+ */
+#ifndef WM_TLB_ENTRIES
+#define WM_TLB_ENTRIES 16u
+#endif
+#define WM_TLB_EMPTY 0x800u
+
+typedef struct WmTlbEntry
+{
+    uint32_t tag;
+    uint8_t* frame;
+} WmTlbEntry;
+
+typedef struct WmTlb
+{
+    WmTlbEntry entries[WM_TLB_ENTRIES];
+    struct WmTlb* next;
+} WmTlb;
+
+extern WmTlb wm_tlb_default;
+void wm_tlb_init(WmTlb* tlb);
+/* A frame of a memory, made (zeroed) if it was untouched; NULL without memory or past the end. */
+uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index);
+/*
+ * A TLB miss on a paged memory: the frame of the access made and put in the
+ * TLB (NULL: run it again), wm_page_emulate when the TLB cannot hold it
+ * (unaligned, across frames, no address space number), or a trap.
+ */
+WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t offset, uint32_t size);
+extern const char wm_page_emulate[];
+/* One byte of a memory, reading an untouched frame as zero. */
+uint8_t wm_memory_byte(const WmMemory* memory, uint32_t address);
+#endif
+
+/* memory.fill and memory.copy, one block or paged. */
+WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint32_t length);
+WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t length);
 
 /* A memory's size in bytes. */
 #define WM_MEMORY_SIZE(mem) ((wm_size)(mem)->pages << (mem)->page_log2)
@@ -599,6 +673,14 @@ typedef struct WmSuspended
 struct WmRuntime
 {
     uint32_t* stack;
+#if WM_HAS_MMU
+    struct WmTlb* tlb;
+    /* A TLB miss the fast loop stopped for: the access of the record it stopped at. */
+    uint32_t fault_address;
+    uint32_t fault_offset;
+    uint32_t fault_cells;
+    uint8_t fault_op;
+#endif
     uint32_t* stack_end;
     uint32_t* sp;
     WmFrame* frames;
