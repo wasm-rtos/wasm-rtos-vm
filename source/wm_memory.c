@@ -83,7 +83,9 @@ static void space_renew(WmMemory* memory)
 
 #define WM_MARK_TOUCHED 0x80u
 #define WM_MARK_DIRTY 0x40u
-#define WM_MARK_PINS 0x3Fu
+/* Being read in the background: in RAM, but not to be used before it ends. */
+#define WM_MARK_LOADING 0x20u
+#define WM_MARK_PINS 0x1Fu
 /* A frame slot whose frame is in the pager's storage. */
 #define WM_FRAME_OUT ((uint8_t*)(uintptr_t)1u)
 
@@ -142,12 +144,32 @@ static uint8_t* new_frame(const WmPager* pager)
     return frame;
 }
 
+/*
+ * A frame still being read in the background is needed now: wait for the
+ * read to end. 0 when it failed, and then the frame is back in storage.
+ */
+static int finish_loading(WmMemory* memory, uint32_t index)
+{
+    if (!memory->marks || !(memory->marks[index] & WM_MARK_LOADING))
+        return 1;
+    memory->marks[index] &= (uint8_t)~WM_MARK_LOADING;
+    if (!memory->pager->finish(memory->pager->context, memory->slots[index]))
+        return 1;
+    wm_free(memory->frames[index]);
+    memory->frames[index] = WM_FRAME_OUT;
+    --g_resident;
+    return 0;
+}
+
 /* A frame of a memory leaves it: freed, or its slot let go. */
 static void free_frame(WmMemory* memory, uint32_t index)
 {
-    uint8_t* frame = memory->frames[index];
+    uint8_t* frame;
     if (frame_in_block(memory, index))
         return;
+    /* No read may go on into a frame that is freed. */
+    (void)finish_loading(memory, index);
+    frame = memory->frames[index];
     if (memory->slots && memory->slots[index] != WM_NONE)
     {
         memory->pager->drop(memory->pager->context, memory->slots[index]);
@@ -168,6 +190,8 @@ uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
     if (memory->data)
         return memory->data + ((wm_size)index << WM_FRAME_LOG2);
     if (index >= memory->frame_count)
+        return NULL;
+    if (!finish_loading(memory, index))
         return NULL;
     frame = memory->frames[index];
     if (!frame_here(frame))
@@ -474,6 +498,46 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
 
 /* ---- Page faults ---- */
 
+/*
+ * A program touched a frame in storage: the pager may read it in the
+ * background (wm_page_wait, the program waits) or has read it already.
+ */
+static WmResult start_loading(WmMemory* memory, uint32_t index)
+{
+    uint8_t* made;
+    WmResult result;
+    if (memory->marks[index] & WM_MARK_LOADING)
+        return wm_page_wait;
+    if (!frame_out(memory->frames[index]) || !memory->pager->read_start)
+        return NULL;
+    if (!(made = new_frame(memory->pager)))
+        return E_MEMORY;
+    result = memory->pager->read_start(memory->pager->context, memory->slots[index], made, memory, index);
+    if (result && result != wm_page_wait)
+    {
+        wm_free(made);
+        --g_resident;
+        return result;
+    }
+    memory->frames[index] = made;
+    if (result)
+        memory->marks[index] |= WM_MARK_LOADING;
+    return result;
+}
+
+void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result)
+{
+    if (!memory->marks || index >= memory->frame_count || !(memory->marks[index] & WM_MARK_LOADING))
+        return;
+    memory->marks[index] &= (uint8_t)~WM_MARK_LOADING;
+    if (result)
+    {
+        wm_free(memory->frames[index]);
+        memory->frames[index] = WM_FRAME_OUT;
+        --g_resident;
+    }
+}
+
 const char wm_page_emulate[] = "emulate the access";
 
 WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t offset, uint32_t size, int write)
@@ -485,6 +549,17 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
     if (end > WM_MEMORY_SIZE(memory))
         return E_OOB;
     /* A TLB entry holds aligned accesses within one frame of a memory with a number. */
+    /* Frames of the access in storage come back in the background, also for one made through the memory functions. */
+    if (memory->marks)
+    {
+        WmResult first = start_loading(memory, ea >> WM_FRAME_LOG2);
+        WmResult last = (uint32_t)(end - 1u) >> WM_FRAME_LOG2 != ea >> WM_FRAME_LOG2
+            ? start_loading(memory, (uint32_t)(end - 1u) >> WM_FRAME_LOG2) : NULL;
+        if (first && first != wm_page_wait)
+            return first;
+        if (first || last)
+            return last && last != wm_page_wait ? last : wm_page_wait;
+    }
     if (!memory->space || (ea & (size - 1u)) || (ea & (WM_FRAME - 1u)) + size > WM_FRAME)
         return wm_page_emulate;
     frame = wm_memory_frame(memory, ea >> WM_FRAME_LOG2, write);
@@ -516,7 +591,7 @@ int wm_memory_frame_look(WmMemory* memory, uint32_t index)
 {
     int touched;
     if (!memory->pager || index >= memory->frame_count || !frame_here(memory->frames[index]) ||
-        frame_in_block(memory, index) || (memory->marks[index] & WM_MARK_PINS))
+        frame_in_block(memory, index) || (memory->marks[index] & (WM_MARK_PINS | WM_MARK_LOADING)))
         return -1;
     touched = (memory->marks[index] & WM_MARK_TOUCHED) != 0;
     /* The next touch must miss the TLB to mark the frame again. */
@@ -578,6 +653,7 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
 
 void wm_set_pager(const WmPager* pager) { (void)pager; }
 uint32_t wm_pager_resident(void) { return 0; }
+void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result) { (void)memory, (void)index, (void)result; }
 WmMemory* wm_memory_next(WmMemory* after) { (void)after; return NULL; }
 uint32_t wm_memory_frames(const WmMemory* memory) { (void)memory; return 0; }
 uint32_t wm_memory_stored(const WmMemory* memory) { (void)memory; return 0; }

@@ -8,6 +8,12 @@ mkdir -p build
 fail=0
 cc -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec || exit 1
 echo "spec:          $(python3 tools/spec.py build/wm-spec "$SPEC" | tail -1)" ; python3 tools/spec.py build/wm-spec "$SPEC" >/dev/null || fail=1
+# UBSan makes the interpreter too large to predecode, so the runs above go
+# through the code in place; these, with ASan only, run the predecoded loop.
+cc -std=gnu99 -O1 -g -fsanitize=address source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast || exit 1
+python3 tools/spec.py build/wm-spec-fast "$SPEC" >/dev/null && echo "spec (predecoded): ok" || { echo "spec (predecoded): FAIL"; fail=1; }
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_PAGER=3 source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast-swap || exit 1
+python3 tools/spec.py build/wm-spec-fast-swap "$SPEC" >/dev/null 2>&1 && echo "spec (predecoded, swapped): ok" || { echo "spec (predecoded, swapped): FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -DWM_SMALL_SIZES -DWM_TERSE_ERRORS=1 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-small || exit 1
 python3 tools/spec.py build/wm-spec-small "$SPEC" >/dev/null && echo "spec (small):  ok" || { echo "spec (small):  FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -DWM_COMPUTED_GOTO=0 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-switch || exit 1
@@ -29,14 +35,16 @@ python3 tools/spec.py build/wm-spec-paged "$SPEC" >/dev/null && echo "spec (page
 cc -std=gnu99 -O1 -DWM_MEMORY_ALWAYS_PAGED=1 -fsanitize=address,undefined source/*.c test/fuel.c -lm -o build/fuel || exit 1
 build/fuel >/dev/null && echo "fuel (paged):  ok" || { echo "fuel (paged):  FAIL"; fail=1; }
 for mode in "" "-DWM_PREDECODE=0"; do
-    cc -std=gnu99 -O1 -g $mode -fsanitize=address,undefined source/*.c test/paged.c -lm -o build/paged || exit 1
+    # Predecoded needs ASan alone (see above); in place keeps UBSan too.
+    san="-fsanitize=address${mode:+,undefined}"
+    cc -std=gnu99 -O1 -g $mode $san source/*.c test/paged.c -lm -o build/paged || exit 1
     build/paged >/dev/null && echo "paged memory:  ok ${mode:-(predecoded)}" || { echo "paged memory:  FAIL $mode"; fail=1; }
 done
 cc -std=gnu99 -O1 -g -DWM_SPEC_PAGER=3 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-swap || exit 1
 python3 tools/spec.py build/wm-spec-swap "$SPEC" >/dev/null 2>&1 && echo "spec (swapped, 3 frames of RAM): ok" || { echo "spec (swapped): FAIL"; fail=1; }
-for mode in "" "-DWM_PREDECODE=0"; do
-    cc -std=gnu99 -O1 -g $mode -fsanitize=address,undefined source/*.c test/swap.c -lm -o build/swap || exit 1
-    build/swap >/dev/null && echo "swapping:      ok ${mode:-(predecoded)}" || { echo "swapping:      FAIL $mode"; fail=1; }
+for mode in "-fsanitize=address" "-fsanitize=address,undefined"; do
+    cc -std=gnu99 -O1 -g $mode source/*.c test/swap.c -lm -o build/swap || exit 1
+    build/swap >/dev/null && echo "swapping:      ok ($mode)" || { echo "swapping:      FAIL $mode"; fail=1; }
 done
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 echo "kernel tests:  $(tools/kernel-tests.sh | tail -1)"

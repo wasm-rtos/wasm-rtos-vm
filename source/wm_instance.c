@@ -560,6 +560,7 @@ uint8_t* wm_runtime_stack(const WmRuntime* rt, uint32_t* bytes)
 
 const char wm_fuel_exhausted[] = "fuel exhausted";
 const char wm_yielded[] = "yielded";
+const char wm_page_wait[] = "waiting for a page";
 
 void wm_set_fuel(WmRuntime* rt, uint32_t fuel)
 {
@@ -583,7 +584,7 @@ WmResult wm_yield(WmRuntime* rt)
 static WmResult finish(WmRuntime* rt, WmFunc* f, uint32_t* base, uint32_t depth, WmResult result, uint32_t* results)
 {
     --rt->nesting;
-    if (result == wm_fuel_exhausted || result == wm_yielded)
+    if (result == wm_fuel_exhausted || result == wm_yielded || result == wm_page_wait)
     {
         rt->saved.entry = f;
         rt->saved.base = base;

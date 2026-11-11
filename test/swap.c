@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../source/wm.h"
+#include "../source/wm_internal.h"
 
 #define BUDGET 3u
 
@@ -100,7 +101,75 @@ static void drop(void* context, uint32_t slot)
     g_slots[slot] = NULL;
 }
 
-static const WmPager g_pager = {NULL, reserve, room, store, load, drop};
+/*
+ * Reading in the background: read_start only notes the read, and the test
+ * ends it later (as storage would, with DMA or another thread).
+ */
+static struct
+{
+    int on;
+    uint32_t slot;
+    uint8_t* frame;
+    WmMemory* memory;
+    uint32_t index;
+} g_loading;
+static unsigned long g_waits;
+
+static WmResult read_start(void* context, uint32_t slot, uint8_t* frame, WmMemory* memory, uint32_t index)
+{
+    (void)context;
+    if (g_loading.on)
+        return "trap: two reads at once";
+    g_loading.on = 1;
+    g_loading.slot = slot;
+    g_loading.frame = frame;
+    g_loading.memory = memory;
+    g_loading.index = index;
+    return wm_page_wait;
+}
+
+/* The read in flight ends: its bytes arrive. */
+static void end_read(void)
+{
+    memcpy(g_loading.frame, g_slots[g_loading.slot], 4096);
+    ++g_back;
+    g_loading.on = 0;
+}
+
+static WmResult finish(void* context, uint32_t slot)
+{
+    (void)context;
+    if (!g_loading.on || g_loading.slot != slot)
+        return "trap: no such read";
+    end_read();
+    return NULL;
+}
+
+static WmPager g_pager = {NULL, reserve, room, store, load, drop, NULL, NULL};
+
+/* A call that waits for frames: each time, the read ends and the call goes on. */
+static uint32_t call_waiting(WmRuntime* rt, WmInstance* inst, const char* name, uint32_t a)
+{
+    WmExtern f;
+    uint32_t args[3] = {a, 0, 0};
+    uint32_t result = 0xDEADBEEFu;
+    WmResult r;
+    if (wm_instance_export(inst, name, (uint32_t)strlen(name), &f))
+        return 0xDEADBEEFu;
+    for (r = wm_call(rt, f.as.func, args, &result); r == wm_page_wait; r = wm_resume(rt, &result))
+    {
+        WmMemory* memory = g_loading.memory;
+        uint32_t index = g_loading.index;
+        ++g_waits;
+        if (!g_loading.on)
+            return 0xDEADBEEFu;
+        end_read();
+        wm_memory_frame_loaded(memory, index, NULL);
+    }
+    if (r)
+        printf("  %s: %s\n", name, r);
+    return result;
+}
 
 static uint32_t slots_used(void)
 {
@@ -190,6 +259,40 @@ int main(int argc, char** argv)
     check(call1(rt, inst, "grow", 1, 0, 0) == 0xFFFFFFFFu, "memory.grow fails when the pager reserves no more");
     g_reserve_limit = 1 << 30;
     check(call1(rt, inst, "sum", 4, 0, 0) != 0xDEADBEEFu, "the memory still works");
+
+    /*
+     * Frames read in the background: the call waits for each and goes on.
+     * Only the predecoded loop waits; code run in place (also when a build
+     * is too large to predecode, as with UBSan) reads frames at once.
+     */
+#if WM_PREDECODE
+    if (module->codes[0].fast)
+    {
+        WmExtern f;
+        uint32_t expected = call1(rt, inst, "sum", 4, 0, 0);
+        unsigned long back = g_back;
+        uint32_t args[3] = {4 * 65536 - 8, 0, 0};
+        uint32_t result = 0;
+        uint32_t direct = 0;
+        g_pager.read_start = read_start;
+        g_pager.finish = finish;
+        check(call_waiting(rt, inst, "sum", 4) == expected && g_waits > 30 && g_back - back > 30,
+              "a call that waits for frames read in the background gets the same sum");
+        /* The host needs a frame still being read: it waits for that read. */
+        call_waiting(rt, inst, "sum", 1); /* the end of the memory goes to storage */
+        wm_instance_export(inst, "peek", 4, &f);
+        check(wm_call(rt, f.as.func, args, &result) == wm_page_wait && g_loading.on,
+              "a touch of a stored frame starts a read and waits");
+        check(!wm_memory_read(memory, 4 * 65536 - 8, &direct, 4) && !g_loading.on,
+              "a host read of that frame finishes the read first");
+        check(wm_resume(rt, &result) == NULL && result == direct, "the waiting call then goes on and reads the same");
+        check(!g_loading.on, "no read is left in flight");
+        g_pager.read_start = NULL;
+        g_pager.finish = NULL;
+    }
+    else
+        printf("  (not predecoded: no background reads)\n");
+#endif
 
     /* Freeing a memory lets its RAM, slots and reservation go. */
     wm_instance_free(other);
