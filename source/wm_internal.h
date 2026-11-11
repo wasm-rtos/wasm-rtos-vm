@@ -580,6 +580,15 @@ struct WmMemory
     /* A former one-block memory: its first block_frames frames are in it. */
     uint8_t* block;
     uint32_t block_frames;
+    /*
+     * Swapped by a pager: frames are made when touched, and a frame the host
+     * took out holds its slot as (slot << 1) | 1. marks has a byte per
+     * frame: WM_MARK_TOUCHED and a pin count below it. next links the
+     * memories with a pager.
+     */
+    const struct WmPager* pager;
+    uint8_t* marks;
+    struct WmMemory* next;
 #endif
 };
 

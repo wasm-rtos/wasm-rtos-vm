@@ -339,9 +339,108 @@ static void command(char* line)
         printf("error unknown command\n");
 }
 
+
+#ifdef WM_SPEC_PAGER
+/*
+ * -DWM_SPEC_PAGER=n: every memory swapped, with only n frames in RAM, so
+ * frames go to storage (here, the heap) and come back all the time.
+ */
+static uint8_t** g_slots;
+static uint32_t g_slot_count;
+static uint32_t g_hand;
+/* Frames taken out and brought back: stderr shows them at the end. */
+static unsigned long g_taken, g_back;
+static void show_paging(void) { fprintf(stderr, "paging: %lu frames taken out, %lu brought back\n", g_taken, g_back); }
+
+static int test_reserve(void* context, int32_t frames)
+{
+    (void)context, (void)frames;
+    return 1;
+}
+
+/* CLOCK over every frame of every memory: the first one not touched since the hand last passed. */
+static int take_one(void)
+{
+    uint32_t total = 0;
+    for (WmMemory* m = wm_memory_next(NULL); m; m = wm_memory_next(m))
+        total += wm_memory_frames(m);
+    for (uint32_t step = 0; total && step < 3u * total; ++step)
+    {
+        uint32_t at = g_hand++ % total;
+        for (WmMemory* m = wm_memory_next(NULL); m; m = wm_memory_next(m))
+        {
+            if (at < wm_memory_frames(m))
+            {
+                if (wm_memory_frame_look(m, at) == 0)
+                    return wm_memory_frame_take(m, at) == NULL && ++g_taken;
+                break;
+            }
+            at -= wm_memory_frames(m);
+        }
+    }
+    return 0;
+}
+
+static int test_room(void* context, int again)
+{
+    (void)context;
+    if (again)
+        return take_one();
+    while (wm_pager_resident() >= (uint32_t)(WM_SPEC_PAGER))
+        if (!take_one())
+            return 1; /* all pinned or in use: let it grow past the budget */
+    return 1;
+}
+
+static WmResult test_write(void* context, uint32_t* slot, const uint8_t* frame)
+{
+    uint32_t i = 0;
+    (void)context;
+    while (i < g_slot_count && g_slots[i])
+        ++i;
+    if (i == g_slot_count)
+    {
+        uint8_t** slots = (uint8_t**)realloc(g_slots, (g_slot_count * 2u + 8u) * sizeof(uint8_t*));
+        if (!slots)
+            return "exhaustion: no storage";
+        memset(slots + g_slot_count, 0, (g_slot_count + 8u) * sizeof(uint8_t*));
+        g_slots = slots;
+        g_slot_count = g_slot_count * 2u + 8u;
+    }
+    if (!(g_slots[i] = (uint8_t*)malloc(4096)))
+        return "exhaustion: no storage";
+    memcpy(g_slots[i], frame, 4096);
+    *slot = i;
+    return NULL;
+}
+
+static WmResult test_read(void* context, uint32_t slot, uint8_t* frame)
+{
+    (void)context;
+    memcpy(frame, g_slots[slot], 4096);
+    ++g_back;
+    free(g_slots[slot]);
+    g_slots[slot] = NULL;
+    return NULL;
+}
+
+static void test_drop(void* context, uint32_t slot)
+{
+    (void)context;
+    free(g_slots[slot]);
+    g_slots[slot] = NULL;
+}
+
+static const WmPager g_test_pager = {NULL, test_reserve, test_room, test_write, test_read, test_drop};
+#endif
+
 int main(void)
 {
     static char line[1 << 20];
+#ifdef WM_SPEC_PAGER
+    wm_set_pager(&g_test_pager);
+    atexit(show_paging);
+#endif
     g_runtime = wm_runtime_new(64u * 1024u, 1000u);
     make_spectest();
     setvbuf(stdout, NULL, _IOLBF, 0);
