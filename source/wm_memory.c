@@ -81,11 +81,15 @@ static void space_renew(WmMemory* memory)
 
 /* ---- Pager ---- */
 
-#define WM_MARK_TOUCHED 0x80u
-#define WM_MARK_DIRTY 0x40u
+#define WM_MARK_TOUCHED 0x8000u
+#define WM_MARK_DIRTY 0x4000u
 /* Being read in the background: in RAM, but not to be used before it ends. */
-#define WM_MARK_LOADING 0x20u
-#define WM_MARK_PINS 0x1Fu
+#define WM_MARK_LOADING 0x2000u
+/* A write of it in the background, until the host says it ended: it may not start another. */
+#define WM_MARK_WRITING 0x1000u
+/* On its way out with that write: its RAM goes when the write ends, unless it is touched first. */
+#define WM_MARK_LEAVING 0x0800u
+#define WM_MARK_PINS 0x07FFu
 /* A frame slot whose frame is in the pager's storage. */
 #define WM_FRAME_OUT ((uint8_t*)(uintptr_t)1u)
 
@@ -152,7 +156,7 @@ static int finish_loading(WmMemory* memory, uint32_t index)
 {
     if (!memory->marks || !(memory->marks[index] & WM_MARK_LOADING))
         return 1;
-    memory->marks[index] &= (uint8_t)~WM_MARK_LOADING;
+    memory->marks[index] &= (uint16_t)~WM_MARK_LOADING;
     if (!memory->pager->finish(memory->pager->context, memory->slots[index]))
         return 1;
     wm_free(memory->frames[index]);
@@ -167,8 +171,13 @@ static void free_frame(WmMemory* memory, uint32_t index)
     uint8_t* frame;
     if (frame_in_block(memory, index))
         return;
-    /* No read may go on into a frame that is freed. */
+    /* No read or write may go on with a frame that is freed. */
     (void)finish_loading(memory, index);
+    if (memory->marks && (memory->marks[index] & WM_MARK_WRITING))
+    {
+        memory->marks[index] &= (uint16_t)~(WM_MARK_WRITING | WM_MARK_LEAVING);
+        (void)memory->pager->finish(memory->pager->context, memory->slots[index]);
+    }
     frame = memory->frames[index];
     if (memory->slots && memory->slots[index] != WM_NONE)
     {
@@ -193,6 +202,9 @@ uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
         return NULL;
     if (!finish_loading(memory, index))
         return NULL;
+    /* On its way out but touched: it stays, and counts as dirty, its copy may not hold. */
+    if (memory->marks && (memory->marks[index] & WM_MARK_LEAVING))
+        memory->marks[index] = (uint16_t)((memory->marks[index] & ~WM_MARK_LEAVING) | WM_MARK_DIRTY);
     frame = memory->frames[index];
     if (!frame_here(frame))
     {
@@ -210,7 +222,7 @@ uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
         memory->frames[index] = frame = made;
     }
     if (memory->marks)
-        memory->marks[index] |= (uint8_t)(WM_MARK_TOUCHED | (write ? WM_MARK_DIRTY : 0u));
+        memory->marks[index] |= (uint16_t)(WM_MARK_TOUCHED | (write ? WM_MARK_DIRTY : 0u));
     return frame;
 }
 
@@ -266,7 +278,7 @@ static int take_pager(WmMemory* memory)
     uint32_t reserved = memory->frame_count - memory->block_frames;
     if (!g_pager)
         return 1;
-    memory->marks = (uint8_t*)wm_calloc(memory->frame_count + 1u, 1);
+    memory->marks = (uint16_t*)wm_calloc(memory->frame_count + 1u, sizeof(uint16_t));
     memory->slots = (uint32_t*)wm_malloc(((size_t)memory->frame_count + 1u) * sizeof(uint32_t));
     if (!memory->marks || !memory->slots || !g_pager->reserve(g_pager->context, (int32_t)reserved))
     {
@@ -336,10 +348,10 @@ static int grow_frames(WmMemory* memory, uint32_t frame_count)
     memory->frames = frames;
     if (memory->marks)
     {
-        uint8_t* marks = (uint8_t*)wm_realloc(memory->marks, (size_t)frame_count + 1u);
+        uint16_t* marks = (uint16_t*)wm_realloc(memory->marks, ((size_t)frame_count + 1u) * sizeof(uint16_t));
         if (!marks)
             return 0;
-        memset(marks + memory->frame_count, 0, (size_t)(frame_count - memory->frame_count));
+        memset(marks + memory->frame_count, 0, (size_t)(frame_count - memory->frame_count) * sizeof(uint16_t));
         memory->marks = marks;
     }
     if (memory->slots)
@@ -525,11 +537,29 @@ static WmResult start_loading(WmMemory* memory, uint32_t index)
     return result;
 }
 
+void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result)
+{
+    uint16_t marks;
+    if (!memory->marks || index >= memory->frame_count || !(memory->marks[index] & WM_MARK_WRITING))
+        return;
+    marks = memory->marks[index];
+    memory->marks[index] &= (uint16_t)~(WM_MARK_WRITING | WM_MARK_LEAVING);
+    /* Not stored: it stays in RAM, still dirty. Touched meanwhile: it stayed, dirty already. */
+    if (result || !(marks & WM_MARK_LEAVING))
+    {
+        memory->marks[index] |= WM_MARK_DIRTY;
+        return;
+    }
+    wm_free(memory->frames[index]);
+    memory->frames[index] = WM_FRAME_OUT;
+    --g_resident;
+}
+
 void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result)
 {
     if (!memory->marks || index >= memory->frame_count || !(memory->marks[index] & WM_MARK_LOADING))
         return;
-    memory->marks[index] &= (uint8_t)~WM_MARK_LOADING;
+    memory->marks[index] &= (uint16_t)~WM_MARK_LOADING;
     if (result)
     {
         wm_free(memory->frames[index]);
@@ -591,11 +621,11 @@ int wm_memory_frame_look(WmMemory* memory, uint32_t index)
 {
     int touched;
     if (!memory->pager || index >= memory->frame_count || !frame_here(memory->frames[index]) ||
-        frame_in_block(memory, index) || (memory->marks[index] & (WM_MARK_PINS | WM_MARK_LOADING)))
+        frame_in_block(memory, index) || (memory->marks[index] & (WM_MARK_PINS | WM_MARK_LOADING | WM_MARK_WRITING)))
         return -1;
     touched = (memory->marks[index] & WM_MARK_TOUCHED) != 0;
     /* The next touch must miss the TLB to mark the frame again. */
-    memory->marks[index] &= (uint8_t)~WM_MARK_TOUCHED;
+    memory->marks[index] &= (uint16_t)~WM_MARK_TOUCHED;
     tlb_forget_frame(memory->space, index);
     return touched;
 }
@@ -612,10 +642,24 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
     /* Only a dirty frame is written; a clean one has its copy, or was never written (zeros). */
     if (memory->marks[index] & WM_MARK_DIRTY)
     {
-        if ((result = memory->pager->write(memory->pager->context, &slot, frame)))
+        /* In the background, it stays in RAM, out of the TLB, until the write ends. */
+        if (memory->pager->write_start)
+        {
+            result = memory->pager->write_start(memory->pager->context, &slot, frame, memory, index);
+            if (result == wm_page_wait)
+            {
+                tlb_forget_frame(memory->space, index);
+                memory->slots[index] = slot;
+                memory->marks[index] = (uint16_t)((memory->marks[index] & ~WM_MARK_DIRTY) | WM_MARK_WRITING | WM_MARK_LEAVING);
+                return wm_page_wait;
+            }
+        }
+        else
+            result = memory->pager->write(memory->pager->context, &slot, frame);
+        if (result)
             return result;
         memory->slots[index] = slot;
-        memory->marks[index] &= (uint8_t)~WM_MARK_DIRTY;
+        memory->marks[index] &= (uint16_t)~WM_MARK_DIRTY;
     }
     memory->frames[index] = slot != WM_NONE ? WM_FRAME_OUT : NULL;
     wm_free(frame);
@@ -654,6 +698,7 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
 void wm_set_pager(const WmPager* pager) { (void)pager; }
 uint32_t wm_pager_resident(void) { return 0; }
 void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result) { (void)memory, (void)index, (void)result; }
+void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result) { (void)memory, (void)index, (void)result; }
 WmMemory* wm_memory_next(WmMemory* after) { (void)after; return NULL; }
 uint32_t wm_memory_frames(const WmMemory* memory) { (void)memory; return 0; }
 uint32_t wm_memory_stored(const WmMemory* memory) { (void)memory; return 0; }

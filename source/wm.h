@@ -194,6 +194,14 @@ typedef struct WmPager
      */
     WmResult (*read_start)(void* context, uint32_t slot, uint8_t* frame, WmMemory* memory, uint32_t index);
     WmResult (*finish)(void* context, uint32_t slot);
+    /*
+     * Optional, for storage that writes in the background: start writing a
+     * dirty frame that leaves RAM (choosing *slot as write does). NULL:
+     * written already; wm_page_wait: started, and the frame stays in RAM,
+     * out of the TLB, until the host says wm_memory_frame_stored; a touch
+     * meanwhile keeps it in RAM. finish waits for such a write too.
+     */
+    WmResult (*write_start)(void* context, uint32_t* slot, const uint8_t* frame, WmMemory* memory, uint32_t index);
 } WmPager;
 /* The pager memories made from now on use; NULL: none, memories stay in RAM. */
 void wm_set_pager(const WmPager* pager);
@@ -208,7 +216,11 @@ uint32_t wm_memory_frames(const WmMemory* memory);
  * so the next touch sets it again (a CLOCK hand).
  */
 int wm_memory_frame_look(WmMemory* memory, uint32_t index);
-/* Take frame index out of RAM into the pager's storage. */
+/*
+ * Take frame index out of RAM into the pager's storage: NULL when it is
+ * out, wm_page_wait when it is being written in the background (its RAM
+ * goes once the write ends).
+ */
 WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index);
 /*
  * Keep the frames of a range in RAM (delta 1) while the host works on them
@@ -219,6 +231,8 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
 uint32_t wm_pager_resident(void);
 /* A background read the pager started has ended: the frame is in RAM (result NULL) or back in storage. */
 void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result);
+/* A background write the pager started has ended: the frame's RAM goes (result NULL), or it stays, dirty. */
+void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result);
 /* The bytes of a memory that are only in the pager's storage, not in RAM. */
 uint32_t wm_memory_stored(const WmMemory* memory);
 

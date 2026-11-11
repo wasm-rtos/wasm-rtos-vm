@@ -584,11 +584,11 @@ struct WmMemory
      * Swapped by a pager: frames are made when touched, and a frame the host
      * took out is WM_FRAME_OUT. slots has the pager's slot of each frame
      * (WM_NONE: none), which keeps a copy of a clean frame in RAM too. marks
-     * has a byte per frame: touched, dirty and a pin count. next links the
-     * memories with a pager.
+     * has 16 bits per frame: touched, dirty, read or written in the
+     * background, and a pin count. next links the memories with a pager.
      */
     const struct WmPager* pager;
-    uint8_t* marks;
+    uint16_t* marks;
     uint32_t* slots;
     struct WmMemory* next;
 #endif
