@@ -772,7 +772,7 @@ static WmResult page_fault(WmRuntime* rt)
         }
     }
 #if WM_HAS_TRACE
-    if (result)
+    if (result && result != wm_page_wait)
     {
         rt->trap_func = rt->saved.func;
         rt->trap_depth = rt->depth;
@@ -1607,7 +1607,9 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         {
             if ((result = page_fault(rt)))
             {
-                rt->suspended = 0;
+                /* Waiting for a frame: still suspended at the access, which runs again. */
+                if (result != wm_page_wait)
+                    rt->suspended = 0;
                 return result;
             }
             result = run_fast(rt, func, 1);

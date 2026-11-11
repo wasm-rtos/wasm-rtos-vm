@@ -183,6 +183,17 @@ typedef struct WmPager
     WmResult (*read)(void* context, uint32_t slot, uint8_t* frame);
     /* The frame with this slot went (its memory was freed): the slot is free. */
     void (*drop)(void* context, uint32_t slot);
+    /*
+     * Optional, for storage that reads in the background: start reading a
+     * frame a program touched (frame index of memory). NULL: read already;
+     * wm_page_wait: started, and the program's call stops with
+     * wm_page_wait, to go on (wm_resume, the access runs again) once the
+     * host has said wm_memory_frame_loaded. finish waits for a read in
+     * flight to end, for anyone else who needs the frame; its result is the
+     * read's, and no wm_memory_frame_loaded follows.
+     */
+    WmResult (*read_start)(void* context, uint32_t slot, uint8_t* frame, WmMemory* memory, uint32_t index);
+    WmResult (*finish)(void* context, uint32_t slot);
 } WmPager;
 /* The pager memories made from now on use; NULL: none, memories stay in RAM. */
 void wm_set_pager(const WmPager* pager);
@@ -206,6 +217,8 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index);
 WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta);
 /* Frames in RAM across all memories with a pager. */
 uint32_t wm_pager_resident(void);
+/* A background read the pager started has ended: the frame is in RAM (result NULL) or back in storage. */
+void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result);
 /* The bytes of a memory that are only in the pager's storage, not in RAM. */
 uint32_t wm_memory_stored(const WmMemory* memory);
 
@@ -217,8 +230,9 @@ uint8_t* wm_runtime_stack(const WmRuntime* runtime, uint32_t* bytes);
 
 /*
  * Call with arguments in slots; results are written to results, in slots.
- * Returns wm_fuel_exhausted or wm_yielded when the call stopped early: it
- * is then suspended where it stood, and wm_resume goes on from there.
+ * Returns wm_fuel_exhausted, wm_yielded or wm_page_wait when the call
+ * stopped early: it is then suspended where it stood, and wm_resume goes
+ * on from there.
  */
 WmResult wm_call(WmRuntime* runtime, WmFunc* func, const uint32_t* args, uint32_t* results);
 WmResult wm_resume(WmRuntime* runtime, uint32_t* results);
@@ -250,6 +264,8 @@ const char* wm_func_name(const WmFunc* func, uint32_t* length);
 
 extern const char wm_fuel_exhausted[];
 extern const char wm_yielded[];
+/* The call stopped for a frame the pager reads in the background; wm_resume once it is loaded. */
+extern const char wm_page_wait[];
 
 /*
  * Snapshots of a suspended call, portable between builds and chips: they
