@@ -174,7 +174,11 @@ typedef struct WmPager
      * heap had no room for it. 0: it cannot make room.
      */
     int (*room)(void* context, int again);
-    /* Store a frame's bytes: over *slot, or in a slot it chooses when *slot is 0xFFFFFFFF. */
+    /*
+     * Store a frame's bytes. *slot is the frame's slot from before
+     * (0xFFFFFFFF: none); the pager may write over it or choose another,
+     * which it puts in *slot, and the old one is then its to reuse.
+     */
     WmResult (*write)(void* context, uint32_t* slot, const uint8_t* frame);
     WmResult (*read)(void* context, uint32_t slot, uint8_t* frame);
     /* The frame with this slot went (its memory was freed): the slot is free. */
