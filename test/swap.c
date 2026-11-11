@@ -17,6 +17,19 @@ static int32_t g_reserved, g_reserve_limit = 1 << 30;
 static uint8_t* g_slots[4096];
 static unsigned long g_taken, g_back, g_written;
 static uint32_t g_hand;
+/* Dirty frames being written in the background: at most MAX_WRITES, ended by end_write. */
+#define MAX_WRITES 4u
+static struct
+{
+    uint32_t slot;
+    const uint8_t* frame;
+    WmMemory* memory;
+    uint32_t index;
+} g_writes[MAX_WRITES];
+static uint32_t g_writing;
+static unsigned long g_write_starts;
+static uint32_t g_most_resident;
+static void end_write(uint32_t i, int tell);
 
 static void check(int ok, const char* what)
 {
@@ -46,8 +59,12 @@ static int take_one(void)
         {
             if (at < wm_memory_frames(m))
             {
-                if (wm_memory_frame_look(m, at) == 0 && !wm_memory_frame_take(m, at))
-                    return (int)++g_taken;
+                if (wm_memory_frame_look(m, at) == 0)
+                {
+                    WmResult r = wm_memory_frame_take(m, at);
+                    if (!r || r == wm_page_wait)
+                        return (int)++g_taken;
+                }
                 break;
             }
             at -= wm_memory_frames(m);
@@ -60,10 +77,25 @@ static int room(void* context, int again)
 {
     (void)context;
     if (again)
-        return take_one();
-    while (wm_pager_resident() >= BUDGET)
-        if (!take_one())
+    {
+        /* No heap left: a write in flight ends, and its frame's RAM goes. */
+        if (g_writing)
+        {
+            end_write(0, 1);
             return 1;
+        }
+        return take_one();
+    }
+    /* Frames being written are on their way out: they do not count against the budget. */
+    while (wm_pager_resident() - g_writing >= BUDGET)
+    {
+        if (g_writing == MAX_WRITES)
+            end_write(0, 1);
+        else if (!take_one())
+            break;
+    }
+    if (wm_pager_resident() + 1u > g_most_resident)
+        g_most_resident = wm_pager_resident() + 1u;
     return 1;
 }
 
@@ -139,13 +171,57 @@ static void end_read(void)
 static WmResult finish(void* context, uint32_t slot)
 {
     (void)context;
+    /* A write in flight: it ends now; the memory frees or keeps the frame itself. */
+    for (uint32_t i = 0; i < g_writing; ++i)
+        if (g_writes[i].slot == slot)
+        {
+            end_write(i, 0);
+            return NULL;
+        }
     if (!g_loading.on || g_loading.slot != slot)
         return "trap: no such read";
     end_read();
     return NULL;
 }
 
-static WmPager g_pager = {NULL, reserve, room, store, load, drop, NULL, NULL};
+/* A write in the background: the slot is chosen now, the bytes go when it ends. */
+static WmResult write_start(void* context, uint32_t* slot, const uint8_t* frame, WmMemory* memory, uint32_t index)
+{
+    uint32_t i = 0;
+    (void)context;
+    if (g_writing == MAX_WRITES)
+        return store(context, slot, frame);
+    if (*slot == 0xFFFFFFFFu)
+    {
+        while (i < 4096u && g_slots[i])
+            ++i;
+        if (i == 4096u || !(g_slots[i] = (uint8_t*)malloc(4096)))
+            return "exhaustion: storage full";
+        *slot = i;
+    }
+    g_writes[g_writing].slot = *slot;
+    g_writes[g_writing].frame = frame;
+    g_writes[g_writing].memory = memory;
+    g_writes[g_writing].index = index;
+    ++g_writing;
+    ++g_write_starts;
+    return wm_page_wait;
+}
+
+/* Write i ends: its bytes reach the slot, and the memory hears of it if tell. */
+static void end_write(uint32_t i, int tell)
+{
+    WmMemory* memory = g_writes[i].memory;
+    uint32_t index = g_writes[i].index;
+    memcpy(g_slots[g_writes[i].slot], g_writes[i].frame, 4096);
+    ++g_written;
+    for (--g_writing; i < g_writing; ++i)
+        g_writes[i] = g_writes[i + 1];
+    if (tell)
+        wm_memory_frame_stored(memory, index, NULL);
+}
+
+static WmPager g_pager = {NULL, reserve, room, store, load, drop, NULL, NULL, NULL};
 
 /* A call that waits for frames: each time, the read ends and the call goes on. */
 static uint32_t call_waiting(WmRuntime* rt, WmInstance* inst, const char* name, uint32_t a)
@@ -293,6 +369,37 @@ int main(int argc, char** argv)
     else
         printf("  (not predecoded: no background reads)\n");
 #endif
+
+    /* Dirty frames written in the background: the program goes on while they are written. */
+    {
+        uint32_t expected;
+        unsigned long starts;
+        WmMemory* writing_memory;
+        uint32_t writing_index, word = 0;
+        call1(rt, inst, "fill", 4, 0, 0);
+        expected = call1(rt, inst, "sum", 4, 0, 0);
+        g_pager.write_start = write_start;
+        g_pager.finish = finish;
+        g_most_resident = 0;
+        starts = g_write_starts;
+        call1(rt, inst, "fill", 4, 0, 0);
+        check(call1(rt, inst, "sum", 4, 0, 0) == expected && g_write_starts - starts > 30,
+              "frames written in the background read back the same");
+        check(g_most_resident <= BUDGET + MAX_WRITES, "RAM holds the budget plus the frames being written");
+        /* A frame being written that is touched stays in RAM. */
+        call1(rt, inst, "fill", 4, 0, 0);
+        check(g_writing > 0, "some writes are in flight");
+        writing_memory = g_writes[g_writing - 1].memory;
+        writing_index = g_writes[g_writing - 1].index;
+        check(!wm_memory_read(writing_memory, writing_index * 4096u, &word, 4) && word == writing_index * 4096u * 2654435761u,
+              "a frame being written reads as it was");
+        while (g_writing)
+            end_write(0, 1);
+        check(wm_memory_frame_look(writing_memory, writing_index) >= 0, "touched while written, it stayed in RAM");
+        /* Writes still in flight when the memory goes: they end first (below). */
+        call1(rt, inst, "fill", 4, 0, 0);
+        check(g_writing > 0, "writes are in flight as the memory is freed");
+    }
 
     /* Freeing a memory lets its RAM, slots and reservation go. */
     wm_instance_free(other);
