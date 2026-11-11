@@ -136,6 +136,18 @@ uint8_t* wm_memory_data(const WmMemory* memory, uint32_t* size);
 /* Copy bytes out of a memory or into it, one block or paged: a trap error when they are out of bounds. */
 WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uint32_t length);
 WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, uint32_t length);
+/*
+ * The length bytes at address as one piece of host memory, for a host that
+ * works on them in place (a port reading a buffer, DMA): always in a
+ * one-block memory, in a paged one when they lie in one frame or in the
+ * block it grew out of. *out is NULL when they are split across frames
+ * (copy them with wm_memory_read and wm_memory_write instead), and the
+ * result is a trap error when they are out of bounds. The pointer holds
+ * until the memory grows.
+ */
+WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, uint8_t** out);
+/* The bytes of a memory in RAM now: all of a one-block memory, the frames a paged one has touched. */
+uint32_t wm_memory_resident(const WmMemory* memory);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);

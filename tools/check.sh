@@ -34,4 +34,5 @@ for mode in "" "-DWM_PREDECODE=0"; do
 done
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 echo "kernel tests:  $(tools/kernel-tests.sh | tail -1)"
+echo "kernel tests (paged): $(CFLAGS=-DWM_MEMORY_ALWAYS_PAGED=1 tools/kernel-tests.sh | tail -1)"
 exit $fail

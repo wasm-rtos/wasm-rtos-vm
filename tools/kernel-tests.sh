@@ -4,7 +4,8 @@
 #   tools/kernel-tests.sh [test names...]
 #
 # KERNEL (default ~/wasm-rtos/wasm-rtos) and TESTS_DIR
-# (default ~/wasm-rtos/wasm-rtos-tests/tests) say where they are. The
+# (default ~/wasm-rtos/wasm-rtos-tests/tests) say where they are; CFLAGS
+# adds compiler flags (-DWM_MEMORY_ALWAYS_PAGED=1 pages every memory). The
 # tests run in a copy, with the .wasm programs already in the repository.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -12,7 +13,8 @@ VM="$PWD"
 KERNEL="${KERNEL:-$HOME/wasm-rtos/wasm-rtos}"
 TESTS_DIR="${TESTS_DIR:-$HOME/wasm-rtos/wasm-rtos-tests/tests}"
 CC_BIN="${CC:-cc}"
-out="$VM/build/kernel-tests"
+EXTRA_CFLAGS="${CFLAGS:-}"
+out="$VM/build/kernel-tests${CFLAGS:+-paged}"
 rm -rf "$out"
 mkdir -p "$out/kernel/vm" "$out/tests"
 for f in "$KERNEL"/*.c "$KERNEL"/*.h; do ln -s "$f" "$out/kernel/"; done
@@ -46,7 +48,7 @@ for name in "${names[@]}"; do
                 -o "$dir/libdylink0.so" "$dir/library.o" >"$dir/build.txt" 2>&1
     fi
     if ! "$CC_BIN" -std=c11 -O1 -g ${SANITIZE:+-fsanitize=address,undefined} -w -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
-            ${flags[@]+"${flags[@]}"} -I"$out/kernel" "$dir/main.c" "$out"/kernel/*.c "$VM"/source/wm_*.c -lm -o "$dir/runner" >"$dir/build.txt" 2>&1; then
+            $EXTRA_CFLAGS ${flags[@]+"${flags[@]}"} -I"$out/kernel" "$dir/main.c" "$out"/kernel/*.c "$VM"/source/wm_*.c -lm -o "$dir/runner" >"$dir/build.txt" 2>&1; then
         echo "FAIL $name (does not build: $(grep -m1 -E 'error' "$dir/build.txt"))"
         failed=$((failed + 1))
         continue

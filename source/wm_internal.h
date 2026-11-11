@@ -615,7 +615,6 @@ extern WmTlb wm_tlb_default;
 void wm_tlb_init(WmTlb* tlb);
 /* A frame of a memory, made (zeroed) if it was untouched; NULL without memory or past the end. */
 uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index);
-WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint32_t length);
 /*
  * A TLB miss on a paged memory: the frame of the access made and put in the
  * TLB (NULL: run it again), wm_page_emulate when the TLB cannot hold it
@@ -625,8 +624,11 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
 extern const char wm_page_emulate[];
 /* One byte of a memory, reading an untouched frame as zero. */
 uint8_t wm_memory_byte(const WmMemory* memory, uint32_t address);
-WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t length);
 #endif
+
+/* memory.fill and memory.copy, one block or paged. */
+WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint32_t length);
+WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t length);
 
 /* A memory's size in bytes. */
 #define WM_MEMORY_SIZE(mem) ((wm_size)(mem)->pages << (mem)->page_log2)

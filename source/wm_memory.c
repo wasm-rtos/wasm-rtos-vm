@@ -227,6 +227,22 @@ uint8_t* wm_memory_data(const WmMemory* mem, uint32_t* size)
     return mem->data;
 }
 
+uint32_t wm_memory_resident(const WmMemory* mem)
+{
+    uint32_t bytes;
+    if (mem->data)
+        return (uint32_t)WM_MEMORY_SIZE(mem);
+    bytes = 0;
+#if WM_HAS_MMU
+    if (mem->block)
+        bytes = mem->block_frames << WM_FRAME_LOG2;
+    for (uint32_t i = 0; i < mem->frame_count; ++i)
+        if (mem->frames[i] && !frame_in_block(mem, i))
+            bytes += WM_FRAME;
+#endif
+    return bytes;
+}
+
 uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
 {
     uint32_t old = mem->pages;
@@ -292,11 +308,42 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
     return NULL;
 }
 
+#endif
+
 /* ---- Reading and writing across frames ---- */
 
 static int in_bounds(const WmMemory* memory, uint32_t address, uint32_t length)
 {
     return memory && !wm_out_of_bounds(address, length, WM_MEMORY_SIZE(memory));
+}
+
+WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, uint8_t** out)
+{
+    *out = NULL;
+    if (!in_bounds(memory, address, length))
+        return E_OOB;
+    if (memory->data)
+    {
+        *out = memory->data + address;
+        return NULL;
+    }
+#if WM_HAS_MMU
+    if (length)
+    {
+        uint32_t first = address >> WM_FRAME_LOG2;
+        uint32_t last = (address + length - 1u) >> WM_FRAME_LOG2;
+        if (first == last)
+        {
+            uint8_t* frame = wm_memory_frame(memory, first);
+            if (!frame)
+                return E_MEMORY;
+            *out = frame + (address & (WM_FRAME - 1u));
+        }
+        else if (memory->block && last < memory->block_frames)
+            *out = memory->block + address;
+    }
+#endif
+    return NULL;
 }
 
 WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uint32_t length)
@@ -309,6 +356,7 @@ WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uin
         memcpy(to, memory->data + address, length);
         return NULL;
     }
+#if WM_HAS_MMU
     while (length)
     {
         uint32_t at = address & (WM_FRAME - 1u);
@@ -316,6 +364,7 @@ WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uin
         memcpy(to, frame_to_read(memory, address >> WM_FRAME_LOG2) + at, n);
         to += n, address += n, length -= n;
     }
+#endif
     return NULL;
 }
 
@@ -329,6 +378,7 @@ WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, u
         memcpy(memory->data + address, from, length);
         return NULL;
     }
+#if WM_HAS_MMU
     while (length)
     {
         uint32_t at = address & (WM_FRAME - 1u);
@@ -339,6 +389,7 @@ WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, u
         memcpy(frame + at, from, n);
         from += n, address += n, length -= n;
     }
+#endif
     return NULL;
 }
 
@@ -351,6 +402,7 @@ WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint3
         memset(memory->data + address, value, length);
         return NULL;
     }
+#if WM_HAS_MMU
     while (length)
     {
         uint32_t at = address & (WM_FRAME - 1u);
@@ -366,6 +418,7 @@ WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint3
         }
         address += n, length -= n;
     }
+#endif
     return NULL;
 }
 
@@ -394,4 +447,3 @@ WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t l
     return NULL;
 }
 
-#endif

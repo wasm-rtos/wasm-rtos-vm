@@ -55,6 +55,7 @@ int main(int argc, char** argv)
     if (!inst)
         return 1;
     check(wm_memory_data(wm_instance_memory(inst), NULL) != NULL, "the memory starts in one block");
+    check(wm_memory_resident(wm_instance_memory(inst)) == 65536, "all of a one-block memory is in RAM");
     call1(rt, inst, "fill", 1, 0, 0);
     flat_sum = call1(rt, inst, "sum", 1, 0, 0);
 
@@ -62,6 +63,7 @@ int main(int argc, char** argv)
     g_block_limit = 100u * 1024u;
     check(call1(rt, inst, "grow", 3, 0, 0) == 1, "memory.grow to 4 pages succeeds");
     check(wm_memory_data(wm_instance_memory(inst), NULL) == NULL, "the memory is paged now");
+    check(wm_memory_resident(wm_instance_memory(inst)) == 65536, "the pages it grew by take no RAM until touched");
     check(call1(rt, inst, "sum", 1, 0, 0) == flat_sum, "what was written in one block reads back paged");
     call1(rt, inst, "fill", 4, 0, 0);
     paged_sum = call1(rt, inst, "sum", 4, 0, 0);
@@ -102,6 +104,30 @@ int main(int argc, char** argv)
     }
     check(call1(rt, inst, "peek", 4 * 65536 - 4, 0, 0) == 0, "an untouched page reads as zeros");
     check(call1(rt, inst, "peek", 4 * 65536 - 3, 0, 0) == 0xDEADBEEFu, "an access past the end traps");
+
+    /* The host reaches the memory in place where it is in one piece, and copies where it is not. */
+    {
+        WmMemory* memory = wm_instance_memory(inst);
+        uint8_t* p = NULL;
+        uint8_t bytes[8];
+        uint32_t value = 0;
+        check(!wm_memory_pointer(memory, 65536 + 100, 1000, &p) && p != NULL, "a range inside one frame has a pointer");
+        check(!wm_memory_pointer(memory, 65536 + 4090, 20, &p) && p == NULL, "a range across frames has none");
+        check(!wm_memory_pointer(memory, 100, 3000, &p) && p != NULL,
+              "a range in the frames of the former block has a pointer");
+        check(wm_memory_pointer(memory, 4 * 65536 - 4, 8, &p) != NULL && p == NULL, "a range past the end is an error");
+        check(!wm_memory_pointer(memory, 4 * 65536, 0, &p), "an empty range at the end is not");
+        /* Writing through the pointer and reading back by address agree. */
+        if (!wm_memory_pointer(memory, 3 * 65536 + 8, 4, &p) && p)
+        {
+            memcpy(p, "\x78\x56\x34\x12", 4);
+            check(call1(rt, inst, "peek", 3 * 65536 + 8, 0, 0) == 0x12345678u, "the program sees what the host wrote in place");
+        }
+        value = 0xCAFEF00Du;
+        check(!wm_memory_write(memory, 2 * 65536 + 4094, &value, 4) && !wm_memory_read(memory, 2 * 65536 + 4094, bytes, 4) &&
+                  memcmp(bytes, &value, 4) == 0 && call1(rt, inst, "peek", 2 * 65536 + 4094, 0, 0) == value,
+              "a write across frames reads back, by the host and by the program");
+    }
 
     wm_instance_free(inst);
     wm_module_free(module);
