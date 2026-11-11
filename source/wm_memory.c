@@ -479,6 +479,15 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
 
 uint32_t wm_memory_frames(const WmMemory* memory) { return memory->data ? 0 : memory->frame_count; }
 
+uint32_t wm_memory_stored(const WmMemory* memory)
+{
+    uint32_t bytes = 0;
+    for (uint32_t i = 0; !memory->data && i < memory->frame_count; ++i)
+        if (memory->frames[i] && frame_out(memory->frames[i]))
+            bytes += WM_FRAME;
+    return bytes;
+}
+
 int wm_memory_frame_look(WmMemory* memory, uint32_t index)
 {
     int touched;
@@ -540,6 +549,7 @@ void wm_set_pager(const WmPager* pager) { (void)pager; }
 uint32_t wm_pager_resident(void) { return 0; }
 WmMemory* wm_memory_next(WmMemory* after) { (void)after; return NULL; }
 uint32_t wm_memory_frames(const WmMemory* memory) { (void)memory; return 0; }
+uint32_t wm_memory_stored(const WmMemory* memory) { (void)memory; return 0; }
 int wm_memory_frame_look(WmMemory* memory, uint32_t index) { (void)memory, (void)index; return -1; }
 WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
 {

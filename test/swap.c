@@ -150,6 +150,8 @@ int main(int argc, char** argv)
     check(wm_pager_resident() <= BUDGET && g_taken > 0, "filling the memory keeps RAM to the budget");
     sum = call1(rt, inst, "sum", 4, 0, 0);
     check(sum == call1(rt, inst, "sum", 4, 0, 0) && g_back > 0, "frames come back with what was written");
+    check(wm_memory_stored(memory) > 0 && wm_memory_stored(memory) + wm_memory_resident(memory) <= 4 * 65536,
+          "the memory is part in RAM, part stored");
     check(call1(rt, inst, "peek", 4 * 65536 - 4, 0, 0) == 0, "an untouched page reads as zeros");
 
     /* A second memory shares the same RAM. */

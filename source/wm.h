@@ -197,6 +197,8 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index);
 WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta);
 /* Frames in RAM across all memories with a pager. */
 uint32_t wm_pager_resident(void);
+/* The bytes of a memory in the pager's storage. */
+uint32_t wm_memory_stored(const WmMemory* memory);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);
