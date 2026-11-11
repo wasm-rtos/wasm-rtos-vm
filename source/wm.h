@@ -146,8 +146,64 @@ WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, u
  * until the memory grows.
  */
 WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, uint8_t** out);
-/* The bytes of a memory in RAM: all of a one-block memory, the frames of a paged one. */
+/* The bytes of a memory in RAM: all of a one-block memory, the frames of a paged one in RAM. */
 uint32_t wm_memory_resident(const WmMemory* memory);
+
+/*
+ * Swapping (not on AVR). A host with storage for frames sets a pager before
+ * it makes memories. Then every memory is paged and takes its frames only
+ * when they are touched, as RAM a cache of what the memory holds: the host
+ * may take a frame out of RAM into its storage (wm_memory_frame_take), and
+ * a touch brings it back. Nothing is promised that cannot be kept: making
+ * or growing a memory first reserves its frames with the host, which says
+ * yes only for as many as its storage holds.
+ *
+ * A frame keeps its slot from when it is first stored until its memory
+ * goes, so a frame that came back and was not written since (clean, as a
+ * store to it was never let through) leaves RAM without being written
+ * again, and one that was never written leaves as zeros.
+ */
+typedef struct WmPager
+{
+    void* context;
+    /* Room for frames more (fewer when negative) in storage: nonzero says yes. */
+    int (*reserve)(void* context, int32_t frames);
+    /*
+     * A frame is about to come into RAM: the host takes another out first
+     * if it keeps RAM to a budget, and again (again nonzero) each time the
+     * heap had no room for it. 0: it cannot make room.
+     */
+    int (*room)(void* context, int again);
+    /* Store a frame's bytes: over *slot, or in a slot it chooses when *slot is 0xFFFFFFFF. */
+    WmResult (*write)(void* context, uint32_t* slot, const uint8_t* frame);
+    WmResult (*read)(void* context, uint32_t slot, uint8_t* frame);
+    /* The frame with this slot went (its memory was freed): the slot is free. */
+    void (*drop)(void* context, uint32_t slot);
+} WmPager;
+/* The pager memories made from now on use; NULL: none, memories stay in RAM. */
+void wm_set_pager(const WmPager* pager);
+/* Paged memories with a pager, one after another from NULL; the host takes frames from them. */
+WmMemory* wm_memory_next(WmMemory* after);
+/* A memory's frames, 4 KiB each. */
+uint32_t wm_memory_frames(const WmMemory* memory);
+/*
+ * Whether frame index may be taken out of RAM: -1 when it is not in RAM or
+ * must stay (pinned, in the block the memory grew out of), else 1 when it
+ * was touched since the last look and 0 when not. Looking clears the mark,
+ * so the next touch sets it again (a CLOCK hand).
+ */
+int wm_memory_frame_look(WmMemory* memory, uint32_t index);
+/* Take frame index out of RAM into the pager's storage. */
+WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index);
+/*
+ * Keep the frames of a range in RAM (delta 1) while the host works on them
+ * through a pointer, or let them go again (delta -1).
+ */
+WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta);
+/* Frames in RAM across all memories with a pager. */
+uint32_t wm_pager_resident(void);
+/* The bytes of a memory that are only in the pager's storage, not in RAM. */
+uint32_t wm_memory_stored(const WmMemory* memory);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);

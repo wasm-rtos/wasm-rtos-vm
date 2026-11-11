@@ -17,6 +17,11 @@
 #define E_OOB WM_ERR_TRAP("trap: out of bounds memory access")
 #define E_MEMORY WM_ERR_EXHAUSTION("exhaustion: out of memory")
 
+static int in_bounds(const WmMemory* memory, uint32_t address, uint32_t length)
+{
+    return memory && !wm_out_of_bounds(address, length, WM_MEMORY_SIZE(memory));
+}
+
 #if WM_HAS_MMU
 
 /* ---- TLBs and address spaces ---- */
@@ -30,7 +35,7 @@ static uint8_t g_tlbs_ready;
 void wm_tlb_init(WmTlb* tlb)
 {
     for (uint32_t i = 0; i < WM_TLB_ENTRIES; ++i)
-        tlb->entries[i].tag = WM_TLB_EMPTY;
+        tlb->entries[i].tag = tlb->entries[i].wtag = WM_TLB_EMPTY;
     if (tlb != &wm_tlb_default)
     {
         tlb->next = g_tlbs;
@@ -44,7 +49,7 @@ static void tlb_forget(uint32_t space)
     for (WmTlb* t = g_tlbs; t; t = t->next)
         for (uint32_t i = 0; i < WM_TLB_ENTRIES; ++i)
             if (((t->entries[i].tag >> 3) & 0x1FFu) == space)
-                t->entries[i].tag = WM_TLB_EMPTY;
+                t->entries[i].tag = t->entries[i].wtag = WM_TLB_EMPTY;
 }
 
 static void space_release(WmMemory* memory)
@@ -74,6 +79,41 @@ static void space_renew(WmMemory* memory)
         }
 }
 
+/* ---- Pager ---- */
+
+#define WM_MARK_TOUCHED 0x80u
+#define WM_MARK_DIRTY 0x40u
+#define WM_MARK_PINS 0x3Fu
+/* A frame slot whose frame is in the pager's storage. */
+#define WM_FRAME_OUT ((uint8_t*)(uintptr_t)1u)
+
+static const WmPager* g_pager;
+/* Memories with a pager, and their frames in RAM. */
+static WmMemory* g_swapped;
+static uint32_t g_resident;
+
+void wm_set_pager(const WmPager* pager) { g_pager = pager; }
+
+uint32_t wm_pager_resident(void) { return g_resident; }
+
+WmMemory* wm_memory_next(WmMemory* after) { return after ? after->next : g_swapped; }
+
+static int frame_out(const uint8_t* frame) { return frame == WM_FRAME_OUT; }
+
+static int frame_here(const uint8_t* frame) { return frame && !frame_out(frame); }
+
+/* A frame's entry goes from every TLB: it left RAM. */
+static void tlb_forget_frame(uint32_t space, uint32_t index)
+{
+    uint32_t tag = (index << WM_FRAME_LOG2) | (space << 3);
+    for (WmTlb* t = g_tlbs; t; t = t->next)
+    {
+        WmTlbEntry* e = &t->entries[index & (WM_TLB_ENTRIES - 1u)];
+        if (e->tag == tag)
+            e->tag = e->wtag = WM_TLB_EMPTY;
+    }
+}
+
 /* ---- Frames ---- */
 
 /* Frames a memory of size bytes takes. */
@@ -87,7 +127,42 @@ static int frame_in_block(const WmMemory* memory, uint32_t index)
     return memory->block && index < memory->block_frames;
 }
 
-uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index)
+/* A zeroed frame coming into RAM; with a pager, once it has made room. */
+static uint8_t* new_frame(const WmPager* pager)
+{
+    uint8_t* frame;
+    if (!pager)
+        return (uint8_t*)wm_calloc(WM_FRAME, 1);
+    if (pager->room && !pager->room(pager->context, 0))
+        return NULL;
+    while (!(frame = (uint8_t*)wm_calloc(WM_FRAME, 1)))
+        if (!pager->room || !pager->room(pager->context, 1))
+            return NULL;
+    ++g_resident;
+    return frame;
+}
+
+/* A frame of a memory leaves it: freed, or its slot let go. */
+static void free_frame(WmMemory* memory, uint32_t index)
+{
+    uint8_t* frame = memory->frames[index];
+    if (frame_in_block(memory, index))
+        return;
+    if (memory->slots && memory->slots[index] != WM_NONE)
+    {
+        memory->pager->drop(memory->pager->context, memory->slots[index]);
+        memory->slots[index] = WM_NONE;
+    }
+    if (frame_here(frame))
+    {
+        wm_free(frame);
+        if (memory->pager)
+            --g_resident;
+    }
+    memory->frames[index] = NULL;
+}
+
+uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
 {
     uint8_t* frame;
     if (memory->data)
@@ -95,26 +170,41 @@ uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index)
     if (index >= memory->frame_count)
         return NULL;
     frame = memory->frames[index];
-    if (!frame)
+    if (!frame_here(frame))
     {
-        frame = (uint8_t*)wm_calloc(WM_FRAME, 1);
-        memory->frames[index] = frame;
+        /* Untouched, or in the pager's storage: into RAM now. */
+        uint8_t* made = new_frame(memory->pager);
+        if (!made)
+            return NULL;
+        /* Back from storage, its slot keeps a copy: clean until written. */
+        if (frame_out(memory->frames[index]) && memory->pager->read(memory->pager->context, memory->slots[index], made))
+        {
+            wm_free(made);
+            --g_resident;
+            return NULL;
+        }
+        memory->frames[index] = frame = made;
     }
+    if (memory->marks)
+        memory->marks[index] |= (uint8_t)(WM_MARK_TOUCHED | (write ? WM_MARK_DIRTY : 0u));
     return frame;
 }
 
-/* A frame to read from: an untouched one reads as zeros, without being made. */
+/* A frame to read from: an untouched one reads as zeros, without being made. NULL: it could not come back. */
 static const uint8_t* frame_to_read(const WmMemory* memory, uint32_t index)
 {
     static const uint8_t zeros[WM_FRAME];
     if (memory->data)
         return memory->data + ((wm_size)index << WM_FRAME_LOG2);
-    return memory->frames[index] ? memory->frames[index] : zeros;
+    if (!memory->frames[index])
+        return zeros;
+    return wm_memory_frame((WmMemory*)memory, index, 0);
 }
 
 uint8_t wm_memory_byte(const WmMemory* memory, uint32_t address)
 {
-    return frame_to_read(memory, address >> WM_FRAME_LOG2)[address & (WM_FRAME - 1u)];
+    const uint8_t* frame = frame_to_read(memory, address >> WM_FRAME_LOG2);
+    return frame ? frame[address & (WM_FRAME - 1u)] : 0;
 }
 
 /* A one-block memory becomes paged: its whole frames stay in the block, a partial last one is copied. */
@@ -144,6 +234,47 @@ static int make_paged(WmMemory* memory, uint32_t frame_count)
     memory->data = NULL;
     space_renew(memory);
     return 1;
+}
+
+/* A paged memory gets the pager: its frames from now on are reserved, made when touched, and may be taken out. */
+static int take_pager(WmMemory* memory)
+{
+    uint32_t reserved = memory->frame_count - memory->block_frames;
+    if (!g_pager)
+        return 1;
+    memory->marks = (uint8_t*)wm_calloc(memory->frame_count + 1u, 1);
+    memory->slots = (uint32_t*)wm_malloc(((size_t)memory->frame_count + 1u) * sizeof(uint32_t));
+    if (!memory->marks || !memory->slots || !g_pager->reserve(g_pager->context, (int32_t)reserved))
+    {
+        wm_free(memory->marks);
+        wm_free(memory->slots);
+        memory->marks = NULL;
+        memory->slots = NULL;
+        return 0;
+    }
+    memset(memory->slots, 0xFF, ((size_t)memory->frame_count + 1u) * sizeof(uint32_t));
+    /* Frames it has already (a copied partial frame) have no copy in storage. */
+    for (uint32_t i = memory->block_frames; i < memory->frame_count; ++i)
+        if (frame_here(memory->frames[i]))
+        {
+            ++g_resident;
+            memory->marks[i] = WM_MARK_DIRTY;
+        }
+    memory->pager = g_pager;
+    memory->next = g_swapped;
+    g_swapped = memory;
+    return 1;
+}
+
+static void leave_pager(WmMemory* memory)
+{
+    WmMemory** at = &g_swapped;
+    if (!memory->pager)
+        return;
+    while (*at != memory)
+        at = &(*at)->next;
+    *at = memory->next;
+    memory->pager->reserve(memory->pager->context, -(int32_t)(memory->frame_count - memory->block_frames));
 }
 
 /*
@@ -179,6 +310,22 @@ static int grow_frames(WmMemory* memory, uint32_t frame_count)
         return 0;
     memset(frames + memory->frame_count, 0, (size_t)(frame_count - memory->frame_count) * sizeof(uint8_t*));
     memory->frames = frames;
+    if (memory->marks)
+    {
+        uint8_t* marks = (uint8_t*)wm_realloc(memory->marks, (size_t)frame_count + 1u);
+        if (!marks)
+            return 0;
+        memset(marks + memory->frame_count, 0, (size_t)(frame_count - memory->frame_count));
+        memory->marks = marks;
+    }
+    if (memory->slots)
+    {
+        uint32_t* slots = (uint32_t*)wm_realloc(memory->slots, ((size_t)frame_count + 1u) * sizeof(uint32_t));
+        if (!slots)
+            return 0;
+        memset(slots + memory->frame_count, 0xFF, (size_t)(frame_count - memory->frame_count) * sizeof(uint32_t));
+        memory->slots = slots;
+    }
     memory->frame_count = frame_count;
     return 1;
 }
@@ -198,27 +345,26 @@ WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_l
     mem->pages = pages;
     mem->max_pages = max_pages;
     mem->page_log2 = page_log2;
-#if WM_HAS_MMU && WM_MEMORY_ALWAYS_PAGED
-    mem->data = NULL;
-#else
-    mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
-#endif
 #if WM_HAS_MMU
+    /* With a pager every memory is paged, so any frame may leave RAM. */
+    if (!WM_MEMORY_ALWAYS_PAGED && !g_pager)
+        mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
     if (!mem->data)
     {
-        /* No block that large: paged. */
+        /* No block that large: paged, the frames made now, or reserved and made when touched. */
         uint32_t count = frames_for(size);
         mem->frames = (uint8_t**)wm_calloc(count + 1u, sizeof(uint8_t*));
-        if (!mem->frames || !make_frames(mem, 0, count))
+        mem->frame_count = count;
+        if (!mem->frames || !(g_pager ? take_pager(mem) : make_frames(mem, 0, count)))
         {
             wm_free(mem->frames);
             wm_free(mem);
             return NULL;
         }
-        mem->frame_count = count;
         space_renew(mem);
     }
 #else
+    mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
     if (!mem->data)
     {
         wm_free(mem);
@@ -235,9 +381,11 @@ void wm_memory_free(WmMemory* mem)
 #if WM_HAS_MMU
     space_release(mem);
     for (uint32_t i = 0; mem->frames && i < mem->frame_count; ++i)
-        if (!frame_in_block(mem, i))
-            wm_free(mem->frames[i]);
+        free_frame(mem, i);
+    leave_pager(mem);
     wm_free(mem->frames);
+    wm_free(mem->marks);
+    wm_free(mem->slots);
     wm_free(mem->block);
 #endif
     wm_free(mem->data);
@@ -261,7 +409,7 @@ uint32_t wm_memory_resident(const WmMemory* mem)
     if (mem->block)
         bytes = mem->block_frames << WM_FRAME_LOG2;
     for (uint32_t i = 0; i < mem->frame_count; ++i)
-        if (mem->frames[i] && !frame_in_block(mem, i))
+        if (frame_here(mem->frames[i]) && !frame_in_block(mem, i))
             bytes += WM_FRAME;
 #endif
     return bytes;
@@ -289,18 +437,32 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
             return old;
         }
 #if WM_HAS_MMU
-        /* No room to grow in one block: the memory goes on paged. */
-        if (!make_paged(mem, frames_for(size)))
+        /* No room to grow in one block: the memory goes on paged, swapped too when there is a pager. */
+        if (!make_paged(mem, frames_for((wm_size)old << mem->page_log2)) || !take_pager(mem))
             return WM_NONE;
 #else
         return WM_NONE;
 #endif
     }
 #if WM_HAS_MMU
-    /* The frames past the old end are all new: make them now, or memory.grow fails. */
-    if (!grow_frames(mem, frames_for(size)) ||
-        !make_frames(mem, frames_for((wm_size)old << mem->page_log2), frames_for(size)))
-        return WM_NONE;
+    {
+        uint32_t first = frames_for((wm_size)old << mem->page_log2);
+        uint32_t count = frames_for(size);
+        if (mem->pager)
+        {
+            /* Reserved now, made when touched. */
+            if (!mem->pager->reserve(mem->pager->context, (int32_t)(count - mem->frame_count)))
+                return WM_NONE;
+            if (!grow_frames(mem, count))
+            {
+                mem->pager->reserve(mem->pager->context, -(int32_t)(count - mem->frame_count));
+                return WM_NONE;
+            }
+        }
+        /* The frames past the old end are all new: make them now, or memory.grow fails. */
+        else if (!grow_frames(mem, count) || !make_frames(mem, first, count))
+            return WM_NONE;
+    }
     mem->pages = pages;
     return old;
 #else
@@ -314,7 +476,7 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
 
 const char wm_page_emulate[] = "emulate the access";
 
-WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t offset, uint32_t size)
+WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t offset, uint32_t size, int write)
 {
     uint64_t end = (uint64_t)address + offset + size;
     uint32_t ea = address + offset;
@@ -325,23 +487,115 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
     /* A TLB entry holds aligned accesses within one frame of a memory with a number. */
     if (!memory->space || (ea & (size - 1u)) || (ea & (WM_FRAME - 1u)) + size > WM_FRAME)
         return wm_page_emulate;
-    frame = wm_memory_frame(memory, ea >> WM_FRAME_LOG2);
+    frame = wm_memory_frame(memory, ea >> WM_FRAME_LOG2, write);
     if (!frame)
         return E_MEMORY;
     e = &tlb->entries[(ea >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];
     e->tag = (ea & 0xFFFFF000u) | ((uint32_t)memory->space << 3);
+    /* Stores go through once the frame is dirty (or nothing stores it). */
+    e->wtag = !memory->marks || (memory->marks[ea >> WM_FRAME_LOG2] & WM_MARK_DIRTY) ? e->tag : WM_TLB_EMPTY;
     e->frame = frame;
+    return NULL;
+}
+
+/* ---- Taking frames out of RAM ---- */
+
+
+uint32_t wm_memory_frames(const WmMemory* memory) { return memory->data ? 0 : memory->frame_count; }
+
+uint32_t wm_memory_stored(const WmMemory* memory)
+{
+    uint32_t bytes = 0;
+    for (uint32_t i = 0; !memory->data && i < memory->frame_count; ++i)
+        if (frame_out(memory->frames[i]))
+            bytes += WM_FRAME;
+    return bytes;
+}
+
+int wm_memory_frame_look(WmMemory* memory, uint32_t index)
+{
+    int touched;
+    if (!memory->pager || index >= memory->frame_count || !frame_here(memory->frames[index]) ||
+        frame_in_block(memory, index) || (memory->marks[index] & WM_MARK_PINS))
+        return -1;
+    touched = (memory->marks[index] & WM_MARK_TOUCHED) != 0;
+    /* The next touch must miss the TLB to mark the frame again. */
+    memory->marks[index] &= (uint8_t)~WM_MARK_TOUCHED;
+    tlb_forget_frame(memory->space, index);
+    return touched;
+}
+
+WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
+{
+    uint32_t slot = 0;
+    WmResult result;
+    uint8_t* frame;
+    if (wm_memory_frame_look(memory, index) < 0)
+        return WM_ERR_UNSUPPORTED("unsupported: this frame cannot leave RAM");
+    frame = memory->frames[index];
+    slot = memory->slots[index];
+    /* Only a dirty frame is written; a clean one has its copy, or was never written (zeros). */
+    if (memory->marks[index] & WM_MARK_DIRTY)
+    {
+        if ((result = memory->pager->write(memory->pager->context, &slot, frame)))
+            return result;
+        memory->slots[index] = slot;
+        memory->marks[index] &= (uint8_t)~WM_MARK_DIRTY;
+    }
+    memory->frames[index] = slot != WM_NONE ? WM_FRAME_OUT : NULL;
+    wm_free(frame);
+    --g_resident;
+    return NULL;
+}
+
+WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta)
+{
+    if (!in_bounds(memory, address, length))
+        return E_OOB;
+    if (memory->data || !memory->marks || !length)
+        return NULL;
+    for (uint32_t i = address >> WM_FRAME_LOG2; i <= (address + length - 1u) >> WM_FRAME_LOG2; ++i)
+    {
+        if (delta > 0)
+        {
+            /* A host with a pointer may write: the frame counts as dirty. */
+            if ((memory->marks[i] & WM_MARK_PINS) == WM_MARK_PINS || !wm_memory_frame(memory, i, 1))
+            {
+                /* Unpin what this call pinned. */
+                while (i-- > address >> WM_FRAME_LOG2)
+                    --memory->marks[i];
+                return E_MEMORY;
+            }
+            ++memory->marks[i];
+        }
+        else if (memory->marks[i] & WM_MARK_PINS)
+            --memory->marks[i];
+    }
+    return NULL;
+}
+
+#else
+
+void wm_set_pager(const WmPager* pager) { (void)pager; }
+uint32_t wm_pager_resident(void) { return 0; }
+WmMemory* wm_memory_next(WmMemory* after) { (void)after; return NULL; }
+uint32_t wm_memory_frames(const WmMemory* memory) { (void)memory; return 0; }
+uint32_t wm_memory_stored(const WmMemory* memory) { (void)memory; return 0; }
+int wm_memory_frame_look(WmMemory* memory, uint32_t index) { (void)memory, (void)index; return -1; }
+WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
+{
+    (void)memory, (void)index;
+    return WM_ERR_UNSUPPORTED("unsupported: built without WM_HAS_MMU");
+}
+WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta)
+{
+    (void)memory, (void)address, (void)length, (void)delta;
     return NULL;
 }
 
 #endif
 
 /* ---- Reading and writing across frames ---- */
-
-static int in_bounds(const WmMemory* memory, uint32_t address, uint32_t length)
-{
-    return memory && !wm_out_of_bounds(address, length, WM_MEMORY_SIZE(memory));
-}
 
 WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, uint8_t** out)
 {
@@ -360,7 +614,7 @@ WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, 
         uint32_t last = (address + length - 1u) >> WM_FRAME_LOG2;
         if (first == last)
         {
-            uint8_t* frame = wm_memory_frame(memory, first);
+            uint8_t* frame = wm_memory_frame(memory, first, 1);
             if (!frame)
                 return E_MEMORY;
             *out = frame + (address & (WM_FRAME - 1u));
@@ -387,7 +641,10 @@ WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uin
     {
         uint32_t at = address & (WM_FRAME - 1u);
         uint32_t n = WM_FRAME - at < length ? WM_FRAME - at : length;
-        memcpy(to, frame_to_read(memory, address >> WM_FRAME_LOG2) + at, n);
+        const uint8_t* frame = frame_to_read(memory, address >> WM_FRAME_LOG2);
+        if (!frame)
+            return E_MEMORY;
+        memcpy(to, frame + at, n);
         to += n, address += n, length -= n;
     }
 #endif
@@ -409,7 +666,7 @@ WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, u
     {
         uint32_t at = address & (WM_FRAME - 1u);
         uint32_t n = WM_FRAME - at < length ? WM_FRAME - at : length;
-        uint8_t* frame = wm_memory_frame(memory, address >> WM_FRAME_LOG2);
+        uint8_t* frame = wm_memory_frame(memory, address >> WM_FRAME_LOG2, 1);
         if (!frame)
             return E_MEMORY;
         memcpy(frame + at, from, n);
@@ -437,7 +694,7 @@ WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint3
         /* Zeros on an untouched frame need no frame. */
         if (value || memory->frames[index])
         {
-            uint8_t* frame = wm_memory_frame(memory, index);
+            uint8_t* frame = wm_memory_frame(memory, index, 1);
             if (!frame)
                 return E_MEMORY;
             memset(frame + at, value, n);

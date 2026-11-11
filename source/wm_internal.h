@@ -580,6 +580,17 @@ struct WmMemory
     /* A former one-block memory: its first block_frames frames are in it. */
     uint8_t* block;
     uint32_t block_frames;
+    /*
+     * Swapped by a pager: frames are made when touched, and a frame the host
+     * took out is WM_FRAME_OUT. slots has the pager's slot of each frame
+     * (WM_NONE: none), which keeps a copy of a clean frame in RAM too. marks
+     * has a byte per frame: touched, dirty and a pin count. next links the
+     * memories with a pager.
+     */
+    const struct WmPager* pager;
+    uint8_t* marks;
+    uint32_t* slots;
+    struct WmMemory* next;
 #endif
 };
 
@@ -599,9 +610,15 @@ struct WmMemory
 #endif
 #define WM_TLB_EMPTY 0x800u
 
+/*
+ * tag lets loads through, wtag stores: a frame a pager may store is entered
+ * for stores only once it is dirty, so the first store to a clean frame
+ * misses and marks it.
+ */
 typedef struct WmTlbEntry
 {
     uint32_t tag;
+    uint32_t wtag;
     uint8_t* frame;
 } WmTlbEntry;
 
@@ -613,14 +630,18 @@ typedef struct WmTlb
 
 extern WmTlb wm_tlb_default;
 void wm_tlb_init(WmTlb* tlb);
-/* A frame of a memory, made (zeroed) if it was untouched; NULL without memory or past the end. */
-uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index);
+/*
+ * A frame of a memory, made (zeroed) if it was untouched or brought back
+ * from the pager's storage, and marked dirty when it is for writing; NULL
+ * without memory, past the end, or when it cannot come into RAM.
+ */
+uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write);
 /*
  * A TLB miss on a paged memory: the frame of the access made and put in the
  * TLB (NULL: run it again), wm_page_emulate when the TLB cannot hold it
  * (unaligned, across frames, no address space number), or a trap.
  */
-WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t offset, uint32_t size);
+WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t offset, uint32_t size, int write);
 extern const char wm_page_emulate[];
 /* One byte of a memory, reading an untouched frame as zero. */
 uint8_t wm_memory_byte(const WmMemory* memory, uint32_t address);
