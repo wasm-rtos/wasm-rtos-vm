@@ -902,7 +902,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         {                                                                                                      \
             uint32_t ea_ = (ADDRESS) + (OFFSET);                                                               \
             const WmTlbEntry* e_ = &rt->tlb->entries[(ea_ >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];          \
-            if ((TAG) == ((ea_ & (0xFFFFF000u | ((SIZE) - 1u))) | ((uint32_t)inst->memory->space << 3)) &&       \
+            if ((TAG) == ((ea_ & (WM_FRAME_MASK | ((SIZE) - 1u))) | ((uint32_t)inst->memory->space << 3)) &&     \
                 ea_ >= (OFFSET))                                                                               \
                 HOST = e_->frame + (ea_ & (WM_FRAME - 1u));                                                    \
             else                                                                                               \

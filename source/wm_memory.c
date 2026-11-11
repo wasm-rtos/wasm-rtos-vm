@@ -1,6 +1,7 @@
 /*
  * Linear memory. A memory is one block when the heap has room for it; when
- * it has not, it is paged: 4 KiB frames anywhere in the heap, so it never
+ * it has not, it is paged: frames of WM_FRAME_SIZE bytes (4 KiB unless
+ * built otherwise) anywhere in the heap, so it never
  * needs a large free block. Every frame is made when the memory is made or
  * grows, so a memory.grow that succeeds has the memory behind it and an
  * access never runs out. A block that cannot grow becomes paged without a
@@ -29,7 +30,7 @@ static int in_bounds(const WmMemory* memory, uint32_t address, uint32_t length)
 WmTlb wm_tlb_default;
 static WmTlb* g_tlbs = &wm_tlb_default;
 /* Address space numbers in use, one bit each; number 0 is never handed out. */
-static uint32_t g_spaces[512u / 32u] = {1u};
+static uint32_t g_spaces[(WM_SPACES + 31u) / 32u] = {1u};
 static uint8_t g_tlbs_ready;
 
 void wm_tlb_init(WmTlb* tlb)
@@ -48,20 +49,24 @@ static void tlb_forget(uint32_t space)
 {
     for (WmTlb* t = g_tlbs; t; t = t->next)
         for (uint32_t i = 0; i < WM_TLB_ENTRIES; ++i)
-            if (((t->entries[i].tag >> 3) & 0x1FFu) == space)
+            if (((t->entries[i].tag >> 3) & (WM_SPACES - 1u)) == space)
                 t->entries[i].tag = t->entries[i].wtag = WM_TLB_EMPTY;
 }
 
 static void space_release(WmMemory* memory)
 {
-    if (!memory->space)
+    if (!memory->space || memory->space == WM_SPACE_UNCACHED)
         return;
     tlb_forget(memory->space);
     g_spaces[memory->space / 32u] &= ~(1u << (memory->space % 32u));
     memory->space = 0;
 }
 
-/* A fresh number for a paged memory; none left leaves it uncached, which is still correct. */
+/*
+ * A fresh number for a paged memory. With none left it gets
+ * WM_SPACE_UNCACHED and is never in a TLB, which is still correct, only
+ * slower: no number but the empty entries' 0 is ever cached under it.
+ */
 static void space_renew(WmMemory* memory)
 {
     if (!g_tlbs_ready)
@@ -70,13 +75,14 @@ static void space_renew(WmMemory* memory)
         g_tlbs_ready = 1;
     }
     space_release(memory);
-    for (uint32_t n = 1; n < 512u; ++n)
+    for (uint32_t n = 1; n < WM_SPACE_UNCACHED; ++n)
         if (!(g_spaces[n / 32u] & (1u << (n % 32u))))
         {
             g_spaces[n / 32u] |= 1u << (n % 32u);
             memory->space = (uint16_t)n;
             return;
         }
+    memory->space = WM_SPACE_UNCACHED;
 }
 
 /* ---- Pager ---- */
@@ -103,6 +109,8 @@ static uint32_t g_resident;
 void wm_set_pager(const WmPager* pager) { g_pager = pager; }
 
 uint32_t wm_pager_resident(void) { return g_resident; }
+
+uint32_t wm_frame_size(void) { return WM_FRAME; }
 
 /*
  * The frames in RAM of every memory with a pager, as a ring the pager's
@@ -686,13 +694,13 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
         if (first || last)
             return last && last != wm_page_wait ? last : wm_page_wait;
     }
-    if (!memory->space || (ea & (size - 1u)) || (ea & (WM_FRAME - 1u)) + size > WM_FRAME)
+    if (memory->space == WM_SPACE_UNCACHED || (ea & (size - 1u)) || (ea & (WM_FRAME - 1u)) + size > WM_FRAME)
         return wm_page_emulate;
     frame = wm_memory_frame(memory, ea >> WM_FRAME_LOG2, write);
     if (!frame)
         return g_frame_error ? g_frame_error : E_MEMORY;
     e = &tlb->entries[(ea >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];
-    e->tag = (ea & 0xFFFFF000u) | ((uint32_t)memory->space << 3);
+    e->tag = (ea & WM_FRAME_MASK) | ((uint32_t)memory->space << 3);
     /* Stores go through once the frame is dirty (or nothing stores it). */
     e->wtag = !memory->marks || (memory->marks[ea >> WM_FRAME_LOG2] & WM_MARK_DIRTY) ? e->tag : WM_TLB_EMPTY;
     e->frame = frame;
@@ -795,6 +803,7 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
 
 void wm_set_pager(const WmPager* pager) { (void)pager; }
 uint32_t wm_pager_resident(void) { return 0; }
+uint32_t wm_frame_size(void) { return 0; }
 int wm_pager_hand(WmMemory** memory, uint32_t* index) { (void)memory, (void)index; return 0; }
 void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result) { (void)memory, (void)index, (void)result; }
 void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result) { (void)memory, (void)index, (void)result; }

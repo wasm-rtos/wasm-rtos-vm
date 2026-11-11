@@ -9,7 +9,12 @@
 #include "../source/wm.h"
 #include "../source/wm_internal.h"
 
-#define BUDGET 3u
+/* Frames RAM holds: 3, or 1 when the memory is only a few large frames. */
+#define BUDGET (FRAMES >= 16u ? 3u : 1u)
+/* The 4 pages the test grows to, in frames. */
+#define FRAMES (4u * 65536u / wm_frame_size())
+/* The frames fill and sum touch: they go 4 KiB at a time. */
+#define TOUCHED (wm_frame_size() < 4096u ? 64u : FRAMES)
 
 static int g_failures;
 /* Frames promised to memories, and how many the pager will promise. */
@@ -93,14 +98,14 @@ static WmResult store(void* context, uint32_t* slot, const uint8_t* frame)
     ++g_written;
     if (*slot != 0xFFFFFFFFu)
     {
-        memcpy(g_slots[*slot], frame, 4096);
+        memcpy(g_slots[*slot], frame, wm_frame_size());
         return NULL;
     }
     while (i < 4096u && g_slots[i])
         ++i;
-    if (i == 4096u || !(g_slots[i] = (uint8_t*)malloc(4096)))
+    if (i == 4096u || !(g_slots[i] = (uint8_t*)malloc(wm_frame_size())))
         return "exhaustion: storage full";
-    memcpy(g_slots[i], frame, 4096);
+    memcpy(g_slots[i], frame, wm_frame_size());
     *slot = i;
     return NULL;
 }
@@ -108,7 +113,7 @@ static WmResult store(void* context, uint32_t* slot, const uint8_t* frame)
 static WmResult load(void* context, uint32_t slot, uint8_t* frame)
 {
     (void)context;
-    memcpy(frame, g_slots[slot], 4096);
+    memcpy(frame, g_slots[slot], wm_frame_size());
     ++g_back;
     return NULL;
 }
@@ -137,8 +142,9 @@ static unsigned long g_waits;
 static WmResult read_start(void* context, uint32_t slot, uint8_t* frame, WmMemory* memory, uint32_t index)
 {
     (void)context;
+    /* One read at a time in the background; another is made at once. */
     if (g_loading.on)
-        return "trap: two reads at once";
+        return load(context, slot, frame);
     g_loading.on = 1;
     g_loading.slot = slot;
     g_loading.frame = frame;
@@ -150,7 +156,7 @@ static WmResult read_start(void* context, uint32_t slot, uint8_t* frame, WmMemor
 /* The read in flight ends: its bytes arrive. */
 static void end_read(void)
 {
-    memcpy(g_loading.frame, g_slots[g_loading.slot], 4096);
+    memcpy(g_loading.frame, g_slots[g_loading.slot], wm_frame_size());
     ++g_back;
     g_loading.on = 0;
 }
@@ -182,7 +188,7 @@ static WmResult write_start(void* context, uint32_t* slot, const uint8_t* frame,
     {
         while (i < 4096u && g_slots[i])
             ++i;
-        if (i == 4096u || !(g_slots[i] = (uint8_t*)malloc(4096)))
+        if (i == 4096u || !(g_slots[i] = (uint8_t*)malloc(wm_frame_size())))
             return "exhaustion: storage full";
         *slot = i;
     }
@@ -200,7 +206,7 @@ static void end_write(uint32_t i, int tell)
 {
     WmMemory* memory = g_writes[i].memory;
     uint32_t index = g_writes[i].index;
-    memcpy(g_slots[g_writes[i].slot], g_writes[i].frame, 4096);
+    memcpy(g_slots[g_writes[i].slot], g_writes[i].frame, wm_frame_size());
     ++g_written;
     for (--g_writing; i < g_writing; ++i)
         g_writes[i] = g_writes[i + 1];
@@ -276,11 +282,12 @@ int main(int argc, char** argv)
     if (!inst)
         return 1;
     memory = wm_instance_memory(inst);
-    check(wm_memory_data(memory, NULL) == NULL && g_reserved == 16, "the memory is paged, its 16 frames reserved");
+    check(wm_memory_data(memory, NULL) == NULL && g_reserved == (int32_t)(65536u / wm_frame_size()),
+          "the memory is paged, its frames reserved");
     check(wm_memory_resident(memory) == 0, "no frame is in RAM before it is touched");
 
     /* 4 pages, 64 frames, through 3 frames of RAM. */
-    check(call1(rt, inst, "grow", 3, 0, 0) == 1 && g_reserved == 64, "memory.grow reserves the new frames");
+    check(call1(rt, inst, "grow", 3, 0, 0) == 1 && g_reserved == (int32_t)FRAMES, "memory.grow reserves the new frames");
     check(wm_memory_resident(memory) == 0, "growing makes no frame");
     call1(rt, inst, "fill", 4, 0, 0);
     check(wm_pager_resident() <= BUDGET && g_taken > 0, "filling the memory keeps RAM to the budget");
@@ -293,7 +300,7 @@ int main(int argc, char** argv)
         /* Reading only: frames leave RAM clean, so nothing is written but the few dirty at the start. */
         unsigned long written = g_written, taken = g_taken;
         call1(rt, inst, "sum", 4, 0, 0);
-        check(g_taken - taken > 30 && g_written - written <= BUDGET, "frames that were only read leave without a write");
+        check(g_taken - taken > TOUCHED / 2u && g_written - written <= BUDGET, "frames that were only read leave without a write");
     }
 
     /* A second memory shares the same RAM. */
@@ -334,19 +341,20 @@ int main(int argc, char** argv)
         WmExtern f;
         uint32_t expected = call1(rt, inst, "sum", 4, 0, 0);
         unsigned long back = g_back;
-        uint32_t args[3] = {4 * 65536 - 8, 0, 0};
+        /* A word fill wrote: its frame goes to storage. */
+        uint32_t args[3] = {3 * 65536, 0, 0};
         uint32_t result = 0;
         uint32_t direct = 0;
         g_pager.read_start = read_start;
         g_pager.finish = finish;
-        check(call_waiting(rt, inst, "sum", 4) == expected && g_waits > 30 && g_back - back > 30,
+        check(call_waiting(rt, inst, "sum", 4) == expected && g_waits > TOUCHED / 2u && g_back - back > TOUCHED / 2u,
               "a call that waits for frames read in the background gets the same sum");
         /* The host needs a frame still being read: it waits for that read. */
         call_waiting(rt, inst, "sum", 1); /* the end of the memory goes to storage */
         wm_instance_export(inst, "peek", 4, &f);
         check(wm_call(rt, f.as.func, args, &result) == wm_page_wait && g_loading.on,
               "a touch of a stored frame starts a read and waits");
-        check(!wm_memory_read(memory, 4 * 65536 - 8, &direct, 4) && !g_loading.on,
+        check(!wm_memory_read(memory, 3 * 65536, &direct, 4) && !g_loading.on,
               "a host read of that frame finishes the read first");
         check(wm_resume(rt, &result) == NULL && result == direct, "the waiting call then goes on and reads the same");
         check(!g_loading.on, "no read is left in flight");
@@ -370,22 +378,54 @@ int main(int argc, char** argv)
         g_most_resident = 0;
         starts = g_write_starts;
         call1(rt, inst, "fill", 4, 0, 0);
-        check(call1(rt, inst, "sum", 4, 0, 0) == expected && g_write_starts - starts > 30,
+        check(call1(rt, inst, "sum", 4, 0, 0) == expected && g_write_starts - starts > TOUCHED / 2u,
               "frames written in the background read back the same");
         check(g_most_resident <= BUDGET + MAX_WRITES, "RAM holds the budget plus the frames being written");
         /* A frame being written that is touched stays in RAM. */
         call1(rt, inst, "fill", 4, 0, 0);
         check(g_writing > 0, "some writes are in flight");
+        if (!g_writing)
+            return 1;
         writing_memory = g_writes[g_writing - 1].memory;
         writing_index = g_writes[g_writing - 1].index;
-        check(!wm_memory_read(writing_memory, writing_index * 4096u, &word, 4) && word == writing_index * 4096u * 2654435761u,
-              "a frame being written reads as it was");
+        check(!wm_memory_read(writing_memory, writing_index * wm_frame_size(), &word, 4), "a frame being written reads");
         while (g_writing)
             end_write(0, 1);
+        {
+            uint32_t again = 0;
+            check(!wm_memory_read(writing_memory, writing_index * wm_frame_size(), &again, 4) && again == word,
+                  "and keeps what it had once its write ends");
+        }
         check(wm_memory_frame_look(writing_memory, writing_index) >= 0, "touched while written, it stayed in RAM");
         /* Writes still in flight when the memory goes: they end first (below). */
         call1(rt, inst, "fill", 4, 0, 0);
+        /* With a few large frames all may have been written: take one more out. */
+        while (!g_writing && take_one())
+            ;
         check(g_writing > 0, "writes are in flight as the memory is freed");
+    }
+
+    /*
+     * More paged memories than address space numbers: the last ones get no
+     * number and are never in the TLB, and still read and write right, page
+     * 0 too (an empty TLB entry once passed for page 0 of such a memory).
+     */
+    {
+        uint32_t spaces = wm_frame_size() / 8u < 512u ? wm_frame_size() / 8u : 512u;
+        uint32_t count = spaces + 4u;
+        WmInstance** many = (WmInstance**)calloc(count, sizeof(WmInstance*));
+        uint32_t made = 0, right = 0;
+        for (; many && made < count && !wm_instantiate(&many[made], module, rt, NULL, NULL); ++made)
+            ;
+        for (uint32_t i = 0; i < made; ++i)
+        {
+            call1(rt, many[i], "fill", 1, 0, 0);
+            right += call1(rt, many[i], "peek", 0, 0, 0) == 0 && call1(rt, many[i], "sum", 1, 0, 0) == call1(rt, many[0], "sum", 1, 0, 0);
+        }
+        check(made == count && right == count, "more memories than address space numbers all work, page 0 too");
+        for (uint32_t i = 0; i < made; ++i)
+            wm_instance_free(many[i]);
+        free(many);
     }
 
     /* Freeing a memory lets its RAM, slots and reservation go. */

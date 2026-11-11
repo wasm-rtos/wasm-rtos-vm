@@ -285,15 +285,48 @@ typedef struct WmSide
  * as values, and RAM: off on AVR.
  */
 /*
- * Paged memory (WM_HAS_MMU, off on AVR): a memory the heap has no block
- * for is paged instead, in 4 KiB frames, all made when it is made or grows.
- * WM_MEMORY_ALWAYS_PAGED pages every memory, for tests.
+ * Paged memory: a memory the heap has no block for is paged instead, in
+ * frames of WM_FRAME_SIZE bytes, a power of two from 256 to 65536 (4096 by
+ * default); with a pager every memory is, and frames go to storage and
+ * back. WM_FRAME_SIZE 0 (the default on AVR) leaves a memory always in one
+ * block, one frame as large as the memory: no paging is built in at all
+ * (WM_HAS_MMU follows from it). WM_MEMORY_ALWAYS_PAGED pages every memory,
+ * for tests.
  */
-#ifndef WM_HAS_MMU
+#ifdef WM_HAS_MMU
+#error "WM_HAS_MMU is set by WM_FRAME_SIZE now: 0 for memory in one block, or the frame size in bytes"
+#endif
+#ifndef WM_FRAME_SIZE
 #ifdef __AVR__
+#define WM_FRAME_SIZE 0
+#else
+#define WM_FRAME_SIZE 4096
+#endif
+#endif
+#if WM_FRAME_SIZE == 0
 #define WM_HAS_MMU 0
 #else
 #define WM_HAS_MMU 1
+#if WM_FRAME_SIZE == 256
+#define WM_FRAME_LOG2 8u
+#elif WM_FRAME_SIZE == 512
+#define WM_FRAME_LOG2 9u
+#elif WM_FRAME_SIZE == 1024
+#define WM_FRAME_LOG2 10u
+#elif WM_FRAME_SIZE == 2048
+#define WM_FRAME_LOG2 11u
+#elif WM_FRAME_SIZE == 4096
+#define WM_FRAME_LOG2 12u
+#elif WM_FRAME_SIZE == 8192
+#define WM_FRAME_LOG2 13u
+#elif WM_FRAME_SIZE == 16384
+#define WM_FRAME_LOG2 14u
+#elif WM_FRAME_SIZE == 32768
+#define WM_FRAME_LOG2 15u
+#elif WM_FRAME_SIZE == 65536
+#define WM_FRAME_LOG2 16u
+#else
+#error "WM_FRAME_SIZE is 0 or a power of two from 256 to 65536"
 #endif
 #endif
 #ifndef WM_MEMORY_ALWAYS_PAGED
@@ -574,7 +607,7 @@ struct WmMemory
     uint32_t max_pages;
     uint8_t page_log2;
 #if WM_HAS_MMU
-    /* Its address space number in TLB keys, 1..511; 0 when none was free (never cached). */
+    /* Its address space number in TLB keys, 1..WM_SPACES-2; WM_SPACE_UNCACHED when none was free (never cached). */
     uint16_t space;
     /* Paged: a 4 KiB frame per slot (a NULL slot is made when touched). */
     uint8_t** frames;
@@ -599,20 +632,34 @@ struct WmMemory
 };
 
 #if WM_HAS_MMU
-#define WM_FRAME_LOG2 12u
 #define WM_FRAME (1u << WM_FRAME_LOG2)
+/* The address bits that name a frame. */
+#define WM_FRAME_MASK ((uint32_t)~(WM_FRAME - 1u))
+/*
+ * Address space numbers fit the offset bits a frame address leaves free,
+ * from bit 3 (an access's alignment bits are below). Two are kept back:
+ * 0, which empty TLB entries carry, and WM_SPACE_UNCACHED, which a paged
+ * memory gets when the others are all taken, and which no entry ever
+ * carries: every key the fast loop makes can be a real one, so neither may
+ * belong to a memory the TLB caches. That leaves 510 with 4 KiB frames, 30
+ * with 256 bytes; a paged memory beyond them still works, without the TLB.
+ */
+#define WM_SPACE_BITS (WM_FRAME_LOG2 - 3u < 9u ? WM_FRAME_LOG2 - 3u : 9u)
+#define WM_SPACES (1u << WM_SPACE_BITS)
+#define WM_SPACE_UNCACHED (WM_SPACES - 1u)
 
 /*
  * A TLB, as a CPU core has one: frames of paged memories, each entry tagged
- * with its memory's address space number in key bits 3..11, which no
- * frame address sets. A runtime uses one; by default all share
+ * with its memory's address space number in the key bits from 3 up, which
+ * no frame address sets. An empty entry's tag is 0, which no key is, as
+ * address space numbers start at 1. A runtime uses one; by default all share
  * wm_tlb_default, and a host that runs programs on several threads gives
  * each its own (wm_tlb_init).
  */
 #ifndef WM_TLB_ENTRIES
 #define WM_TLB_ENTRIES 16u
 #endif
-#define WM_TLB_EMPTY 0x800u
+#define WM_TLB_EMPTY 0u
 
 /*
  * tag lets loads through, wtag stores: a frame a pager may store is entered
