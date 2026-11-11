@@ -49,6 +49,10 @@ for mode in "-fsanitize=address" "-fsanitize=address,undefined"; do
     cc -std=gnu99 -O1 -g $mode source/*.c test/swap.c -lm -o build/swap || exit 1
     build/swap >/dev/null && echo "swapping:      ok ($mode)" || { echo "swapping:      FAIL $mode"; fail=1; }
 done
+for mode in "-fsanitize=address" "-fsanitize=address,undefined" "-fsanitize=address -DWM_MEMORY_ALWAYS_PAGED=1"; do
+    cc -std=gnu99 -O1 -g $mode source/*.c test/state.c -lm -o build/state || exit 1
+    build/state >/dev/null && echo "state snapshot: ok ($mode)" || { echo "state snapshot: FAIL $mode"; fail=1; }
+done
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 echo "kernel tests:  $(tools/kernel-tests.sh | tail -1)"
 echo "kernel tests (paged): $(CFLAGS=-DWM_MEMORY_ALWAYS_PAGED=1 tools/kernel-tests.sh | tail -1)"
