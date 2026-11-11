@@ -347,7 +347,6 @@ static void command(char* line)
  */
 static uint8_t** g_slots;
 static uint32_t g_slot_count;
-static uint32_t g_hand;
 /* Frames taken out and brought back: stderr shows them at the end. */
 static unsigned long g_taken, g_back;
 static void show_paging(void) { fprintf(stderr, "paging: %lu frames taken out, %lu brought back\n", g_taken, g_back); }
@@ -361,23 +360,11 @@ static int test_reserve(void* context, int32_t frames)
 /* CLOCK over every frame of every memory: the first one not touched since the hand last passed. */
 static int take_one(void)
 {
-    uint32_t total = 0;
-    for (WmMemory* m = wm_memory_next(NULL); m; m = wm_memory_next(m))
-        total += wm_memory_frames(m);
-    for (uint32_t step = 0; total && step < 3u * total; ++step)
-    {
-        uint32_t at = g_hand++ % total;
-        for (WmMemory* m = wm_memory_next(NULL); m; m = wm_memory_next(m))
-        {
-            if (at < wm_memory_frames(m))
-            {
-                if (wm_memory_frame_look(m, at) == 0)
-                    return wm_memory_frame_take(m, at) == NULL && ++g_taken;
-                break;
-            }
-            at -= wm_memory_frames(m);
-        }
-    }
+    WmMemory* m;
+    uint32_t at;
+    for (uint32_t step = 0; step < 3u * wm_pager_resident() && wm_pager_hand(&m, &at); ++step)
+        if (wm_memory_frame_look(m, at) == 0)
+            return wm_memory_frame_take(m, at) == NULL && ++g_taken;
     return 0;
 }
 
