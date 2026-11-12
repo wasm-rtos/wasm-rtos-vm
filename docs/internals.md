@@ -124,8 +124,13 @@ the state loads.
 ## Paged memory
 
 A memory the heap has no block for is paged instead, in frames of
-`WM_FRAME_SIZE` bytes; with a pager every memory is. A memory in one block
-is accessed as ever, by a bounds check. A paged one goes through a TLB
+`WM_FRAME_SIZE` bytes. With a pager a memory is paged too, unless the pager
+lets it stay in one block (its `block` callback, from the RAM it has to
+spare): then all its frames count as in RAM and are reserved in storage,
+and `wm_memory_block_out` sends it to storage whole (frames still all zero
+need no copy) and lets it go on paged. That keeps the fast path for every
+program that fits (Mac CoreMark with a pager: 2343 paged, 2595 in one
+block). A memory in one block is accessed as ever, by a bounds check. A paged one goes through a TLB
 shared by the memories (each has an address space number in the key), with
 16 entries by default; a miss stops the fast loop and `wm_execute` makes or
 loads the frame. An access that crosses frames is done through the memory

@@ -421,6 +421,31 @@ static int take_pager(WmMemory* memory)
     return 1;
 }
 
+/* A memory in one block with the pager: its frames are all in RAM, in the block, and reserved in storage. */
+static int is_pager_block(const WmMemory* memory) { return memory->data && memory->pager; }
+
+/* Bytes of a block: whole frames with a pager, so each frame can go to storage as it is. */
+static size_t block_bytes(int paged, wm_size size)
+{
+    return paged ? (size_t)frames_for(size) << WM_FRAME_LOG2 : (size_t)size;
+}
+
+/* A memory just made in one block takes the pager, if the pager lets it stay so: 0 when it must be paged. */
+static int take_pager_block(WmMemory* memory, uint32_t count)
+{
+    memory->frame_count = count;
+    memory->frames = (uint8_t**)frames_calloc(count + 1u, sizeof(uint8_t*));
+    if (!memory->frames || !take_pager(memory))
+    {
+        wm_free(memory->frames);
+        memory->frames = NULL;
+        memory->frame_count = 0;
+        return 0;
+    }
+    g_resident += count;
+    return 1;
+}
+
 static void leave_pager(WmMemory* memory)
 {
     WmMemory** at = &g_swapped;
@@ -509,9 +534,16 @@ WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_l
     mem->max_pages = max_pages;
     mem->page_log2 = page_log2;
 #if WM_HAS_MMU
-    /* With a pager every memory is paged, so any frame may leave RAM. */
-    if (!WM_MEMORY_ALWAYS_PAGED && !g_pager)
-        mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
+    /* With a pager a memory is paged, so any frame may leave RAM, unless the pager lets it stay in one block. */
+    if (!WM_MEMORY_ALWAYS_PAGED && (!g_pager || (g_pager->block && g_pager->block(g_pager->context, frames_for(size)))))
+    {
+        mem->data = (uint8_t*)wm_calloc(block_bytes(g_pager != NULL, size) + 1u, 1);
+        if (mem->data && g_pager && !take_pager_block(mem, frames_for(size)))
+        {
+            wm_free(mem->data);
+            mem->data = NULL;
+        }
+    }
     if (!mem->data)
     {
         /* No block that large: paged, the frames made now, or reserved and made when touched. */
@@ -543,6 +575,8 @@ void wm_memory_free(WmMemory* mem)
         return;
 #if WM_HAS_MMU
     space_release(mem);
+    if (is_pager_block(mem))
+        g_resident -= mem->frame_count;
     for (uint32_t i = 0; mem->frames && i < mem->frame_count; ++i)
         free_frame(mem, i);
     leave_pager(mem);
@@ -592,17 +626,43 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
         return old;
     if (mem->data)
     {
-        uint8_t* data = (uint8_t*)wm_realloc(mem->data, (size_t)size + 1u);
+        uint8_t* data = NULL;
+#if WM_HAS_MMU
+        /* A block with a pager grows in one block only if the pager lets the new frames stay in RAM too. */
+        uint32_t more = mem->pager ? frames_for(size) - mem->frame_count : 0u;
+        if (!mem->pager || (mem->pager->block && mem->pager->block(mem->pager->context, more)))
+            data = (uint8_t*)wm_realloc(mem->data, block_bytes(mem->pager != NULL, size) + 1u);
+#else
+        data = (uint8_t*)wm_realloc(mem->data, (size_t)size + 1u);
+#endif
         if (data)
         {
-            memset(data + ((wm_size)old << mem->page_log2), 0, (size_t)((wm_size)delta << mem->page_log2));
             mem->data = data;
+#if WM_HAS_MMU
+            if (more)
+            {
+                if (!mem->pager->reserve(mem->pager->context, (int32_t)more))
+                    return WM_NONE;
+                if (!grow_frames(mem, mem->frame_count + more))
+                {
+                    mem->pager->reserve(mem->pager->context, -(int32_t)more);
+                    return WM_NONE;
+                }
+                g_resident += more;
+            }
+#endif
+            memset(data + ((wm_size)old << mem->page_log2), 0, (size_t)((wm_size)delta << mem->page_log2));
             mem->pages = pages;
             return old;
         }
 #if WM_HAS_MMU
-        /* No room to grow in one block: the memory goes on paged, swapped too when there is a pager. */
-        if (!make_paged(mem, frames_for((wm_size)old << mem->page_log2)) || !take_pager(mem))
+        /*
+         * No room to grow in one block: the memory goes on paged. With a
+         * pager its block goes to storage first, without one the block
+         * keeps its frames.
+         */
+        if (mem->pager ? wm_memory_block_out(mem) != NULL
+                       : !make_paged(mem, frames_for((wm_size)old << mem->page_log2)) || !take_pager(mem))
             return WM_NONE;
 #else
         return WM_NONE;
@@ -799,11 +859,62 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
     return NULL;
 }
 
+uint32_t wm_memory_block_frames(const WmMemory* memory) { return is_pager_block(memory) ? memory->frame_count : 0u; }
+
+/* A frame of bytes all zero: it needs no copy in storage, as an untouched frame reads as zero. */
+static int frame_is_zero(const uint8_t* frame)
+{
+    for (uint32_t i = 0; i < WM_FRAME; ++i)
+        if (frame[i])
+            return 0;
+    return 1;
+}
+
+WmResult wm_memory_block_out(WmMemory* memory)
+{
+    uint8_t* data = memory->data;
+    WmResult result = NULL;
+    if (!is_pager_block(memory))
+        return NULL;
+    for (uint32_t i = 0; i < memory->frame_count; ++i)
+        if (memory->marks[i] & WM_MARK_PINS)
+            return WM_ERR_EXHAUSTION("exhaustion: a host holds part of the memory");
+    /* Each frame is written from the block as it is; until all are, the block stays the memory. */
+    for (uint32_t i = 0; i < memory->frame_count && !result; ++i)
+    {
+        const uint8_t* frame = data + ((size_t)i << WM_FRAME_LOG2);
+        if (!frame_is_zero(frame) && !(result = memory->pager->write(memory->pager->context, &memory->slots[i], frame)))
+            memory->frames[i] = WM_FRAME_OUT;
+    }
+    if (result)
+    {
+        /* The frames stored so far let their slots go: nothing of the block stays in storage. */
+        for (uint32_t i = 0; i < memory->frame_count; ++i)
+        {
+            if (frame_out(memory->frames[i]))
+            {
+                memory->pager->drop(memory->pager->context, memory->slots[i]);
+                memory->slots[i] = WM_NONE;
+            }
+            memory->frames[i] = NULL;
+        }
+        return result;
+    }
+    memory->data = NULL;
+    wm_free(data);
+    g_resident -= memory->frame_count;
+    for (uint32_t i = 0; i < memory->frame_count; ++i)
+        memory->marks[i] = 0;
+    space_renew(memory);
+    return NULL;
+}
+
 WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int delta)
 {
     if (!in_bounds(memory, address, length))
         return E_OOB;
-    if (memory->data || !memory->marks || !length)
+    /* A block with a pager counts its pins too: it does not leave RAM while one is held. */
+    if (!memory->marks || !length)
         return NULL;
     for (uint32_t i = address >> WM_FRAME_LOG2; i <= (address + length - 1u) >> WM_FRAME_LOG2; ++i)
     {
@@ -811,7 +922,7 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
         {
             /* A host with a pointer may write: the frame counts as dirty. */
             int full = (memory->marks[i] & WM_MARK_PINS) == WM_MARK_PINS;
-            if (full || !wm_memory_frame(memory, i, 1))
+            if (full || (!memory->data && !wm_memory_frame(memory, i, 1)))
             {
                 /* Unpin what this call pinned. */
                 while (i-- > address >> WM_FRAME_LOG2)
@@ -837,6 +948,8 @@ void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result) {
 WmMemory* wm_memory_next(WmMemory* after) { (void)after; return NULL; }
 uint32_t wm_memory_frames(const WmMemory* memory) { (void)memory; return 0; }
 uint32_t wm_memory_stored(const WmMemory* memory) { (void)memory; return 0; }
+uint32_t wm_memory_block_frames(const WmMemory* memory) { (void)memory; return 0; }
+WmResult wm_memory_block_out(WmMemory* memory) { (void)memory; return NULL; }
 int wm_memory_frame_look(WmMemory* memory, uint32_t index) { (void)memory, (void)index; return -1; }
 WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
 {
