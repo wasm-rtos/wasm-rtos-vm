@@ -1234,6 +1234,8 @@ f_memory_size:
     *sp++ = tos = inst->memory->pages;
     FAST_NEXT();
 f_memory_grow:
+    /* Making frames may drop predecoded code: not this function's. */
+    rt->caller = func;
     sp[-1] = tos = wm_memory_grow(inst->memory, tos);
     FAST_REFRESH();
     FAST_NEXT();
@@ -1486,6 +1488,8 @@ f_misc:
     const uint8_t* immediates = bytes + ip[0].u32;
     uint32_t sub = IMM;
     ++ip;
+    /* memory.init, copy and fill may make frames, which may drop predecoded code: not this function's. */
+    rt->caller = func;
     if ((trap = misc(inst, sub, &immediates, &sp)))
         TRAP(trap);
     FAST_REFRESH();

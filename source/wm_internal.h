@@ -783,7 +783,11 @@ struct WmRuntime
 #if WM_PREDECODE
     /* Every runtime, for the code cache to see what is on the call stacks. */
     struct WmRuntime* next;
-    /* The function that called the running host function; the callers of outer ones, while calls nest. */
+    /*
+     * The function that called the running host function (or runs
+     * memory.grow, init, copy or fill, which may make frames); the callers
+     * of outer ones, while calls nest.
+     */
     WmFunc* caller;
     WmNest* nest;
 #endif
@@ -825,6 +829,8 @@ void wm_module_predecode(WmModule* module);
 WmResult wm_code_load(WmFunc* func);
 WmResult wm_code_make(WmModule* module, WmCode* code, const WmSide* side);
 WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
+/* One function's records dropped, by CLOCK, for an allocation the heap refused; 0 when none can go. */
+int wm_code_drop_one(void);
 void* wm_code_malloc(size_t size);
 void wm_code_free(void* ptr);
 void wm_code_add_module(WmModule* module);
