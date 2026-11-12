@@ -121,7 +121,7 @@ void wm_free(void* ptr);
 #endif
 #endif
 #if !defined(WM_HOT) && defined(ESP_PLATFORM) && defined(WM_IRAM)
-#define WM_HOT __attribute__((section(".iram1.n3")))
+#define WM_HOT __attribute__((section(".iram1.wm")))
 #endif
 #ifndef WM_HOT
 #define WM_HOT
@@ -451,7 +451,8 @@ typedef struct WmCode
     uint32_t* local_offsets;
     /* Predecoded records, or NULL: made at the first call, dropped when the code cache needs room (wm_code.c). */
     WmCell* fast;
-    uint32_t fast_cells;
+    /* At most 0x7FFF: a longer function is not predecoded. */
+    uint16_t fast_cells;
     /* For the code cache's CLOCK: called since the hand last passed; on a call stack right now. */
     uint8_t used;
     uint8_t pinned;
@@ -691,12 +692,6 @@ typedef struct WmTlb
 extern WmTlb wm_tlb_default;
 void wm_tlb_init(WmTlb* tlb);
 /*
- * A frame of a memory, made (zeroed) if it was untouched or brought back
- * from the pager's storage, and marked dirty when it is for writing; NULL
- * without memory, past the end, or when it cannot come into RAM.
- */
-uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write);
-/*
  * A TLB miss on a paged memory: the frame of the access made and put in the
  * TLB (NULL: run it again), wm_page_emulate when the TLB cannot hold it
  * (unaligned, across frames, no address space number), or a trap.
@@ -830,7 +825,6 @@ void wm_module_predecode(WmModule* module);
 WmResult wm_code_load(WmFunc* func);
 WmResult wm_code_make(WmModule* module, WmCode* code, const WmSide* side);
 WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
-void wm_code_drop(WmCode* code);
 void* wm_code_malloc(size_t size);
 void wm_code_free(void* ptr);
 void wm_code_add_module(WmModule* module);
@@ -847,7 +841,6 @@ int wm_types_equal(const uint8_t* a, uint32_t a_count, const uint8_t* b, uint32_
 /* Program bytes (read with WM_RD8) against bytes in RAM. */
 int wm_bytes_equal(const uint8_t* program, uint32_t program_count, const uint8_t* ram, uint32_t ram_count);
 int wm_func_has_type(const WmFunc* f, const WmType* t);
-WmResult wm_eval_const(WmInstance* instance, const uint8_t* expr, uint64_t* out);
 WmResult wm_execute(WmRuntime* runtime, WmFunc* func, int resume);
 
 #endif

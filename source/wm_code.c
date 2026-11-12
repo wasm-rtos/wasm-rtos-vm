@@ -45,7 +45,7 @@ void wm_code_free(void* ptr)
         wm_free(ptr);
 }
 
-void wm_code_drop(WmCode* code)
+static void wm_code_drop(WmCode* code)
 {
     if (!code->fast)
         return;
