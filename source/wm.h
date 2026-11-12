@@ -243,6 +243,14 @@ typedef struct WmPager
      * meanwhile keeps it in RAM. finish waits for such a write too.
      */
     WmResult (*write_start)(void* context, uint32_t* slot, const uint8_t* frame, WmMemory* memory, uint32_t index);
+    /*
+     * Optional: may a memory of this many frames more stay in RAM in one
+     * block? Nonzero: yes. A memory in one block is reached as one without a
+     * pager is, at full speed; all its frames count as in RAM, and its
+     * storage is reserved as for any other. It leaves RAM whole, through
+     * wm_memory_block_out, and goes on paged. NULL: every memory is paged.
+     */
+    int (*block)(void* context, uint32_t frames);
 } WmPager;
 /* The pager memories made from now on use; NULL: none, memories stay in RAM. */
 void wm_set_pager(const WmPager* pager);
@@ -285,6 +293,19 @@ void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result);
 void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result);
 /* The bytes of a memory that are only in the pager's storage, not in RAM. */
 uint32_t wm_memory_stored(const WmMemory* memory);
+/* The frames of a memory with a pager that are in RAM in one block (see block in WmPager); 0 when it is paged. */
+uint32_t wm_memory_block_frames(const WmMemory* memory);
+/*
+ * A memory in one block leaves RAM whole: its frames go to the pager's
+ * storage (those still all zero need none), the block is freed and the
+ * memory goes on paged, its frames coming back when touched. NULL when it
+ * is done or there was no block; an error (the block stays) when a write
+ * failed or a host has a range of it pinned. Not for the memory of a
+ * program that is running (its calls hold the block's address): from the
+ * host between calls, or while another program's call is in a host
+ * function or the pager.
+ */
+WmResult wm_memory_block_out(WmMemory* memory);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);

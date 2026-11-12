@@ -24,6 +24,10 @@ cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/code.c -lm -o build/code
 build/code >/dev/null && echo "code cache:    ok" || { echo "code cache:    FAIL"; build/code | grep FAIL; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/room.c -lm -o build/room || exit 1
 build/room >/dev/null && echo "memory before code: ok" || { echo "memory before code: FAIL"; build/room | grep FAIL; fail=1; }
+for size in 4096 256; do
+    cc -std=gnu99 -O1 -g -fsanitize=address -DWM_FRAME_SIZE=$size source/*.c test/block.c -lm -o build/block || exit 1
+    build/block >/dev/null && echo "block memory:  ok (frames $size)" || { echo "block memory:  FAIL (frames $size)"; build/block | grep FAIL; fail=1; }
+done
 cc -std=gnu99 -O1 -g -DWM_SMALL_SIZES -DWM_TERSE_ERRORS=1 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-small || exit 1
 python3 tools/spec.py build/wm-spec-small "$SPEC" >/dev/null && echo "spec (small):  ok" || { echo "spec (small):  FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -DWM_COMPUTED_GOTO=0 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-switch || exit 1
