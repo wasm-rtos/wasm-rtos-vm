@@ -431,6 +431,10 @@ int main(void)
     wm_set_pager(&g_test_pager);
     atexit(show_paging);
 #endif
+#ifdef WM_SPEC_CODE_LIMIT
+    /* -DWM_SPEC_CODE_LIMIT=bytes: a code cache that small; 1 keeps only the records of functions on the stack. */
+    wm_code_cache_limit(WM_SPEC_CODE_LIMIT);
+#endif
     g_runtime = wm_runtime_new(64u * 1024u, 1000u);
     make_spectest();
     setvbuf(stdout, NULL, _IOLBF, 0);

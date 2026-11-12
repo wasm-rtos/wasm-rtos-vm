@@ -299,6 +299,11 @@ typedef struct Loader
     uint32_t defined_funcs;
     uint8_t has_data_count;
     uint32_t data_count;
+#if WM_PREDECODE
+    /* Validating a function again, for its side table entries (wm_code_side): the module is known valid. */
+    uint8_t again;
+    WmCode scratch;
+#endif
 } Loader;
 
 static void declare(Loader* l, Reader* r, uint32_t func)
@@ -321,6 +326,10 @@ static void declare(Loader* l, Reader* r, uint32_t func)
 
 static int is_declared(const Loader* l, uint32_t func)
 {
+#if WM_PREDECODE
+    if (l->again)
+        return 1;
+#endif
     return l->declared && func < l->declared_count && (l->declared[func / 8u] & (1u << (func % 8u)));
 }
 
@@ -1087,7 +1096,12 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
 static void read_code(Loader* l, Reader* r, uint32_t index, Validator* v)
 {
     WmModule* m = l->m;
+#if WM_PREDECODE
+    /* Again: the function's own WmCode stays as it is. */
+    WmCode* code = l->again ? &l->scratch : &m->codes[index];
+#else
     WmCode* code = &m->codes[index];
+#endif
     const WmType* type = &m->types[m->func_types[m->func_imports + index]];
     uint32_t size = read_u32(r);
     uint32_t groups;
@@ -1146,6 +1160,10 @@ static void read_code(Loader* l, Reader* r, uint32_t index, Validator* v)
     code->local_slots = slots - type->param_slots;
     code->body = body.p;
     code->side = m->side_count;
+#if WM_PREDECODE
+    if (l->again)
+        identity = 1;
+#endif
     if (!identity)
     {
         uint32_t offset = 0;
@@ -1442,6 +1460,9 @@ static void read_codes(Loader* l, Reader* r)
     memset(&v, 0, sizeof(v));
     v.l = l;
     v.m = m;
+#if WM_PREDECODE
+    m->code_entries = r->p;
+#endif
     for (uint32_t i = 0; i < count && !r->error; ++i)
         read_code(l, r, i, &v);
     wm_free(v.vals);
@@ -1583,12 +1604,13 @@ void wm_module_free(WmModule* m)
 {
     if (!m)
         return;
+#if WM_PREDECODE
+    if (WM_RUNS_FAST(m))
+        wm_code_remove_module(m);
+#endif
     if (m->codes)
         for (uint32_t i = 0; i < m->func_count - m->func_imports; ++i)
-        {
             wm_free(m->codes[i].local_offsets);
-            wm_free(m->codes[i].fast);
-        }
     wm_free(m->types);
     wm_free(m->imports);
     wm_free(m->func_types);
@@ -1634,9 +1656,14 @@ uint32_t wm_module_code_bytes(const WmModule* m)
 
 #if WM_PREDECODE
 /*
- * Predecoding only speeds the module up: it is done once, when the first
- * instance has its memory, and without the memory for the records the
- * module runs in place, with its side table.
+ * Predecoding only speeds the module up. Whether every function can be
+ * predecoded is found when the first instance has its memory: each one is
+ * predecoded once (other modules' records go if there is no room) and its
+ * records let go, and the side table goes too. The records the module then
+ * runs on are made at each function's first call, from its side table
+ * entries made again (wm_code_side), and come and go with the code cache
+ * (wm_code.c). A module that cannot be predecoded, or without the memory to
+ * try, runs in place.
  */
 void wm_module_predecode(WmModule* m)
 {
@@ -1646,20 +1673,58 @@ void wm_module_predecode(WmModule* m)
         return;
     m->predecode_tried = 1;
     for (uint32_t i = 0; !predecoded && i < defined; ++i)
-        predecoded = wm_predecode(m, &m->codes[i]);
-    m->predecode_result = predecoded;
-    if (predecoded)
-        for (uint32_t i = 0; i < defined; ++i)
-        {
-            wm_free(m->codes[i].fast);
-            m->codes[i].fast = NULL;
-            m->codes[i].fast_cells = 0;
-        }
-    else
     {
-        /* The records hold every branch target: the side table's entries are no longer needed, only their count. */
+        predecoded = wm_code_make(m, &m->codes[i], m->side + m->codes[i].side);
+        wm_code_free(m->codes[i].fast);
+        m->codes[i].fast = NULL;
+        m->codes[i].fast_cells = 0;
+    }
+    m->predecode_result = predecoded;
+    if (!predecoded)
+    {
+        /* Records are made again from the function's entries, made again too (wm_code_side): only their count stays. */
         wm_free(m->side);
         m->side = NULL;
+        wm_code_add_module(m);
     }
+}
+
+/*
+ * One function's side table entries, made again: its body validated once
+ * more against a copy of the module whose side table starts empty. *out
+ * (wm_free) holds them, NULL when the function has none.
+ */
+WmResult wm_code_side(const WmModule* m, uint32_t index, WmSide** out)
+{
+    WmModule shadow = *m;
+    Loader l;
+    Reader r;
+    Validator v;
+    memset(&l, 0, sizeof(l));
+    memset(&v, 0, sizeof(v));
+    shadow.side = NULL;
+    shadow.side_count = 0;
+    l.m = &shadow;
+    l.again = 1;
+    l.has_data_count = 1;
+    l.data_count = m->data_count;
+    v.l = &l;
+    v.m = &shadow;
+    r.p = m->code_entries;
+    r.end = m->bytes + m->size;
+    r.error = NULL;
+    for (uint32_t i = 0; i < index && !r.error; ++i)
+        skip(&r, read_u32(&r));
+    read_code(&l, &r, index, &v);
+    wm_free(v.vals);
+    wm_free(v.ctls);
+    wm_free(v.locals);
+    if (r.error)
+    {
+        wm_free(shadow.side);
+        shadow.side = NULL;
+    }
+    *out = shadow.side;
+    return r.error;
 }
 #endif

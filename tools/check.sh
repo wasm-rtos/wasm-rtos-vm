@@ -17,6 +17,11 @@ cc -std=gnu99 -O1 -g -fsanitize=address source/*.c tools/wm-spec.c -lm -o build/
 python3 tools/spec.py build/wm-spec-fast "$SPEC" >/dev/null && echo "spec (predecoded): ok" || { echo "spec (predecoded): FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_PAGER=3 source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast-swap || exit 1
 python3 tools/spec.py build/wm-spec-fast-swap "$SPEC" >/dev/null 2>&1 && echo "spec (predecoded, swapped): ok" || { echo "spec (predecoded, swapped): FAIL"; fail=1; }
+# A code cache of one byte: records only for the functions on the stack, every other call makes them again.
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_CODE_LIMIT=1 source/*.c tools/wm-spec.c -lm -o build/wm-spec-code || exit 1
+python3 tools/spec.py build/wm-spec-code "$SPEC" >/dev/null && echo "spec (code cache of 1 byte): ok" || { echo "spec (code cache of 1 byte): FAIL"; fail=1; }
+cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/code.c -lm -o build/code || exit 1
+build/code >/dev/null && echo "code cache:    ok" || { echo "code cache:    FAIL"; build/code | grep FAIL; fail=1; }
 cc -std=gnu99 -O1 -g -DWM_SMALL_SIZES -DWM_TERSE_ERRORS=1 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-small || exit 1
 python3 tools/spec.py build/wm-spec-small "$SPEC" >/dev/null && echo "spec (small):  ok" || { echo "spec (small):  FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -DWM_COMPUTED_GOTO=0 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-switch || exit 1

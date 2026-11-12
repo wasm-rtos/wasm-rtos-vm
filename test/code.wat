@@ -1,0 +1,15 @@
+(module
+  (import "env" "back" (func $back (param i32) (result i32)))
+  (func $fib (export "fib") (param $n i32) (result i32)
+    (if (result i32) (i32.lt_u (local.get $n) (i32.const 2))
+      (then (local.get $n))
+      (else (i32.add (call $fib (i32.sub (local.get $n) (i32.const 1)))
+                     (call $fib (i32.sub (local.get $n) (i32.const 2)))))))
+  (func $square (export "square") (param $n i32) (result i32)
+    (i32.mul (local.get $n) (local.get $n)))
+  ;; n squared through the host, which calls square back in and drops the code cache meanwhile
+  (func $through (export "through") (param $n i32) (result i32)
+    (i32.add (call $back (local.get $n)) (call $fib (i32.const 10))))
+  (func (export "outer") (param $n i32) (result i32)
+    (i32.add (call $through (local.get $n)) (i32.const 1)))
+)

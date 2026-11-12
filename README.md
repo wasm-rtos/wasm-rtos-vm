@@ -37,17 +37,37 @@ with `tools/avr-size.sh [mcu] [flags]`:
 ## Predecoding
 
 With `WM_PREDECODE` (the default where labels can be values, except on
-AVR) each function is also written at load as records, one per
-instruction, in 32-bit cells: the first holds the handler and a 16-bit
-operand (a local's index, a small constant, a call's function, a branch's
-distance), so most instructions take one cell and branches two; the side
-table is freed then. The records follow the instructions one to one, so
-fuel counts the module's instructions and a snapshot position converts to
-an offset in the module and back: snapshots move between predecoding
-builds and ones that run the bytes in place. The cost is RAM, about twice
-the code (CoreMark: 7.2 KB of code, 16.7 KB of records). A module whose
-operands do not fit, or a chip without the memory for its records, runs
-the bytes in place.
+AVR) functions run from records, one per instruction, in 32-bit cells: the
+first holds the handler and a 16-bit operand (a local's index, a small
+constant, a call's function, a branch's distance), so most instructions
+take one cell and branches two. The records follow the instructions one to
+one, so fuel counts the module's instructions and a snapshot position
+converts to an offset in the module and back: snapshots move between
+predecoding builds and ones that run the bytes in place. A module whose
+operands do not fit runs the bytes in place.
+
+The records are a code cache. When the first instance is made every
+function is predecoded once, to know the module can be, and the side table
+is freed. A function's records are then made at its first call and dropped
+by CLOCK when memory runs short, when the cache is over its limit
+(`wm_code_cache_limit`) or on `wm_code_cache_trim`; to make them again the
+function is validated once more for its side table entries. Functions on a
+call stack keep theirs: every runtime's frames, where a suspended one
+stopped, and the callers of host functions that called back in. A call
+into a function without records stops the fast loop the way a TLB miss
+does, so nothing is called from inside it. Only called functions take RAM:
+
+| Program | All records | Records made |
+|---|---|---|
+| CoreMark | 16.8 KB | 16.8 KB |
+| C program with WASI stdio | 7.2 KB | 4.6 KB |
+| Arduino sketch (wasm-rtos test) | 81.8 KB | 69.5 KB |
+
+and a cache too small for the program still beats running in place: Mac
+CoreMark 2619 with every record, 2045 with a 1-byte cache (only the
+functions on the stack keep records), 973 in place. `test/code.c` runs
+calls with caches of every size down to one byte, through recursion, host
+functions that call back in and empty the cache, and snapshots.
 
 ## Fuel and suspension
 
