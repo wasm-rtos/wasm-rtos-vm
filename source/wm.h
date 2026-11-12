@@ -306,6 +306,18 @@ uint32_t wm_memory_block_frames(const WmMemory* memory);
  * function or the pager.
  */
 WmResult wm_memory_block_out(WmMemory* memory);
+/*
+ * A paged memory with a pager goes back into one block, reached at full
+ * speed again: its frames in RAM are copied in, those in storage read back
+ * (an untouched one is zero), and their RAM and storage slots go; its
+ * frames stay reserved. The host calls it when RAM has room for the block
+ * (all its frames then count in RAM). NULL when done or it was a block
+ * already; wm_page_wait when a frame is on its way in or out in the
+ * background or pinned (try later); an error when the heap has no block
+ * that large or a read failed, and the memory stays paged. Not for the
+ * memory of a program that is running, as wm_memory_block_out.
+ */
+WmResult wm_memory_block_in(WmMemory* memory);
 
 /* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);

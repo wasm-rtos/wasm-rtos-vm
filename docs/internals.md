@@ -128,7 +128,10 @@ A memory the heap has no block for is paged instead, in frames of
 lets it stay in one block (its `block` callback, from the RAM it has to
 spare): then all its frames count as in RAM and are reserved in storage,
 and `wm_memory_block_out` sends it to storage whole (frames still all zero
-need no copy) and lets it go on paged. That keeps the fast path for every
+need no copy) and lets it go on paged. `wm_memory_block_in` makes a paged
+memory one block again when RAM has room: frames in RAM are copied, those
+in storage read back, and their RAM and slots go (as the kernel of an OS
+collapses small pages into a huge one). That keeps the fast path for every
 program that fits (Mac CoreMark with a pager: 2343 paged, 2595 in one
 block). A memory in one block is accessed as ever, by a bounds check. A paged one goes through a TLB
 shared by the memories (each has an address space number in the key), with
