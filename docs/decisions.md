@@ -163,7 +163,15 @@ as frames in a row.
   block through the pool, no heap); `page_store` with background writes
   (the pool has room for frames on their way out). Every kernel test with
   the pool wherever it sets a RAM budget.
-- Boards: the ESP32 scenario of a sleeper and a worker, where the block
-  could not come back before, must show it back; the same program on an
-  ESP32 paged and in one block, to know what the paged path costs there;
-  Mac CoreMark the same; ESP32 and Black Pill board checks.
+- Mac CoreMark with a pager: paged 2350, one block from the heap 2595, one
+  block from the pool 2605.
+- ESP32 (SD card store, 24 frames of RAM, programs of one 64 KiB page): the
+  sleeper's block went to the card when the worker needed RAM (197 ms) and
+  its memory came back as one block once the worker had ended (912 ms),
+  both results right. Before the pool it never came back: the heap had no
+  64 KiB piece left.
+- On an ESP32 without external RAM the pool takes the largest piece of
+  byte-addressable RAM: with 24 frames (96 KiB) 64 KiB of it was left, in
+  pieces of 16 KiB at most, too small for a value stack of 16 KiB. A board
+  sets its budget by what else it runs (16 to 20 frames there), or gives
+  the pool external RAM (`OsPageStore.ram` in wasm-rtos).
