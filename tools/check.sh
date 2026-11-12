@@ -74,6 +74,8 @@ done
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 out="$(tools/kernel-tests.sh)" || fail=1
 echo "kernel tests:  $(tail -1 <<<"$out")"
+grep '^FAIL' <<<"$out"
 out="$(CFLAGS=-DWM_MEMORY_ALWAYS_PAGED=1 tools/kernel-tests.sh)" || fail=1
 echo "kernel tests (paged): $(tail -1 <<<"$out")"
+grep '^FAIL' <<<"$out"
 exit $fail
