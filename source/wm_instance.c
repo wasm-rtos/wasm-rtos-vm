@@ -454,8 +454,11 @@ WmFunc* wm_host_function_new(const uint8_t* params, uint32_t param_count, const 
     if (!f)
         return NULL;
     types = (uint8_t*)(f + 1);
-    memcpy(types, params, param_count);
-    memcpy(types + param_count, results, result_count);
+    /* NULL types for none: memcpy may not be given NULL, even for no bytes. */
+    if (param_count)
+        memcpy(types, params, param_count);
+    if (result_count)
+        memcpy(types + param_count, results, result_count);
     f->params = types;
     f->param_count = param_count;
     f->results = types + param_count;

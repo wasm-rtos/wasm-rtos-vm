@@ -1,0 +1,116 @@
+name: Check
+
+# Everything tools/check.sh runs (the spec suite in many builds, fuel, paging,
+# swapping, snapshots, the code cache and the wasm-rtos kernel's tests on
+# this engine), and before it the engine built in every configuration with
+# warnings as errors. Tools come from releases on GitHub, checked against
+# their digests: the job needs nothing but GitHub to be reachable.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout the kernel and its tests
+        run: |
+          git clone --depth 1 https://github.com/wasm-rtos/wasm-rtos "$RUNNER_TEMP/wasm-rtos"
+          git clone --depth 1 https://github.com/wasm-rtos/wasm-rtos-tests "$RUNNER_TEMP/wasm-rtos-tests"
+          {
+            echo "KERNEL=$RUNNER_TEMP/wasm-rtos"
+            echo "TESTS_DIR=$RUNNER_TEMP/wasm-rtos-tests/tests"
+          } >> "$GITHUB_ENV"
+
+      # check.sh builds with cc: clang here, as on the machines it was written on.
+      - name: Use clang as cc
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -s "$(command -v clang)" "$RUNNER_TEMP/bin/cc"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # clang for wasm32 builds the snapshot test's program and the kernel's dylink.0 test library.
+      - name: Install the WASI SDK
+        env:
+          WASI_SDK_VERSION: "34"
+          WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+        run: |
+          archive="wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz"
+          sdk="$RUNNER_TEMP/wasi-sdk"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/$archive"
+          echo "$WASI_SDK_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$sdk"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$sdk" --strip-components=1
+          {
+            echo "WASM_CC=$sdk/bin/clang"
+            echo "WASM_LD=$sdk/bin/wasm-ld"
+          } >> "$GITHUB_ENV"
+
+      # The official test suite at tag wg-2.0, turned into JSON and modules by wast2json.
+      - name: Prepare the spec tests
+        env:
+          WABT_VERSION: "1.0.42"
+          WABT_SHA256: 84895407a6bbb80e918f33b16b2fb2206021c150b6bc9ff6f761263a745ab131
+          SPEC_TAG: wg-2.0
+          SPEC_COMMIT: fffc6e12fa454e475455a7b58d3b5dc343980c10
+        run: |
+          archive="wabt-${WABT_VERSION}-linux-x64.tar.gz"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/WebAssembly/wabt/releases/download/${WABT_VERSION}/$archive"
+          echo "$WABT_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/wabt"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/wabt" --strip-components=1
+          git clone --depth 1 --branch "$SPEC_TAG" https://github.com/WebAssembly/spec "$RUNNER_TEMP/spec"
+          test "$(git -C "$RUNNER_TEMP/spec" rev-parse HEAD)" = "$SPEC_COMMIT"
+          json="$RUNNER_TEMP/spec-json"
+          mkdir -p "$json"
+          for wast in "$RUNNER_TEMP"/spec/test/core/*.wast; do
+            (cd "$json" && "$RUNNER_TEMP/wabt/bin/wast2json" "$wast" -o "$(basename "$wast" .wast).json")
+          done
+          echo "SPEC=$json" >> "$GITHUB_ENV"
+          ls "$json"/*.json | wc -l
+
+      - name: Build every configuration
+        run: |
+          fail=0
+          while read -r flags; do
+            if cc -std=gnu99 -O2 -Wall -Wextra -Wno-unused-parameter -Werror $flags \
+                 source/*.c tools/wm-spec.c -lm -o /tmp/wm-config; then
+              echo "ok   [$flags]"
+            else
+              echo "FAIL [$flags]"
+              fail=1
+            fi
+          done <<'EOF'
+
+          -DWM_PREDECODE=0
+          -DWM_COMPUTED_GOTO=0
+          -DWM_FRAME_SIZE=0
+          -DWM_FRAME_SIZE=256
+          -DWM_FRAME_SIZE=65536
+          -DWM_SMALL_SIZES -DWM_TERSE_ERRORS=1
+          -DWM_HAS_VALIDATION=0
+          -DWM_HAS_I64=0 -DWM_HAS_REF_TYPES=0
+          -DWM_HAS_FLOAT=0
+          -DWM_HAS_TRACE=0
+          -DWM_HAS_ALLOCATOR=0
+          -DWM_FUSE=1 -DWM_NOP_RUNS=1
+          -DWM_INLINE_OPS=0
+          -DWM_FRAME_SIZE=0 -DWM_PREDECODE=0 -DWM_HAS_TRACE=0 -DWM_TERSE_ERRORS=1
+          EOF
+          exit $fail
+
+      - name: Run tools/check.sh
+        run: tools/check.sh

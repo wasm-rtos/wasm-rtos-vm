@@ -41,8 +41,14 @@ for name in "${names[@]}"; do
     # The dylink.0 test's library is built here, as the test runner builds it.
     if [ "$name" = "dylink0" ] && [ ! -f "$dir/libdylink0.so" ]; then
         wasm_cc="${WASM_CC:-/opt/homebrew/opt/llvm/bin/clang}"
+        wasm_ld="${WASM_LD:-wasm-ld}"
+        pic_flags=()
+        # grep without -q reads the whole help: with pipefail an early exit would count as no.
+        if "$wasm_ld" --help 2>&1 | grep -- '--experimental-pic' >/dev/null; then
+            pic_flags+=(--experimental-pic)
+        fi
         "$wasm_cc" --target=wasm32 -nostdlib -fPIC -O0 -c "$dir/library.c" -o "$dir/library.o" &&
-            "${WASM_LD:-wasm-ld}" -m wasm32 --experimental-pic --shared --no-entry \
+            "$wasm_ld" -m wasm32 ${pic_flags[@]+"${pic_flags[@]}"} --shared --no-entry \
                 --unresolved-symbols=import-dynamic --export=library_add --export=library_name \
                 --export=library_fill --export=library_apply --export=library_increment \
                 -o "$dir/libdylink0.so" "$dir/library.o" >"$dir/build.txt" 2>&1
@@ -62,3 +68,4 @@ for name in "${names[@]}"; do
     fi
 done
 echo "total: $passed passed, $failed failed"
+[ "$failed" -eq 0 ]
