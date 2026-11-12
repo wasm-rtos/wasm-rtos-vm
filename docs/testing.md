@@ -62,6 +62,11 @@ cc -std=gnu99 -O1 source/*.c test/fuel.c -lm -o build/fuel && build/fuel
   block, and the program ends as it would have; zero frames need no copy; a
   pin or a failed write keeps the block, a pin keeps a paged memory paged;
   `memory.grow` in one block, then paged.
+- `test/pool.c`: the frame pool: frames of three memories in turn and one
+  still goes into one block; pins; a program's memory does not move during
+  its host call and does between calls; a program goes into one block
+  between two slices; a block grows in place or goes out; the whole pool
+  as one block once freed.
 - `test/room.c`: a heap capped by a counting allocator; `memory.grow`
   gets its frames by dropping another function's records, and fails
   rather than drop those of the function that runs.

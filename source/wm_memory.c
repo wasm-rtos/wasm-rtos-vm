@@ -234,17 +234,90 @@ static void* frames_realloc(void* ptr, size_t size)
     return p;
 }
 
-/* A zeroed frame coming into RAM; with a pager, once it has made room. */
-static uint8_t* new_frame(const WmPager* pager)
+/*
+ * The frame pool (decision 6): a region the host gives for frames, so they
+ * do not cut up the heap. With a pool every frame of a memory with a pager
+ * comes from it, and a memory in one block is its frames in a row there.
+ * The engine knows which memory and index use each frame of the pool, and
+ * every pointer to it (the memory's frame table, the TLB), so it moves
+ * frames to make room for a block.
+ */
+typedef struct WmPoolOwner
 {
+    /* NULL: the frame is free. */
+    WmMemory* memory;
+    uint32_t index;
+} WmPoolOwner;
+static uint8_t* g_pool;
+static WmPoolOwner* g_pool_owner;
+static uint32_t g_pool_frames, g_pool_hint;
+
+static uint8_t* pool_frame(uint32_t slot) { return g_pool + ((size_t)slot << WM_FRAME_LOG2); }
+static int in_pool(const uint8_t* frame) { return g_pool && frame >= g_pool && frame < pool_frame(g_pool_frames); }
+static uint32_t pool_slot(const uint8_t* frame) { return (uint32_t)((size_t)(frame - g_pool) >> WM_FRAME_LOG2); }
+
+void wm_set_frame_pool(uint8_t* memory, uint32_t frames)
+{
+    wm_free(g_pool_owner);
+    g_pool = NULL;
+    g_pool_owner = NULL;
+    g_pool_frames = g_pool_hint = 0;
+    if (memory && frames && (g_pool_owner = (WmPoolOwner*)wm_calloc(frames, sizeof(WmPoolOwner))))
+    {
+        g_pool = memory;
+        g_pool_frames = frames;
+    }
+}
+
+/* A free frame of the pool for frame index of memory, zeroed; NULL when every one is used. */
+static uint8_t* pool_take(WmMemory* memory, uint32_t index)
+{
+    for (uint32_t n = 0; n < g_pool_frames; ++n)
+    {
+        uint32_t s = (g_pool_hint + n) % g_pool_frames;
+        if (!g_pool_owner[s].memory)
+        {
+            g_pool_owner[s].memory = memory;
+            g_pool_owner[s].index = index;
+            g_pool_hint = s + 1u;
+            memset(pool_frame(s), 0, WM_FRAME);
+            return pool_frame(s);
+        }
+    }
+    return NULL;
+}
+
+/* A block's frames go back to the pool. */
+static void pool_release_block(const uint8_t* data, uint32_t frames)
+{
+    for (uint32_t i = 0, s = pool_slot(data); i < frames; ++i)
+        g_pool_owner[s + i].memory = NULL;
+}
+
+/* A frame leaves RAM or its memory: back to the pool it came from, or to the heap. */
+static void frame_free(uint8_t* frame)
+{
+    if (in_pool(frame))
+        g_pool_owner[pool_slot(frame)].memory = NULL;
+    else
+        wm_free(frame);
+}
+
+/* A zeroed frame coming into RAM; with a pager, once it has made room. */
+static uint8_t* new_frame(WmMemory* memory, uint32_t index)
+{
+    const WmPager* pager = memory->pager;
     uint8_t* frame;
     if (!pager)
         return (uint8_t*)frames_calloc(WM_FRAME, 1);
     if (!ring_room() || (pager->room && !pager->room(pager->context, 0)))
         return NULL;
-    /* The pager's choice first (a frame to storage), the code cache when it has none. */
-    while (!(frame = (uint8_t*)wm_calloc(WM_FRAME, 1)))
-        if (!(pager->room && pager->room(pager->context, 1)) && !wm_code_drop_one())
+    /*
+     * The pager's choice first (a frame to storage); without a pool the code
+     * cache when it has none (records are in the heap, not in the pool).
+     */
+    while (!(frame = g_pool ? pool_take(memory, index) : (uint8_t*)wm_calloc(WM_FRAME, 1)))
+        if (!(pager->room && pager->room(pager->context, 1)) && (g_pool || !wm_code_drop_one()))
             return NULL;
     ++g_resident;
     return frame;
@@ -262,7 +335,7 @@ static int finish_loading(WmMemory* memory, uint32_t index)
     if (!(g_frame_error = memory->pager->finish(memory->pager->context, memory->slots[index])))
         return 1;
     ring_remove(memory, index);
-    wm_free(memory->frames[index]);
+    frame_free(memory->frames[index]);
     memory->frames[index] = WM_FRAME_OUT;
     --g_resident;
     return 0;
@@ -290,7 +363,7 @@ static void free_frame(WmMemory* memory, uint32_t index)
     if (frame_here(frame))
     {
         ring_remove(memory, index);
-        wm_free(frame);
+        frame_free(frame);
         if (memory->pager)
             --g_resident;
     }
@@ -318,7 +391,7 @@ static uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
     if (!frame_here(frame))
     {
         /* Untouched, or in the pager's storage: into RAM now. */
-        uint8_t* made = new_frame(memory->pager);
+        uint8_t* made = new_frame(memory, index);
         if (!made)
         {
             g_frame_error = E_MEMORY;
@@ -328,7 +401,7 @@ static uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
         if (frame_out(memory->frames[index]) &&
             (g_frame_error = memory->pager->read(memory->pager->context, memory->slots[index], made)))
         {
-            wm_free(made);
+            frame_free(made);
             --g_resident;
             return NULL;
         }
@@ -430,22 +503,6 @@ static size_t block_bytes(int paged, wm_size size)
     return paged ? (size_t)frames_for(size) << WM_FRAME_LOG2 : (size_t)size;
 }
 
-/* A memory just made in one block takes the pager, if the pager lets it stay so: 0 when it must be paged. */
-static int take_pager_block(WmMemory* memory, uint32_t count)
-{
-    memory->frame_count = count;
-    memory->frames = (uint8_t**)frames_calloc(count + 1u, sizeof(uint8_t*));
-    if (!memory->frames || !take_pager(memory))
-    {
-        wm_free(memory->frames);
-        memory->frames = NULL;
-        memory->frame_count = 0;
-        return 0;
-    }
-    g_resident += count;
-    return 1;
-}
-
 static void leave_pager(WmMemory* memory)
 {
     WmMemory** at = &g_swapped;
@@ -534,16 +591,9 @@ WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_l
     mem->max_pages = max_pages;
     mem->page_log2 = page_log2;
 #if WM_HAS_MMU
-    /* With a pager a memory is paged, so any frame may leave RAM, unless the pager lets it stay in one block. */
-    if (!WM_MEMORY_ALWAYS_PAGED && (!g_pager || (g_pager->block && g_pager->block(g_pager->context, frames_for(size)))))
-    {
-        mem->data = (uint8_t*)wm_calloc(block_bytes(g_pager != NULL, size) + 1u, 1);
-        if (mem->data && g_pager && !take_pager_block(mem, frames_for(size)))
-        {
-            wm_free(mem->data);
-            mem->data = NULL;
-        }
-    }
+    /* Without a pager: one block from the heap, if it has one. */
+    if (!WM_MEMORY_ALWAYS_PAGED && !g_pager)
+        mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
     if (!mem->data)
     {
         /* No block that large: paged, the frames made now, or reserved and made when touched. */
@@ -557,6 +607,9 @@ WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_l
             return NULL;
         }
         space_renew(mem);
+        /* With a pager it starts paged, and goes into one block (from the pool if there is one) when the pager lets it. */
+        if (!WM_MEMORY_ALWAYS_PAGED && g_pager && g_pager->block && g_pager->block(g_pager->context, count))
+            (void)wm_memory_block_in(mem);
     }
 #else
     mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
@@ -585,6 +638,11 @@ void wm_memory_free(WmMemory* mem)
     wm_free(mem->slots);
     wm_free(mem->ring_place);
     wm_free(mem->block);
+    if (mem->data && in_pool(mem->data))
+    {
+        pool_release_block(mem->data, mem->frame_count);
+        mem->data = NULL;
+    }
 #endif
     wm_free(mem->data);
     wm_free(mem);
@@ -624,6 +682,40 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
         return WM_NONE;
     if (delta == 0)
         return old;
+#if WM_HAS_MMU
+    if (mem->data && in_pool(mem->data))
+    {
+        /* A block of the pool grows in place, into free frames right after it, if the pager lets it. */
+        uint32_t have = mem->frame_count, more = frames_for(size) - have;
+        uint32_t first = pool_slot(mem->data) + have;
+        int room = mem->pager->block && mem->pager->block(mem->pager->context, more) && first + more <= g_pool_frames;
+        for (uint32_t i = 0; room && i < more; ++i)
+            room = !g_pool_owner[first + i].memory;
+        if (room)
+        {
+            if (!mem->pager->reserve(mem->pager->context, (int32_t)more))
+                return WM_NONE;
+            if (!grow_frames(mem, have + more))
+            {
+                mem->pager->reserve(mem->pager->context, -(int32_t)more);
+                return WM_NONE;
+            }
+            for (uint32_t i = 0; i < more; ++i)
+            {
+                g_pool_owner[first + i].memory = mem;
+                g_pool_owner[first + i].index = have + i;
+            }
+            if (more)
+                memset(pool_frame(first), 0, (size_t)more << WM_FRAME_LOG2);
+            g_resident += more;
+            mem->pages = pages;
+            return old;
+        }
+        /* No room after it: the block goes to storage and the memory grows paged. */
+        if (wm_memory_block_out(mem))
+            return WM_NONE;
+    }
+#endif
     if (mem->data)
     {
         uint8_t* data = NULL;
@@ -710,12 +802,12 @@ static WmResult start_loading(WmMemory* memory, uint32_t index)
         return wm_page_wait;
     if (!frame_out(memory->frames[index]) || !memory->pager->read_start)
         return NULL;
-    if (!(made = new_frame(memory->pager)))
+    if (!(made = new_frame(memory, index)))
         return E_MEMORY;
     result = memory->pager->read_start(memory->pager->context, memory->slots[index], made, memory, index);
     if (result && result != wm_page_wait)
     {
-        wm_free(made);
+        frame_free(made);
         --g_resident;
         return result;
     }
@@ -740,7 +832,7 @@ void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result)
         return;
     }
     ring_remove(memory, index);
-    wm_free(memory->frames[index]);
+    frame_free(memory->frames[index]);
     memory->frames[index] = WM_FRAME_OUT;
     --g_resident;
 }
@@ -753,7 +845,7 @@ void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result)
     if (result)
     {
         ring_remove(memory, index);
-        wm_free(memory->frames[index]);
+        frame_free(memory->frames[index]);
         memory->frames[index] = WM_FRAME_OUT;
         --g_resident;
     }
@@ -854,23 +946,17 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
     }
     ring_remove(memory, index);
     memory->frames[index] = slot != WM_NONE ? WM_FRAME_OUT : NULL;
-    wm_free(frame);
+    frame_free(frame);
     --g_resident;
     return NULL;
 }
 
 uint32_t wm_memory_block_frames(const WmMemory* memory) { return is_pager_block(memory) ? memory->frame_count : 0u; }
 
-WmResult wm_memory_block_in(WmMemory* memory)
+/* Without a pool: a block from the heap, the frames copied or read into it. */
+static WmResult heap_block_in(WmMemory* memory)
 {
     uint8_t* data;
-    if (memory->data)
-        return NULL;
-    if (!memory->pager || memory->block_frames)
-        return WM_ERR_UNSUPPORTED("unsupported: only a memory with a pager goes back into one block");
-    for (uint32_t i = 0; i < memory->frame_count; ++i)
-        if (memory->marks[i] & (WM_MARK_PINS | WM_MARK_LOADING | WM_MARK_WRITING | WM_MARK_LEAVING))
-            return wm_page_wait;
     if (!(data = (uint8_t*)wm_calloc(((size_t)memory->frame_count << WM_FRAME_LOG2) + 1u, 1)))
         return E_MEMORY;
     /* Every frame into the block first: until all are, the frames stay the memory. */
@@ -898,6 +984,206 @@ WmResult wm_memory_block_in(WmMemory* memory)
     memory->data = data;
     g_resident += memory->frame_count;
     return NULL;
+}
+
+/* Marks a frame has while something else is using it: it stays where it is. */
+#define WM_MARK_BUSY (WM_MARK_PINS | WM_MARK_LOADING | WM_MARK_WRITING | WM_MARK_LEAVING)
+
+/*
+ * A memory a call in progress uses: an instance of one of the functions on
+ * the call stack of a runtime that is running or in a host function. The
+ * host may hold pointers into it, so its frames and block do not move.
+ */
+static int memory_in_use(const WmMemory* memory)
+{
+#if WM_TRACKS_CALLERS
+    for (const WmRuntime* rt = wm_runtimes(); rt; rt = rt->next)
+    {
+        if (!rt->nesting)
+            continue;
+        if (rt->caller && rt->caller->instance && rt->caller->instance->memory == memory)
+            return 1;
+        for (const WmNest* n = rt->nest; n; n = n->up)
+            if (n->caller && n->caller->instance && n->caller->instance->memory == memory)
+                return 1;
+        for (uint32_t i = 0; i < rt->depth; ++i)
+            if (rt->frames[i].func && rt->frames[i].func->instance && rt->frames[i].func->instance->memory == memory)
+                return 1;
+    }
+#else
+    (void)memory;
+#endif
+    return 0;
+}
+
+/* The owner of pool frame slot finds it there again: its frame table, and no TLB entry left for the old place. */
+static void pool_point(uint32_t slot)
+{
+    WmPoolOwner* o = &g_pool_owner[slot];
+    if (o->memory && !o->memory->data)
+    {
+        o->memory->frames[o->index] = pool_frame(slot);
+        tlb_forget_frame(o->memory->space, o->index);
+    }
+}
+
+/* Two frames of the pool change places, bytes and owners. */
+static void pool_swap(uint32_t a, uint32_t b)
+{
+    uint8_t* x = pool_frame(a);
+    uint8_t* y = pool_frame(b);
+    WmPoolOwner owner = g_pool_owner[a];
+    for (uint32_t i = 0; i < WM_FRAME; i += 64u)
+    {
+        uint8_t keep[64];
+        memcpy(keep, x + i, 64u);
+        memcpy(x + i, y + i, 64u);
+        memcpy(y + i, keep, 64u);
+    }
+    g_pool_owner[a] = g_pool_owner[b];
+    g_pool_owner[b] = owner;
+    pool_point(a);
+    pool_point(b);
+}
+
+/* A free frame of the pool outside from..to (inclusive), or else inside after to; WM_NONE when none is. */
+static uint32_t pool_free_slot(uint32_t from, uint32_t to, uint32_t end)
+{
+    for (uint32_t s = 0; s < g_pool_frames; ++s)
+        if ((s < from || s >= end) && !g_pool_owner[s].memory)
+            return s;
+    for (uint32_t s = to + 1u; s < end; ++s)
+        if (!g_pool_owner[s].memory)
+            return s;
+    return WM_NONE;
+}
+
+/*
+ * With a pool: the memory's frames in a row in it. A window of the pool is
+ * chosen that holds nothing that may not move (another block, a frame in
+ * use or busy) and the fewest frames of other memories; then frame j of the
+ * memory is put in place j of the window, other frames moving out of the
+ * way, and those still to come are read from storage or zeroed. No heap,
+ * and no storage when the frames are in RAM.
+ */
+static WmResult pool_block_in(WmMemory* memory)
+{
+    uint32_t n = memory->frame_count, best = WM_NONE, best_cost = WM_NONE, free_count = 0, own = 0, here = 0;
+    uint8_t* fixed;
+    if (n > g_pool_frames)
+        return E_MEMORY;
+    if (!(fixed = (uint8_t*)wm_malloc(g_pool_frames + 1u)))
+        return E_MEMORY;
+    for (uint32_t s = 0; s < g_pool_frames; ++s)
+    {
+        WmMemory* m = g_pool_owner[s].memory;
+        free_count += !m;
+        own += m == memory;
+        fixed[s] = m && m != memory && (m->data || (m->marks[g_pool_owner[s].index] & WM_MARK_BUSY) || memory_in_use(m));
+    }
+    /* Room for the frames it has not in RAM yet. */
+    if (free_count < n - own)
+    {
+        wm_free(fixed);
+        return E_MEMORY;
+    }
+    for (uint32_t s = 0; s + n <= g_pool_frames; ++s)
+    {
+        uint32_t cost = 0, j = 0;
+        for (; j < n && !fixed[s + j]; ++j)
+            if (g_pool_owner[s + j].memory && !(g_pool_owner[s + j].memory == memory && g_pool_owner[s + j].index == j))
+                ++cost;
+        if (j == n && cost < best_cost)
+            best = s, best_cost = cost;
+    }
+    wm_free(fixed);
+    /* Something that may not move is in the way of every window: later, when it may. */
+    if (best == WM_NONE)
+        return wm_page_wait;
+    for (uint32_t j = 0; j < n; ++j)
+    {
+        uint32_t t = best + j;
+        uint8_t* frame = memory->frames[j];
+        if (frame_here(frame) && in_pool(frame))
+        {
+            if (pool_slot(frame) != t)
+                pool_swap(t, pool_slot(frame));
+            continue;
+        }
+        if (g_pool_owner[t].memory)
+        {
+            uint32_t to = pool_free_slot(best, t, best + n);
+            if (to == WM_NONE)
+                return E_MEMORY;
+            pool_swap(t, to);
+        }
+        /* Taken for frame j, to be read or zeroed below; frames[j] still says where it is. */
+        g_pool_owner[t].memory = memory;
+        g_pool_owner[t].index = j;
+    }
+    /* The frames not in RAM come in: from storage, or zero. */
+    for (uint32_t j = 0; j < n; ++j)
+    {
+        uint8_t* to = pool_frame(best + j);
+        uint8_t* frame = memory->frames[j];
+        WmResult result = NULL;
+        if (frame_here(frame) && in_pool(frame))
+        {
+            ++here;
+            continue;
+        }
+        if (frame_here(frame))
+            memcpy(to, frame, WM_FRAME);
+        else if (frame_out(frame))
+            result = memory->pager->read(memory->pager->context, memory->slots[j], to);
+        else
+            memset(to, 0, WM_FRAME);
+        if (result)
+        {
+            /* The places taken for frames still to come are free again; the memory stays paged, its frames moved. */
+            for (uint32_t k = 0; k < n; ++k)
+                if (!(frame_here(memory->frames[k]) && in_pool(memory->frames[k])))
+                    g_pool_owner[best + k].memory = NULL;
+            return result;
+        }
+    }
+    /* The memory is its block now: frames, ring places, storage slots and marks go. */
+    for (uint32_t j = 0; j < n; ++j)
+    {
+        uint8_t* frame = memory->frames[j];
+        if (frame_here(frame))
+        {
+            ring_remove(memory, j);
+            if (!in_pool(frame))
+            {
+                wm_free(frame);
+                --g_resident;
+            }
+        }
+        if (memory->slots[j] != WM_NONE)
+        {
+            memory->pager->drop(memory->pager->context, memory->slots[j]);
+            memory->slots[j] = WM_NONE;
+        }
+        memory->frames[j] = NULL;
+        memory->marks[j] = 0;
+    }
+    space_release(memory);
+    memory->data = pool_frame(best);
+    g_resident += n - here;
+    return NULL;
+}
+
+WmResult wm_memory_block_in(WmMemory* memory)
+{
+    if (memory->data)
+        return NULL;
+    if (!memory->pager || memory->block_frames)
+        return WM_ERR_UNSUPPORTED("unsupported: only a memory with a pager goes back into one block");
+    for (uint32_t i = 0; i < memory->frame_count; ++i)
+        if (memory->marks[i] & WM_MARK_BUSY)
+            return wm_page_wait;
+    return g_pool ? pool_block_in(memory) : heap_block_in(memory);
 }
 
 /* A frame of bytes all zero: it needs no copy in storage, as an untouched frame reads as zero. */
@@ -940,7 +1226,10 @@ WmResult wm_memory_block_out(WmMemory* memory)
         return result;
     }
     memory->data = NULL;
-    wm_free(data);
+    if (in_pool(data))
+        pool_release_block(data, memory->frame_count);
+    else
+        wm_free(data);
     g_resident -= memory->frame_count;
     for (uint32_t i = 0; i < memory->frame_count; ++i)
         memory->marks[i] = 0;
@@ -979,6 +1268,7 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
 #else
 
 void wm_set_pager(const WmPager* pager) { (void)pager; }
+void wm_set_frame_pool(uint8_t* memory, uint32_t frames) { (void)memory, (void)frames; }
 uint32_t wm_pager_resident(void) { return 0; }
 uint32_t wm_frame_size(void) { return 0; }
 int wm_pager_hand(WmMemory** memory, uint32_t* index) { (void)memory, (void)index; return 0; }

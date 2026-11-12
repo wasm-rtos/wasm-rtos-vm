@@ -24,6 +24,8 @@ cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/code.c -lm -o build/code
 build/code >/dev/null && echo "code cache:    ok" || { echo "code cache:    FAIL"; build/code | grep FAIL; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/room.c -lm -o build/room || exit 1
 build/room >/dev/null && echo "memory before code: ok" || { echo "memory before code: FAIL"; build/room | grep FAIL; fail=1; }
+cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/pool.c -lm -o build/pool || exit 1
+build/pool >/dev/null && echo "frame pool:    ok" || { echo "frame pool:    FAIL"; build/pool | grep FAIL; fail=1; }
 for size in 4096 256; do
     cc -std=gnu99 -O1 -g -fsanitize=address -DWM_FRAME_SIZE=$size source/*.c test/block.c -lm -o build/block || exit 1
     build/block >/dev/null && echo "block memory:  ok (frames $size)" || { echo "block memory:  FAIL (frames $size)"; build/block | grep FAIL; fail=1; }

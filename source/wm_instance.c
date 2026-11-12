@@ -560,6 +560,12 @@ void wm_free(void* ptr)
 void wm_set_allocator(WmAllocator a) { (void)a; }
 #endif
 
+#if WM_TRACKS_CALLERS
+static WmRuntime* g_runtimes;
+
+WmRuntime* wm_runtimes(void) { return g_runtimes; }
+#endif
+
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames)
 {
     WmRuntime* rt = (WmRuntime*)wm_calloc(1, sizeof(WmRuntime));
@@ -582,8 +588,9 @@ WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames)
     rt->stack_end = rt->stack + slots;
     rt->sp = rt->stack;
     rt->max_frames = max_frames;
-#if WM_PREDECODE
-    wm_code_add_runtime(rt);
+#if WM_TRACKS_CALLERS
+    rt->next = g_runtimes;
+    g_runtimes = rt;
 #endif
     return rt;
 }
@@ -592,8 +599,13 @@ void wm_runtime_free(WmRuntime* rt)
 {
     if (!rt)
         return;
-#if WM_PREDECODE
-    wm_code_remove_runtime(rt);
+#if WM_TRACKS_CALLERS
+    for (WmRuntime** at = &g_runtimes; *at; at = &(*at)->next)
+        if (*at == rt)
+        {
+            *at = rt->next;
+            break;
+        }
 #endif
     if (rt->stack)
         wm_free(rt->stack - 1);
@@ -641,7 +653,7 @@ WmResult wm_trap(WmRuntime* rt, WmResult trap)
 static WmResult finish(WmRuntime* rt, WmFunc* f, uint32_t* base, uint32_t depth, WmResult result, uint32_t* results)
 {
     --rt->nesting;
-#if WM_PREDECODE
+#if WM_TRACKS_CALLERS
     /* Back in the host function that called in, if one did: its caller is the running one again. */
     if (rt->nesting && rt->nest)
     {
@@ -670,7 +682,7 @@ WmResult wm_call(WmRuntime* rt, WmFunc* f, const uint32_t* args, uint32_t* resul
     uint32_t* base = rt->sp;
     uint32_t depth = rt->depth;
     WmResult result;
-#if WM_PREDECODE
+#if WM_TRACKS_CALLERS
     /* A host function calling in: its caller keeps its records while this call runs. */
     WmNest nest;
 #endif
@@ -682,7 +694,7 @@ WmResult wm_call(WmRuntime* rt, WmFunc* f, const uint32_t* args, uint32_t* resul
 #if WM_HAS_TRACE
     rt->trap_func = NULL;
 #endif
-#if WM_PREDECODE
+#if WM_TRACKS_CALLERS
     if (rt->nesting)
     {
         nest.caller = rt->caller;

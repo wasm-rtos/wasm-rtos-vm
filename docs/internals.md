@@ -131,7 +131,18 @@ and `wm_memory_block_out` sends it to storage whole (frames still all zero
 need no copy) and lets it go on paged. `wm_memory_block_in` makes a paged
 memory one block again when RAM has room: frames in RAM are copied, those
 in storage read back, and their RAM and slots go (as the kernel of an OS
-collapses small pages into a huge one). That keeps the fast path for every
+collapses small pages into a huge one).
+
+With a frame pool (`wm_set_frame_pool`, decision 6 in
+[decisions.md](decisions.md)) frames of memories with a pager come from a
+region set aside at the start, never from the heap, and a block is the
+memory's frames in a row in the pool. To make one, the engine picks a
+window of the pool that holds nothing that may not move (another block, a
+pinned or busy frame, a frame of a memory a call in progress uses), swaps
+frames out of the way and the memory's own into place, and reads or zeroes
+the rest: no heap and, for frames in RAM, no storage. It keeps for each
+frame of the pool which memory and index use it, and moving one updates
+that memory's frame table and drops its TLB entry. That keeps the fast path for every
 program that fits (Mac CoreMark with a pager: 2343 paged, 2595 in one
 block). A memory in one block is accessed as ever, by a bounds check. A paged one goes through a TLB
 shared by the memories (each has an address space number in the key), with

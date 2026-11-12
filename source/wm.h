@@ -254,6 +254,16 @@ typedef struct WmPager
 } WmPager;
 /* The pager memories made from now on use; NULL: none, memories stay in RAM. */
 void wm_set_pager(const WmPager* pager);
+/*
+ * The region frames of memories with a pager come from: frames of
+ * wm_frame_size() bytes each, as many as the host keeps in RAM for them
+ * (NULL: frames from the heap). Set it with the pager, before memories are
+ * made. Frames then never cut up the heap, and a memory in one block is its
+ * frames in a row in the pool: the engine moves frames, between calls, to
+ * make room for a block (not those of a memory a call in progress uses, nor
+ * pinned ones).
+ */
+void wm_set_frame_pool(uint8_t* memory, uint32_t frames);
 /* Paged memories with a pager, one after another from NULL. */
 WmMemory* wm_memory_next(WmMemory* after);
 /*

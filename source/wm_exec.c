@@ -2225,6 +2225,9 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 rt->fuel = fuel;
             TRACE_CLEAR();
             rt->host_trap = NULL;
+#if WM_TRACKS_CALLERS
+            rt->caller = func;
+#endif
             if ((trap = callee->host(rt, callee->user, args, inst->memory)) || (trap = rt->host_trap))
                 TRAP_AFTER_HOST(trap);
             fuel_on = rt->fuel_on && rt->nesting == 1u;
