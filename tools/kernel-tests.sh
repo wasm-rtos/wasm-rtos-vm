@@ -62,3 +62,4 @@ for name in "${names[@]}"; do
     fi
 done
 echo "total: $passed passed, $failed failed"
+[ "$failed" -eq 0 ]
