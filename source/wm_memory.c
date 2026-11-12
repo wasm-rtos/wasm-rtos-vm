@@ -275,7 +275,12 @@ static void free_frame(WmMemory* memory, uint32_t index)
     memory->frames[index] = NULL;
 }
 
-uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
+/*
+ * A frame of a memory, made (zeroed) if it was untouched or brought back
+ * from the pager's storage, and marked dirty when it is for writing; NULL
+ * without memory, past the end, or when it cannot come into RAM.
+ */
+static uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
 {
     uint8_t* frame;
     if (memory->data)

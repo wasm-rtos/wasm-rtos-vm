@@ -44,7 +44,7 @@ static int64_t read_signed(const uint8_t** p)
     return (int64_t)value;
 }
 
-WmResult wm_eval_const(WmInstance* instance, const uint8_t* expr, uint64_t* out)
+static WmResult wm_eval_const(WmInstance* instance, const uint8_t* expr, uint64_t* out)
 {
     const uint8_t* p = expr;
     uint64_t value = 0;

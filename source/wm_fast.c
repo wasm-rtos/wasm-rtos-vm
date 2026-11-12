@@ -389,7 +389,7 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
         wm_free(targets);
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
     }
-    code->fast_cells = cells;
+    code->fast_cells = (uint16_t)cells;
     out = code->fast;
     for (p = code->body; p <= code->end;)
     {
