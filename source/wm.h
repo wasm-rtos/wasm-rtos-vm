@@ -81,6 +81,29 @@ uint32_t wm_module_code_bytes(const WmModule* module);
 WmResult wm_module_predecoded(const WmModule* module);
 
 /*
+ * The code cache: a predecoded function's records are made when it is first
+ * called and dropped when they are needed for room: when an allocation for
+ * records fails, when the cache is over its limit, or by
+ * wm_code_cache_trim. Functions on a call stack keep theirs. One cache for
+ * every module and runtime, used from one thread at a time.
+ *
+ * The records come from allocator when one is set (NULL: the engine's, see
+ * wm_set_allocator): a host that charges memory to its programs can leave
+ * the cache, which they share, out of their accounts.
+ */
+void wm_set_code_allocator(WmAllocator allocator);
+/* Bytes of records the cache may hold before it drops some; 0 (the default): as many as memory allows. */
+void wm_code_cache_limit(size_t bytes);
+/* Bytes of records it holds. */
+size_t wm_code_cache_bytes(void);
+/*
+ * Drop records until at most keep bytes are left, or only those of
+ * functions on a call stack; the bytes left. Not from inside the engine's
+ * calls other than a host function's.
+ */
+size_t wm_code_cache_trim(size_t keep);
+
+/*
  * Finds what an import binds to. Returning an error fails the
  * instantiation; leaving a function import unresolved (out->as.func NULL)
  * makes calls to it trap until wm_instance_link_function binds it.

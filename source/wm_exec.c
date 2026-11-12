@@ -1499,8 +1499,6 @@ call:
         WmFrame* frame;
         if (rt->depth >= rt->max_frames)
             TRAP(T_STACK);
-        if (!callee->code->fast)
-            TRAP(WM_ERR_TRAP("trap: a call into code that is not predecoded"));
         frame = &rt->frames[rt->depth++];
         frame->pc = (const uint8_t*)(const void*)ip;
         frame->st = NULL;
@@ -1513,6 +1511,14 @@ call:
             TRAP(T_STACK);
         zero_slots(sp, code->local_slots);
         sp += code->local_slots;
+        /* No records: the loop stops in the new frame, wm_execute has them made and goes on at the first. */
+        if (__builtin_expect(!code->fast, 0))
+        {
+            ip = NULL;
+            stop = wm_code_stop;
+            goto suspend;
+        }
+        ((WmCode*)code)->used = 1;
         ip = code->fast;
         FAST_NEXT();
     }
@@ -1527,6 +1533,7 @@ call:
             rt->fuel = fuel;
         TRACE_CLEAR();
         rt->host_trap = NULL;
+        rt->caller = func;
         if ((trap = callee->host(rt, callee->user, args, inst->memory)) || (trap = rt->host_trap))
             TRAP_AFTER_HOST(trap);
         fuel_on = rt->fuel_on && rt->nesting == 1u;
@@ -1600,23 +1607,44 @@ const uint16_t* wm_fast_handlers(void)
 WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
 {
 #if WM_PREDECODE
-    if ((resume ? rt->saved.func : func)->code->fast)
+    if (WM_RUNS_FAST((resume ? rt->saved.func : func)->instance->module))
     {
-        WmResult result = run_fast(rt, func, resume);
-#if WM_HAS_MMU
-        while (result == wm_page_stop)
+        WmResult result = resume ? NULL : wm_code_load(func);
+        if (result)
+            return result;
+        result = run_fast(rt, func, resume);
+        for (;;)
         {
-            if ((result = page_fault(rt)))
+#if WM_HAS_MMU
+            if (result == wm_page_stop)
             {
-                /* Waiting for a frame: still suspended at the access, which runs again. */
-                if (result != wm_page_wait)
-                    rt->suspended = 0;
-                return result;
+                if ((result = page_fault(rt)))
+                {
+                    /* Waiting for a frame: still suspended at the access, which runs again. */
+                    if (result != wm_page_wait)
+                        rt->suspended = 0;
+                    return result;
+                }
             }
+            else
+#endif
+            if (result == wm_code_stop)
+            {
+                if ((result = wm_code_load(rt->saved.func)))
+                {
+                    rt->suspended = 0;
+#if WM_HAS_TRACE
+                    rt->trap_func = rt->saved.func;
+                    rt->trap_depth = rt->depth;
+#endif
+                    return result;
+                }
+                rt->saved.pc = (const uint8_t*)(const void*)rt->saved.func->code->fast;
+            }
+            else
+                return result;
             result = run_fast(rt, func, 1);
         }
-#endif
-        return result;
     }
 #endif
     uint32_t entry_depth = rt->depth;

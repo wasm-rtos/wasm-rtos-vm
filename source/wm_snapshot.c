@@ -109,16 +109,19 @@ static void put_position(Stream* s, const WmInstance* inst, const WmRuntime* rt,
 {
     uint32_t offset = 0;
     uint32_t side = 0;
-    if (!func->code->fast)
+#if WM_PREDECODE
+    /* A predecoded position is a record (its function on a stack keeps them): written as the instruction it stands for. */
+    if (WM_RUNS_FAST(func->instance->module))
+    {
+        if (!wm_fast_position(func->instance->module, func->code, (const WmCell*)(const void*)pc, &offset, &side))
+            s->error = wm_snapshot_invalid;
+    }
+    else
+#endif
     {
         offset = (uint32_t)(pc - inst->module->bytes);
         side = (uint32_t)(st - inst->module->side);
     }
-#if WM_PREDECODE
-    /* A predecoded position is a record: written as the instruction it stands for. */
-    if (func->code->fast && !wm_fast_position(inst->module, func->code, (const WmCell*)(const void*)pc, &offset, &side))
-        s->error = wm_snapshot_invalid;
-#endif
     put32(s, func_index(inst, func));
     put32(s, offset);
     put32(s, side);
@@ -141,21 +144,34 @@ static WmResult get_position(Stream* s, WmInstance* inst, WmRuntime* rt, WmFunc*
         (*func)->code->end < m->bytes + offset || side > m->side_count || slot > stack_slots)
         return wm_snapshot_invalid;
     *fp = rt->stack + slot;
-#if WM_PREDECODE
-    if ((*func)->code->fast)
-    {
-        const WmCell* ip = wm_fast_ip(m, (*func)->code, offset);
-        if (!ip)
-            return wm_snapshot_invalid;
-        *pc = (const uint8_t*)(const void*)ip;
-        *st = NULL;
-        return NULL;
-    }
-#endif
     *pc = m->bytes + offset;
-    *st = m->side + side;
+    /* A predecoded module keeps only the count of its side table: to_record makes the position a record. */
+    *st = m->side ? m->side + side : NULL;
     return NULL;
 }
+
+#if WM_PREDECODE
+/*
+ * A position in a predecoded function, read as its instruction: now its
+ * record. The records are made here, once every frame is on the runtime,
+ * so that making some cannot drop others the snapshot stopped in.
+ */
+static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st)
+{
+    const WmModule* m = func->instance->module;
+    const WmCell* ip;
+    WmResult result;
+    if (!WM_RUNS_FAST(m))
+        return NULL;
+    if ((result = wm_code_load(func)))
+        return result;
+    if (!(ip = wm_fast_ip(m, func->code, (uint32_t)(*pc - m->bytes))))
+        return wm_snapshot_invalid;
+    *pc = (const uint8_t*)(const void*)ip;
+    *st = NULL;
+    return NULL;
+}
+#endif
 
 static uintptr_t put_ref_index(const WmInstance* inst, uint8_t type, uintptr_t ref)
 {
@@ -451,5 +467,17 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
     rt->depth = depth;
     rt->sp = saved->sp;
     rt->suspended = 1;
+#if WM_PREDECODE
+    result = to_record(saved->func, &saved->pc, &saved->st);
+    for (uint32_t i = 0; !result && i < depth; ++i)
+        result = to_record(rt->frames[i].func, &rt->frames[i].pc, &rt->frames[i].st);
+    if (result)
+    {
+        rt->depth = 0;
+        rt->sp = rt->stack;
+        rt->suspended = 0;
+        return result;
+    }
+#endif
     return NULL;
 }

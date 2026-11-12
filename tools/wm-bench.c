@@ -54,9 +54,11 @@ int main(int argc, char** argv)
     float score;
     if (!f)
     {
-        fprintf(stderr, "usage: %s program.wasm [slice]\n", argv[0]);
+        fprintf(stderr, "usage: %s program.wasm [slice] [code cache bytes]\n", argv[0]);
         return 2;
     }
+    if (argc > 3)
+        wm_code_cache_limit((size_t)strtoul(argv[3], NULL, 0));
     size = fread(bytes, 1, sizeof bytes, f);
     fclose(f);
     g_clock = wm_host_function_new(NULL, 0, i32, 1, clock_ms, NULL);
@@ -83,5 +85,7 @@ int main(int argc, char** argv)
     }
     memcpy(&score, result, 4);
     printf("CoreMark %.1f in %u ms (%s)\n", score, now_ms() - start, slice ? "slices of fuel" : "no fuel");
+    /* Side table, records and local offsets: the records only of the functions that ran. */
+    printf("code %u bytes besides the module\n", wm_module_code_bytes(m));
     return 0;
 }

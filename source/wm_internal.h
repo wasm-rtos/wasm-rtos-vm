@@ -277,8 +277,8 @@ typedef struct WmSide
 } WmSide;
 
 /*
- * Predecoding (WM_PREDECODE): at load each function is also written as
- * cells, one record per WebAssembly instruction: the address of the code
+ * Predecoding (WM_PREDECODE): at its first call a function is also written
+ * as cells (the code cache, wm_code.c), one record per WebAssembly instruction: the address of the code
  * that runs it, then its immediates decoded and its branch targets
  * resolved. Records match instructions one to one, so fuel and snapshot
  * positions stay those of the module's own instructions. It needs labels
@@ -449,9 +449,12 @@ typedef struct WmCode
     uint32_t max_stack;
     /* Slot offset of each local, then the total; NULL when every local takes one slot. */
     uint32_t* local_offsets;
-    /* Predecoded records, or NULL. */
+    /* Predecoded records, or NULL: made at the first call, dropped when the code cache needs room (wm_code.c). */
     WmCell* fast;
     uint32_t fast_cells;
+    /* For the code cache's CLOCK: called since the hand last passed; on a call stack right now. */
+    uint8_t used;
+    uint8_t pinned;
 } WmCode;
 
 typedef struct WmLimits
@@ -566,6 +569,12 @@ struct WmModule
     uint8_t predecode_tried;
     /* Why predecoding failed and the functions run in place; NULL when it worked. */
     WmResult predecode_result;
+#if WM_PREDECODE
+    /* The next module in the code cache, when this one runs predecoded. */
+    struct WmModule* cached_next;
+    /* The code section's first entry: functions are validated again from here for their records. */
+    const uint8_t* code_entries;
+#endif
 };
 
 struct WmFunc
@@ -729,6 +738,13 @@ typedef struct WmFrame
     WmFunc* func;
 } WmFrame;
 
+/* A host function's caller, kept while the host calls back in (wm_call), so the code cache leaves its records. */
+typedef struct WmNest
+{
+    WmFunc* caller;
+    struct WmNest* up;
+} WmNest;
+
 /* Where a call stopped early (fuel, or a host function that yielded), to go on from. */
 typedef struct WmSuspended
 {
@@ -769,6 +785,13 @@ struct WmRuntime
     /* Calls in progress: only the outermost one stops for fuel. */
     uint8_t nesting;
     WmSuspended saved;
+#if WM_PREDECODE
+    /* Every runtime, for the code cache to see what is on the call stacks. */
+    struct WmRuntime* next;
+    /* The function that called the running host function; the callers of outer ones, while calls nest. */
+    WmFunc* caller;
+    WmNest* nest;
+#endif
 #if WM_HAS_TRACE
     /* Where the last trap was: its function, with frames[0..trap_depth) the calls it was in. */
     WmFunc* trap_func;
@@ -792,8 +815,30 @@ extern const uint8_t wm_numeric[128];
 /* Predecoding: the handlers' addresses, writing a function's records, and positions both ways. */
 /* Each handler's offset from the first, by kind; NULL when they span more than 16 bits can reach. */
 const uint16_t* wm_fast_handlers(void);
-WmResult wm_predecode(WmModule* module, WmCode* code);
+/* side: the function's side table entries. */
+WmResult wm_predecode(WmModule* module, WmCode* code, const WmSide* side);
 void wm_module_predecode(WmModule* module);
+/* The module's functions run predecoded: their records come from the code cache. */
+#define WM_RUNS_FAST(module) ((module)->predecode_tried && !(module)->predecode_result)
+
+/*
+ * The code cache (wm_code.c): records made for a function when it is called,
+ * dropped by CLOCK when memory runs short or the cache is over its limit,
+ * except for functions on a call stack. Making room happens only outside
+ * the fast loop, where every running function is known.
+ */
+WmResult wm_code_load(WmFunc* func);
+WmResult wm_code_make(WmModule* module, WmCode* code, const WmSide* side);
+WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
+void wm_code_drop(WmCode* code);
+void* wm_code_malloc(size_t size);
+void wm_code_free(void* ptr);
+void wm_code_add_module(WmModule* module);
+void wm_code_remove_module(WmModule* module);
+void wm_code_add_runtime(WmRuntime* runtime);
+void wm_code_remove_runtime(WmRuntime* runtime);
+/* The fast loop stopped at a call into a function without records: the frame is made, the records are not. */
+extern const char wm_code_stop[];
 int wm_fast_position(const WmModule* module, const WmCode* code, const WmCell* ip, uint32_t* offset, uint32_t* side);
 const WmCell* wm_fast_ip(const WmModule* module, const WmCode* code, uint32_t offset);
 

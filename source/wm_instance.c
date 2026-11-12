@@ -579,6 +579,9 @@ WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames)
     rt->stack_end = rt->stack + slots;
     rt->sp = rt->stack;
     rt->max_frames = max_frames;
+#if WM_PREDECODE
+    wm_code_add_runtime(rt);
+#endif
     return rt;
 }
 
@@ -586,6 +589,9 @@ void wm_runtime_free(WmRuntime* rt)
 {
     if (!rt)
         return;
+#if WM_PREDECODE
+    wm_code_remove_runtime(rt);
+#endif
     if (rt->stack)
         wm_free(rt->stack - 1);
     wm_free(rt->frames);
@@ -632,6 +638,14 @@ WmResult wm_trap(WmRuntime* rt, WmResult trap)
 static WmResult finish(WmRuntime* rt, WmFunc* f, uint32_t* base, uint32_t depth, WmResult result, uint32_t* results)
 {
     --rt->nesting;
+#if WM_PREDECODE
+    /* Back in the host function that called in, if one did: its caller is the running one again. */
+    if (rt->nesting && rt->nest)
+    {
+        rt->caller = rt->nest->caller;
+        rt->nest = rt->nest->up;
+    }
+#endif
     if (result == wm_fuel_exhausted || result == wm_yielded || result == wm_page_wait)
     {
         rt->saved.entry = f;
@@ -653,6 +667,10 @@ WmResult wm_call(WmRuntime* rt, WmFunc* f, const uint32_t* args, uint32_t* resul
     uint32_t* base = rt->sp;
     uint32_t depth = rt->depth;
     WmResult result;
+#if WM_PREDECODE
+    /* A host function calling in: its caller keeps its records while this call runs. */
+    WmNest nest;
+#endif
     uint32_t room = f->param_slots > f->result_slots ? f->param_slots : f->result_slots;
     if ((uint32_t)(rt->stack_end - base) < room)
         return WM_ERR_EXHAUSTION("exhaustion: call stack exhausted");
@@ -660,6 +678,16 @@ WmResult wm_call(WmRuntime* rt, WmFunc* f, const uint32_t* args, uint32_t* resul
         memcpy(base, args, f->param_slots * 4u);
 #if WM_HAS_TRACE
     rt->trap_func = NULL;
+#endif
+#if WM_PREDECODE
+    if (rt->nesting)
+    {
+        nest.caller = rt->caller;
+        nest.up = rt->nest;
+        rt->nest = &nest;
+    }
+    else
+        rt->caller = NULL;
 #endif
     ++rt->nesting;
     rt->yielding = 0;

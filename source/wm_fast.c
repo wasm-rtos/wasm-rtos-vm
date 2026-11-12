@@ -327,12 +327,12 @@ static void fuse(const uint16_t* handlers, WmCell* record, uint8_t first, uint8_
  * Besides the records themselves it needs RAM only for the branch targets,
  * 8 bytes each, sorted by offset so the records can be matched in one walk.
  */
-WmResult wm_predecode(WmModule* m, WmCode* code)
+WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
 {
     const uint16_t* handlers = wm_fast_handlers();
     uint32_t cells = 0, count = 0, k = 0;
     const uint8_t* p;
-    const WmSide* st = m->side + code->side;
+    const WmSide* st = side;
     WmTarget* targets = NULL;
     WmCell* out;
     /* The last two records, waiting for the kinds after them to see whether they start a run. */
@@ -381,9 +381,9 @@ WmResult wm_predecode(WmModule* m, WmCode* code)
             p = step(code, p, &n, &sides);
             cell += n;
         }
-        st = m->side + code->side;
+        st = side;
     }
-    code->fast = (WmCell*)wm_malloc((size_t)cells * sizeof(WmCell));
+    code->fast = (WmCell*)wm_code_malloc((size_t)cells * sizeof(WmCell));
     if (!code->fast)
     {
         wm_free(targets);
