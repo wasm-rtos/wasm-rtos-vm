@@ -207,6 +207,15 @@ WmResult wm_code_load(WmFunc* func)
     return NULL;
 }
 
+int wm_code_drop_one(void)
+{
+    int dropped;
+    pin_stacks(1);
+    dropped = evict_one();
+    pin_stacks(0);
+    return dropped;
+}
+
 size_t wm_code_cache_trim(size_t keep)
 {
     pin_stacks(1);
@@ -218,6 +227,7 @@ size_t wm_code_cache_trim(size_t keep)
 
 #else
 
+int wm_code_drop_one(void) { return 0; }
 void wm_set_code_allocator(WmAllocator allocator) { (void)allocator; }
 void wm_code_cache_limit(size_t bytes) { (void)bytes; }
 size_t wm_code_cache_bytes(void) { return 0; }

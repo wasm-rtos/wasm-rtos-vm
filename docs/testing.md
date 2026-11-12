@@ -57,6 +57,9 @@ cc -std=gnu99 -O1 source/*.c test/fuel.c -lm -o build/fuel && build/fuel
   background reads and writes.
 - `test/state.c`: a call stopped by fuel, its runtime, instance and module
   freed but its memory kept, goes on in a new instance.
+- `test/room.c`: a heap capped by a counting allocator; `memory.grow`
+  gets its frames by dropping another function's records, and fails
+  rather than drop those of the function that runs.
 - `test/code.c`: calls with code caches from unlimited down to one byte,
   through recursion, a host function that calls back in and empties the
   cache, and calls sliced by fuel, each slice resumed in a new runtime from

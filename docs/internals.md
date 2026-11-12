@@ -55,6 +55,13 @@ functions that called back in (`rt->caller`, and a `WmNest` chain on the C
 stack for nested `wm_call`). Room is made only outside the fast loop, where
 all of that is written down.
 
+Memory comes before code: when the heap refuses a frame of a program's
+memory or its tables, records go first, one function at a time, and only
+then does the allocation fail (with a pager, its own choice of a frame to
+store comes first). `memory.grow`, `memory.init`, `memory.copy` and
+`memory.fill` note the running function in `rt->caller` too, as they may
+make frames from inside the fast loop.
+
 Only called functions take RAM:
 
 | Program | All records | Records made |
