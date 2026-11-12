@@ -340,6 +340,12 @@ typedef struct WmSide
 #define WM_PREDECODE 0
 #endif
 #endif
+/*
+ * The engine knows every runtime and, while calls are in progress, the
+ * functions that called host functions: the code cache (decision 3) and
+ * the frame pool (decision 6) leave alone what those calls use.
+ */
+#define WM_TRACKS_CALLERS (WM_PREDECODE || WM_HAS_MMU)
 
 /*
  * A predecoded cell: 32 bits on every target. A record's first cell holds
@@ -780,8 +786,8 @@ struct WmRuntime
     /* Calls in progress: only the outermost one stops for fuel. */
     uint8_t nesting;
     WmSuspended saved;
-#if WM_PREDECODE
-    /* Every runtime, for the code cache to see what is on the call stacks. */
+#if WM_TRACKS_CALLERS
+    /* Every runtime, for the code cache and the frame pool to see what is on the call stacks. */
     struct WmRuntime* next;
     /*
      * The function that called the running host function (or runs
@@ -835,8 +841,6 @@ void* wm_code_malloc(size_t size);
 void wm_code_free(void* ptr);
 void wm_code_add_module(WmModule* module);
 void wm_code_remove_module(WmModule* module);
-void wm_code_add_runtime(WmRuntime* runtime);
-void wm_code_remove_runtime(WmRuntime* runtime);
 /* The fast loop stopped at a call into a function without records: the frame is made, the records are not. */
 extern const char wm_code_stop[];
 int wm_fast_position(const WmModule* module, const WmCode* code, const WmCell* ip, uint32_t* offset, uint32_t* side);
@@ -848,5 +852,9 @@ int wm_types_equal(const uint8_t* a, uint32_t a_count, const uint8_t* b, uint32_
 int wm_bytes_equal(const uint8_t* program, uint32_t program_count, const uint8_t* ram, uint32_t ram_count);
 int wm_func_has_type(const WmFunc* f, const WmType* t);
 WmResult wm_execute(WmRuntime* runtime, WmFunc* func, int resume);
+#if WM_TRACKS_CALLERS
+/* Every runtime, newest first, linked through next. */
+WmRuntime* wm_runtimes(void);
+#endif
 
 #endif

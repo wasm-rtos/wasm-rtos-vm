@@ -19,7 +19,6 @@
 const char wm_code_stop[] = "code miss";
 
 static WmModule* g_modules;
-static WmRuntime* g_runtimes;
 static size_t g_bytes;
 static size_t g_limit;
 static WmAllocator g_allocator;
@@ -79,22 +78,6 @@ void wm_code_remove_module(WmModule* m)
         wm_code_drop(&m->codes[i]);
 }
 
-void wm_code_add_runtime(WmRuntime* rt)
-{
-    rt->next = g_runtimes;
-    g_runtimes = rt;
-}
-
-void wm_code_remove_runtime(WmRuntime* rt)
-{
-    for (WmRuntime** at = &g_runtimes; *at; at = &(*at)->next)
-        if (*at == rt)
-        {
-            *at = rt->next;
-            break;
-        }
-}
-
 static void pin_func(const WmFunc* f, uint8_t on)
 {
     if (f && f->code)
@@ -104,7 +87,7 @@ static void pin_func(const WmFunc* f, uint8_t on)
 /* Mark (or unmark) every function on a call stack. */
 static void pin_stacks(uint8_t on)
 {
-    for (WmRuntime* rt = g_runtimes; rt; rt = rt->next)
+    for (WmRuntime* rt = wm_runtimes(); rt; rt = rt->next)
     {
         for (uint32_t i = 0; i < rt->depth; ++i)
             pin_func(rt->frames[i].func, on);
