@@ -53,7 +53,10 @@ jobs:
           echo "$WASI_SDK_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
           mkdir -p "$sdk"
           tar -xzf "$RUNNER_TEMP/$archive" -C "$sdk" --strip-components=1
-          echo "WASM_CC=$sdk/bin/clang" >> "$GITHUB_ENV"
+          {
+            echo "WASM_CC=$sdk/bin/clang"
+            echo "WASM_LD=$sdk/bin/wasm-ld"
+          } >> "$GITHUB_ENV"
 
       # The official test suite at tag wg-2.0, turned into JSON and modules by wast2json.
       - name: Prepare the spec tests
