@@ -139,10 +139,20 @@ int main(int argc, char** argv)
     while (r == wm_fuel_exhausted)
     {
         ++slices;
+        if (slices == 3)
+        {
+            /* Some frames came back by touch, the rest (with small frames) are in storage: all go back into one block. */
+            check(wm_memory_block_in(memory) == NULL && wm_memory_data(memory, NULL) != NULL &&
+                      wm_memory_block_frames(memory) == frames_per_page,
+                  "a few slices later the memory goes back into one block");
+            check(wm_memory_stored(memory) == 0 && wm_pager_resident() == frames_per_page,
+                  "its frames are all in RAM again, in the block, and none in storage");
+        }
         wm_set_fuel(rt, 30);
         r = wm_resume(rt, &result);
     }
-    check(r == NULL && result == whole && slices > 1, "the sum goes on paged and ends as it would have");
+    check(r == NULL && result == whole && slices > 3,
+          "the sum goes on paged, then in one block again, and ends as it would have");
     wm_disable_fuel(rt);
     wm_instance_free(inst);
     wm_module_free(module);
@@ -170,6 +180,11 @@ int main(int argc, char** argv)
     check(wm_memory_pin(memory, 0, 16, 1) == NULL && wm_memory_block_out(memory) != NULL && wm_memory_data(memory, NULL),
           "a pinned range keeps the block in RAM");
     wm_memory_pin(memory, 0, 16, -1);
+    check(wm_memory_block_out(memory) == NULL && wm_memory_pin(memory, 0, 16, 1) == NULL &&
+              wm_memory_block_in(memory) == wm_page_wait && wm_memory_data(memory, NULL) == NULL,
+          "a pinned frame keeps a paged memory paged: try again later");
+    wm_memory_pin(memory, 0, 16, -1);
+    check(wm_memory_block_in(memory) == NULL && wm_memory_data(memory, NULL) != NULL, "unpinned, it goes back into one block");
     g_fail_writes = 1;
     check(wm_memory_block_out(memory) != NULL && wm_memory_data(memory, NULL) && wm_memory_block_frames(memory),
           "a write that fails keeps the block");

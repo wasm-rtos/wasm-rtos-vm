@@ -58,8 +58,9 @@ cc -std=gnu99 -O1 source/*.c test/fuel.c -lm -o build/fuel && build/fuel
 - `test/state.c`: a call stopped by fuel, its runtime, instance and module
   freed but its memory kept, goes on in a new instance.
 - `test/block.c`: a memory with a pager in one block, sent to storage whole
-  between two slices of a program that then ends as it would have; zero
-  frames need no copy; a pin or a failed write keeps the block;
+  between two slices of a program, paged for a few slices, back into one
+  block, and the program ends as it would have; zero frames need no copy; a
+  pin or a failed write keeps the block, a pin keeps a paged memory paged;
   `memory.grow` in one block, then paged.
 - `test/room.c`: a heap capped by a counting allocator; `memory.grow`
   gets its frames by dropping another function's records, and fails

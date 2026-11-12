@@ -861,6 +861,45 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
 
 uint32_t wm_memory_block_frames(const WmMemory* memory) { return is_pager_block(memory) ? memory->frame_count : 0u; }
 
+WmResult wm_memory_block_in(WmMemory* memory)
+{
+    uint8_t* data;
+    if (memory->data)
+        return NULL;
+    if (!memory->pager || memory->block_frames)
+        return WM_ERR_UNSUPPORTED("unsupported: only a memory with a pager goes back into one block");
+    for (uint32_t i = 0; i < memory->frame_count; ++i)
+        if (memory->marks[i] & (WM_MARK_PINS | WM_MARK_LOADING | WM_MARK_WRITING | WM_MARK_LEAVING))
+            return wm_page_wait;
+    if (!(data = (uint8_t*)wm_calloc(((size_t)memory->frame_count << WM_FRAME_LOG2) + 1u, 1)))
+        return E_MEMORY;
+    /* Every frame into the block first: until all are, the frames stay the memory. */
+    for (uint32_t i = 0; i < memory->frame_count; ++i)
+    {
+        uint8_t* to = data + ((size_t)i << WM_FRAME_LOG2);
+        WmResult result = NULL;
+        if (frame_here(memory->frames[i]))
+            memcpy(to, memory->frames[i], WM_FRAME);
+        else if (frame_out(memory->frames[i]))
+            result = memory->pager->read(memory->pager->context, memory->slots[i], to);
+        if (result)
+        {
+            wm_free(data);
+            return result;
+        }
+    }
+    for (uint32_t i = 0; i < memory->frame_count; ++i)
+    {
+        free_frame(memory, i);
+        memory->marks[i] = 0;
+    }
+    /* No frame of it in the TLB any more, and no address space number needed. */
+    space_release(memory);
+    memory->data = data;
+    g_resident += memory->frame_count;
+    return NULL;
+}
+
 /* A frame of bytes all zero: it needs no copy in storage, as an untouched frame reads as zero. */
 static int frame_is_zero(const uint8_t* frame)
 {
@@ -950,6 +989,7 @@ uint32_t wm_memory_frames(const WmMemory* memory) { (void)memory; return 0; }
 uint32_t wm_memory_stored(const WmMemory* memory) { (void)memory; return 0; }
 uint32_t wm_memory_block_frames(const WmMemory* memory) { (void)memory; return 0; }
 WmResult wm_memory_block_out(WmMemory* memory) { (void)memory; return NULL; }
+WmResult wm_memory_block_in(WmMemory* memory) { (void)memory; return NULL; }
 int wm_memory_frame_look(WmMemory* memory, uint32_t index) { (void)memory, (void)index; return -1; }
 WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
 {
