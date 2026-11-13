@@ -303,6 +303,15 @@ void wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult result);
 void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result);
 /* The bytes of a memory that are only in the pager's storage, not in RAM. */
 uint32_t wm_memory_stored(const WmMemory* memory);
+/* Frame index's slot in the pager's storage, or 0xFFFFFFFF: none (never stored, or in a block). */
+uint32_t wm_memory_frame_slot(const WmMemory* memory, uint32_t index);
+/*
+ * Forget frame index's slot: the frame comes into RAM (if it was out), the
+ * pager drops the slot, and the frame counts as dirty, so it is written to
+ * a new slot when it leaves again. For a host that empties one of its
+ * stores. NULL when done or when the frame had no slot.
+ */
+WmResult wm_memory_frame_unstore(WmMemory* memory, uint32_t index);
 /* The frames of a memory with a pager that are in RAM in one block (see block in WmPager); 0 when it is paged. */
 uint32_t wm_memory_block_frames(const WmMemory* memory);
 /*

@@ -288,6 +288,8 @@ void      wm_memory_frame_loaded(WmMemory* memory, uint32_t index, WmResult resu
 void      wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result);
 uint32_t  wm_pager_resident(void);
 uint32_t  wm_memory_stored(const WmMemory* memory);
+uint32_t  wm_memory_frame_slot(const WmMemory* memory, uint32_t index);   /* 0xFFFFFFFF: none */
+WmResult  wm_memory_frame_unstore(WmMemory* memory, uint32_t index);      /* forget its slot; dirty again */
 ```
 
 ### Allocation and the code cache
