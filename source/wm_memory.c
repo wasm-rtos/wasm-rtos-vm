@@ -891,6 +891,33 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
 
 uint32_t wm_memory_frames(const WmMemory* memory) { return memory->data ? 0 : memory->frame_count; }
 
+uint32_t wm_memory_frame_slot(const WmMemory* memory, uint32_t index)
+{
+    if (memory->data || !memory->slots || index >= memory->frame_count)
+        return WM_NONE;
+    return memory->slots[index];
+}
+
+WmResult wm_memory_frame_unstore(WmMemory* memory, uint32_t index)
+{
+    if (!memory->pager || memory->data || !memory->slots || index >= memory->frame_count)
+        return WM_ERR_UNSUPPORTED("unsupported: this frame has no slot to forget");
+    if (memory->slots[index] == WM_NONE)
+        return NULL;
+    /* A write on its way to the slot ends first; the frame stays in RAM. */
+    if (memory->marks[index] & WM_MARK_WRITING)
+    {
+        (void)memory->pager->finish(memory->pager->context, memory->slots[index]);
+        memory->marks[index] &= (uint16_t)~(WM_MARK_WRITING | WM_MARK_LEAVING);
+    }
+    /* In RAM, and dirty: it is written to a new slot when it leaves again. */
+    if (!wm_memory_frame(memory, index, 1))
+        return g_frame_error ? g_frame_error : E_MEMORY;
+    memory->pager->drop(memory->pager->context, memory->slots[index]);
+    memory->slots[index] = WM_NONE;
+    return NULL;
+}
+
 uint32_t wm_memory_stored(const WmMemory* memory)
 {
     uint32_t bytes = 0;
@@ -1277,6 +1304,12 @@ void wm_memory_frame_stored(WmMemory* memory, uint32_t index, WmResult result) {
 WmMemory* wm_memory_next(WmMemory* after) { (void)after; return NULL; }
 uint32_t wm_memory_frames(const WmMemory* memory) { (void)memory; return 0; }
 uint32_t wm_memory_stored(const WmMemory* memory) { (void)memory; return 0; }
+uint32_t wm_memory_frame_slot(const WmMemory* memory, uint32_t index) { (void)memory, (void)index; return 0xFFFFFFFFu; }
+WmResult wm_memory_frame_unstore(WmMemory* memory, uint32_t index)
+{
+    (void)memory, (void)index;
+    return WM_ERR_UNSUPPORTED("unsupported: built without WM_HAS_MMU");
+}
 uint32_t wm_memory_block_frames(const WmMemory* memory) { (void)memory; return 0; }
 WmResult wm_memory_block_out(WmMemory* memory) { (void)memory; return NULL; }
 WmResult wm_memory_block_in(WmMemory* memory) { (void)memory; return NULL; }
