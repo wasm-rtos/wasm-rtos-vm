@@ -1096,6 +1096,13 @@ f_drop:
 f_select:
 {
     uint32_t n = IMM;
+    if (n == 1u)
+    {
+        uint32_t c = tos;
+        sp -= 2;
+        tos = c ? sp[-1] : sp[0];
+        FAST_NEXT();
+    }
     FAST_SPILL();
     if (!*--sp)
         copy_slots(sp - 2u * n, sp - n, n);
@@ -1206,19 +1213,21 @@ f_access:
     uint32_t above = op >= 0x36u ? ((d & 8u) ? 2u : 1u) : 0u;
     uint64_t value = 0;
     uint8_t* host;
+    /* tos is a load's address or a store's value; a 64-bit value is read from memory. */
+    if (above == 2u)
+        FAST_SPILL();
     /* Loads by the TLB's load tag, stores by its store tag. */
-    FAST_SPILL();
-    FAST_ADDR(sp[-1 - (int32_t)above], offset, size, host, op, ip - 1, 2u, (above ? e_->wtag : e_->tag));
+    FAST_ADDR(above ? sp[-1 - (int32_t)above] : tos, offset, size, host, op, ip - 1, 2u,
+              (above ? e_->wtag : e_->tag));
     ++ip;
     if (op >= 0x36u)
     {
-        value = above == 2u ? get64(sp - 2) : sp[-1];
+        value = above == 2u ? get64(sp - 2) : tos;
         sp -= above + 1u;
         store_bytes(host, value, size);
         FAST_RELOAD();
         FAST_NEXT();
     }
-    --sp;
     value = load_bytes(host, size);
     if (d & 4u)
     {
@@ -1227,12 +1236,12 @@ f_access:
     }
     if (d & 8u)
     {
-        put64(sp, value);
-        sp += 2;
+        put64(sp - 1, value);
+        ++sp;
+        FAST_RELOAD();
     }
     else
-        *sp++ = (uint32_t)value;
-    FAST_RELOAD();
+        tos = (uint32_t)value;
     FAST_NEXT();
 }
 f_i32_load:
