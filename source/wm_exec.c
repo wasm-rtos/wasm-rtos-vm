@@ -1085,7 +1085,8 @@ f_call_indirect:
         TRAP(WM_ERR_TRAP("trap: uninitialized element"));
     if (!wm_func_has_type(callee, type))
         TRAP(WM_ERR_TRAP("trap: indirect call type mismatch"));
-    /* Below the index the stack is in memory already. */
+    /* Below the index the stack is in memory already; tos becomes the last argument. */
+    FAST_RELOAD();
     goto call_spilled;
 }
 f_drop:
@@ -1552,7 +1553,9 @@ call_spilled:
             TRAP(T_STACK);
         zero_slots(sp, code->local_slots);
         sp += code->local_slots;
-        FAST_RELOAD();
+        /* tos is what sp[-1] holds: a local, zeroed, or else the last argument, which it is already. */
+        if (code->local_slots)
+            tos = 0;
         /* No records: the loop stops in the new frame, wm_execute has them made and goes on at the first. */
         if (__builtin_expect(!code->fast, 0))
         {
