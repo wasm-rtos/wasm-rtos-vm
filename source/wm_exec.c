@@ -604,10 +604,19 @@ static uint32_t grow_table(WmTable* t, uint32_t delta, uintptr_t init)
 
 uint32_t wm_table_grow(WmTable* table, uint32_t delta) { return grow_table(table, delta, 0); }
 
-/* The bulk memory and table instructions after 0xFC: all but the saturating conversions. */
-static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_t** stack)
+/* A helper's trap: noted in *trap, and NULL for the stack. */
+static uint32_t* trapped(WmResult* trap, WmResult e)
 {
-    uint32_t* sp = *stack;
+    *trap = e;
+    return NULL;
+}
+
+/*
+ * The bulk memory and table instructions after 0xFC: all but the saturating
+ * conversions. The stack after it, or NULL and *trap, as the numeric helpers.
+ */
+static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_t* sp, WmResult* trap)
+{
     WmMemory* memory = inst->memory;
     wm_size mem_size = memory ? WM_MEMORY_SIZE(memory) : 0;
     uint32_t a = 0;
@@ -632,10 +641,10 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             ++*pc;
             sp -= 3;
             if (wm_out_of_bounds(src, n, size) || wm_out_of_bounds(dst, n, mem_size))
-                return T_OOB_MEMORY;
+                return trapped(trap, T_OOB_MEMORY);
 #if WM_HAS_MMU
             if ((result = wm_memory_write(memory, dst, s->data + src, n)))
-                return result;
+                return trapped(trap, result);
 #else
             for (uint32_t i = 0; i < n; ++i)
                 memory->data[dst + i] = WM_RD8(s->data + src + i);
@@ -650,10 +659,10 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             *pc += sub == 10u ? 2 : 1;
             sp -= 3;
             if (wm_out_of_bounds(dst, n, mem_size) || (sub == 10u && wm_out_of_bounds(src, n, mem_size)))
-                return T_OOB_MEMORY;
+                return trapped(trap, T_OOB_MEMORY);
 #if WM_HAS_MMU
             if ((result = sub == 10u ? wm_memory_copy(memory, dst, src, n) : wm_memory_fill(memory, dst, (uint8_t)src, n)))
-                return result;
+                return trapped(trap, result);
 #else
             if (sub == 10u)
                 memmove(memory->data + dst, memory->data + src, n);
@@ -674,7 +683,7 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             uint32_t n = sp[-1], src = sp[-2], dst = sp[-3];
             sp -= 3;
             if (wm_out_of_bounds(src, n, src_table->size) || wm_out_of_bounds(dst, n, t->size))
-                return T_OOB_TABLE;
+                return trapped(trap, T_OOB_TABLE);
             memmove(t->elems + dst, src_table->elems + src, (size_t)n * sizeof(uintptr_t));
             break;
         }
@@ -693,15 +702,14 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             value = get_ref(sp);
             a = *--sp;
             if (wm_out_of_bounds(a, b, t->size))
-                return T_OOB_TABLE;
+                return trapped(trap, T_OOB_TABLE);
             for (uint32_t k = 0; k < b; ++k)
                 t->elems[a + k] = value;
             break;
         }
 #endif
     }
-    *stack = sp;
-    return result;
+    return result ? trapped(trap, result) : sp;
 }
 
 /*
@@ -1535,7 +1543,7 @@ f_misc:
     /* memory.init, copy and fill may make frames, which may drop predecoded code: not this function's. */
     rt->caller = func;
     FAST_SPILL();
-    if ((trap = misc(inst, sub, &immediates, &sp)))
+    if (!(sp = misc(inst, sub, &immediates, sp, &trap)))
         TRAP(trap);
     FAST_REFRESH();
     FAST_RELOAD();
@@ -2225,7 +2233,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                     NEXT;
                 }
 #endif
-                if ((trap = misc(inst, sub, &pc, &sp)))
+                if (!(sp = misc(inst, sub, &pc, sp, &trap)))
                     TRAP(trap);
                 REFRESH();
                 NEXT;
