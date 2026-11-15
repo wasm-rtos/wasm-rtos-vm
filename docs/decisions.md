@@ -280,3 +280,62 @@ CoreMark: ESP32 12.03 → 15.49 (+28.8%, 544 bytes more heap); Mac 2587 →
 ESP32, `misc` alone gave +6.6%; the top of the stack in a register alone
 cost 0.5% there (on Xtensa the compiler keeps `tos` in memory: too few
 registers), and gave +8% and +15% on Mac.
+
+## 9. The instructions are described once
+
+**Decided and built (2026-11-15).**
+
+### Problem
+
+A predecoded record was written in four places: its kind (`WM_F_*`), the
+fast loop's table of handlers, the predecoder's choice of record for an
+opcode, and its handler. The i32 operations with records of their own were
+written up to three times: in the shared `op_i32` the loop in place runs,
+in the fast loop's handler, and in the fused handlers that end in a branch.
+Forgetting one place was not an error the compiler could see.
+
+### Decision
+
+- **One list, `source/wm_ops.def`**: a line per record in the order of the
+  kinds, of five sorts (a record; an i32 access with its type; an i32
+  operation with its expression; a fused record; a fused one ending in a
+  branch, only with `WM_FUSE`). The kinds, the handler table and the
+  predecoder's choice are made from it by defining the sorts needed and
+  including it, the usual way of a C list of instructions.
+- **Each i32 operation's expression once**, as an always-inlined function
+  (`i32_add(a, b)`) made from its line: `op_i32`, the fast handlers and the
+  fused compares call it.
+- **Handlers stay written by hand**: calls, branches, accesses and the
+  fused runs each do their own work with the stack and the operands.
+
+### Why
+
+A list of instructions in one file is how interpreters in C keep their
+tables in step, and it needs nothing but the preprocessor: no tool in the
+build, nothing generated to keep in the repository for the boards' builds.
+
+### Instead
+
+- **Generating both loops from one description** of every instruction's
+  body: worth it for hundreds of instructions and several tiers; here about
+  eighty records, and a generator would have to know two stacks (the top
+  in a register in one loop, in memory in the other). A tool in the build
+  and generated files would cost more than they save.
+- **The list as a macro taking a macro** instead of a file included: no
+  `#if` inside it, and records only built with `WM_FUSE` need one.
+- **Sign extension back to shifts.** Since the analyzer's change it is a
+  `switch` (the shifts could shift by 64 as far as the analyzer knew), and
+  ESP32 -O2 went from 15.49 to 15.40: the compiler gives `run_fast` other
+  registers. Shifts with `WM_ASSERT(size >= 1 && size < 8)`, which the
+  analyzer accepts, give 15.54 on ESP32 but cost a Mac 2.4% (2819 → 2750,
+  slower in every one of four runs); `(v ^ sign) - sign` gives 15.35. The
+  `switch` stays: no change may lose on one machine to win on another.
+
+### Measured
+
+The fast loop's machine code is the same on a Mac (clang -O2). On Xtensa
+(GCC 14.2 -O2) `run_fast` is 3 instructions and 3 bytes of padding
+shorter, and `op_i32` 6 instructions shorter; the rest moved. CoreMark on a
+Mac in slices of fuel: 2833 → 2865, built as for chips 2978 → 3011 (within
+noise; the same 41 963 863 173 instructions). ESP32 (GCC 14.2): -O2
+15.40 → 15.42, -Os 13.65 → 13.77, the same heap. AVR flash +4 bytes.

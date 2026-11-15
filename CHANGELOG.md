@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The instructions described once** (decision 9): the predecoded records
+  and the i32 operations both loops run are lines of `source/wm_ops.def`,
+  from which their kinds, the handler table, the predecoder's choice and
+  the operations themselves are made. Speed unchanged (ESP32 -Os +0.9%).
 - **A faster fast loop** (decision 8): the top of the stack in a register,
   canonical types with `call_indirect` comparing pointers, handlers of
   their own for byte and 16-bit loads and stores and for one-slot globals,

@@ -252,6 +252,15 @@ static uint32_t* paged_access(WmMemory* memory, uint8_t op, uint32_t offset, uin
 static uint32_t clz32(uint32_t x) { return x ? (uint32_t)__builtin_clzl(x) - (uint32_t)(sizeof(long) * 8u - 32u) : 32u; }
 static uint32_t ctz32(uint32_t x) { return x ? (uint32_t)__builtin_ctzl(x) : 32u; }
 
+/* The i32 instructions with records of their own (wm_ops.def): the one definition both loops run. */
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)                                                             \
+    static WM_ALWAYS_INLINE uint32_t i32_##name(uint32_t a, uint32_t b)                                        \
+    {                                                                                                          \
+        (void)b;                                                                                               \
+        return (uint32_t)(EXPR);                                                                               \
+    }
+#include "wm_ops.def"
+
 /* Ops whose operands are i32: results by wm_numeric. */
 WM_OP uint32_t* op_i32(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
 {
@@ -261,23 +270,12 @@ WM_OP uint32_t* op_i32(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
     uint8_t n = (uint8_t)(b & 31u);
     switch (op)
     {
-        case 0x45: r = a == 0; break;
-        case 0x46: r = a == b; break;
-        case 0x47: r = a != b; break;
-        case 0x48: r = (int32_t)a < (int32_t)b; break;
-        case 0x49: r = a < b; break;
-        case 0x4A: r = (int32_t)a > (int32_t)b; break;
-        case 0x4B: r = a > b; break;
-        case 0x4C: r = (int32_t)a <= (int32_t)b; break;
-        case 0x4D: r = a <= b; break;
-        case 0x4E: r = (int32_t)a >= (int32_t)b; break;
-        case 0x4F: r = a >= b; break;
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)                                                             \
+    case OP: r = i32_##name(a, b); break;
+#include "wm_ops.def"
         case 0x67: r = clz32(a); break;
         case 0x68: r = ctz32(a); break;
         case 0x69: r = (uint32_t)__builtin_popcountl(a); break;
-        case 0x6A: r = a + b; break;
-        case 0x6B: r = a - b; break;
-        case 0x6C: r = a * b; break;
         case 0x6D:
         case 0x6E:
         case 0x6F:
@@ -301,12 +299,6 @@ WM_OP uint32_t* op_i32(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
             else
                 r = a % b;
             break;
-        case 0x71: r = a & b; break;
-        case 0x72: r = a | b; break;
-        case 0x73: r = a ^ b; break;
-        case 0x74: r = a << n; break;
-        case 0x75: r = (uint32_t)((int32_t)a >> n); break;
-        case 0x76: r = a >> n; break;
         case 0x77: r = (uint32_t)(a << n) | (n ? a >> (32u - n) : 0); break;
         case 0x78: r = (uint32_t)(a >> n) | (n ? a << (32u - n) : 0); break;
         case 0xAC: r = (uint64_t)(int64_t)(int32_t)a; break;
