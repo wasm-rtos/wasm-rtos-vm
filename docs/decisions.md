@@ -219,3 +219,64 @@ Module after loading (64-bit build): the tour program 42 568 → 31 376
 bytes, the Arduino sketch test 44 636 → 36 220, CoreMark 10 376 → 6 248.
 The Uno test program runs again: 305 bytes free after its instance,
 `fib(10)` in 31 ms as before; flash +570 bytes.
+
+## 8. The fast loop does what other interpreters do
+
+**Decided and built (2026-11-15).**
+
+### Problem
+
+The fast loop had several costs that mature interpreters avoid, on every
+processor:
+
+- A helper for the rare bulk memory instructions took the address of the
+  loop's stack pointer (`misc(..., &sp)`). A variable whose address is
+  taken is hard to keep in a register: on Xtensa the stack pointer lived in
+  memory and every change of it was a store.
+- The top of the stack was in a register and in its slot, written twice.
+- `call_indirect` compared signatures byte by byte, through a function call
+  in the loop; and every function object held a copy of its signature.
+- Byte and 16-bit loads and stores, all over C code with `char` and
+  `short`, went through one handler for every access with a table of sizes.
+- Global access worked out the global's width each time; C programs touch
+  `__stack_pointer` in most functions.
+
+### Decision
+
+- **`misc` returns the stack**, as the numeric helpers do.
+- **The top of the stack in a register** (`tos`), as in wasm3 (`_r0`) and
+  HotSpot's interpreter: its slot is written only when the stack goes to
+  memory (`FAST_SPILL`: a call, a helper, a branch that moves values, a
+  stop). The stack in memory at those points is laid out as before:
+  snapshots and the loop in place are unchanged.
+- **Canonical types**, as wasm3 and V8: equal types of a module are one
+  (`WmType.canon`, `WM_TYPE`), a function points to its type, and
+  `call_indirect` compares pointers; only a host's or another module's
+  function needs its signature compared.
+- **Handlers of their own** for `i32.load8_s/u`, `i32.load16_s/u`,
+  `i32.store8`, `i32.store16`, as for `i32.load` and `i32.store` (wasm3,
+  WAMR); and for `global.get`/`global.set` of one-slot globals.
+
+### Why
+
+Each is the usual way and each removes work rather than moving it. Speed
+is the same on every chip for the same reason: fewer loads and stores per
+instruction.
+
+### Instead
+
+- **Not reloading the instance and memory after a call** within one
+  module: a call may grow memory, so the memory must be read again after
+  it, as in wasm3; what is left to save is a load or two, the cost of the
+  test.
+- **Taking `bytes` and `fuel_on` out of the loop's state** to free a
+  register on Xtensa: the fuel test then reads the runtime in every
+  handler, and the loop grew by 44%.
+
+### Measured
+
+CoreMark: ESP32 12.03 → 15.49 (+28.8%, 544 bytes more heap); Mac 2587 →
+2988 (+15.5%), built as for chips 2503 → 3065 (+22%). Of the steps on
+ESP32, `misc` alone gave +6.6%; the top of the stack in a register alone
+cost 0.5% there (on Xtensa the compiler keeps `tos` in memory: too few
+registers), and gave +8% and +15% on Mac.

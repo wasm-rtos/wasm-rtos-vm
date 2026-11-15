@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A faster fast loop** (decision 8): the top of the stack in a register,
+  canonical types with `call_indirect` comparing pointers, handlers of
+  their own for byte and 16-bit loads and stores and for one-slot globals,
+  and the stack pointer kept in a register on Xtensa. CoreMark +28.8% on
+  ESP32, +15.5% on a Mac; a function object is 12 bytes smaller on 32-bit
+  chips.
 - **Less memory for every instance and module** (decision 7): function
   objects only for a module's own functions and its unlinked imports, and
   the module's arrays trimmed to their elements once it is loaded. The

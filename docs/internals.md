@@ -28,6 +28,11 @@ the engine's own arrays in bounds stay.
   It is two to three times faster. A module whose operands do not fit runs
   in place.
 
+The top of the stack stays in a register (`tos`); its slot is written only
+when the stack goes to memory (`FAST_SPILL`): before a call, a helper, a
+branch that moves values, a stop. There the stack is in memory as the loop
+in place keeps it, so either loop goes on from where the other stopped.
+
 Records follow instructions one to one, so positions convert both ways
 (`wm_fast_position`, `wm_fast_ip`): fuel and snapshots stay those of the
 module's own instructions, whichever loop runs.
