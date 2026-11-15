@@ -592,9 +592,10 @@ would end up fast and unreadable.
 
 ### Decision
 
-- **The loop in place is the reference**: one case per instruction, no
-  tricks, the code a person reads to learn what an instruction does. The
-  fast loops may be clever; `fuzz_diff` keeps them doing what it does.
+- **The loop in place is the reference**: its cases, one per
+  instruction, are the code a person reads to learn what an instruction
+  does. Its short paths (built where labels are values) and the fast
+  loops may be clever; `fuzz_diff` keeps them doing what the cases do.
 - **A change for readability keeps the machine code**: the same bytes on a
   Mac and on Xtensa (the hash of the objects), or else it is measured on
   the boards like any change of speed.
