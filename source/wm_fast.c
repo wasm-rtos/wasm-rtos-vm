@@ -56,39 +56,26 @@ static void skip_block_type(const uint8_t** p)
         leb_s64(p);
 }
 
-/* The i32 instructions with handlers of their own, by opcode; 0 for the shared numeric one. */
+/* The i32 instructions with handlers of their own (wm_ops.def), by opcode; 0 for the shared numeric one. */
 static uint8_t fast_numeric(uint8_t op)
 {
-    if (op >= 0x45u && op <= 0x4Fu)
-        return (uint8_t)(WM_F_EQZ + (op - 0x45u));
     switch (op)
     {
-        case 0x6A: return WM_F_ADD;
-        case 0x6B: return WM_F_SUB;
-        case 0x6C: return WM_F_MUL;
-        case 0x71: return WM_F_AND;
-        case 0x72: return WM_F_OR;
-        case 0x73: return WM_F_XOR;
-        case 0x74: return WM_F_SHL;
-        case 0x75: return WM_F_SHR_S;
-        case 0x76: return WM_F_SHR_U;
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)                                                                    \
+    case OP: return WM_F_##NAME;
+#include "wm_ops.def"
         default: return 0;
     }
 }
 
-/* The i32 memory accesses with handlers of their own, the offset as operand, by opcode; 0 for the others. */
+/* The i32 memory accesses with handlers of their own (wm_ops.def), the offset as operand, by opcode; 0 for the others. */
 static uint8_t fast_access(uint8_t op)
 {
     switch (op)
     {
-        case 0x28: return WM_F_I32_LOAD;
-        case 0x2C: return WM_F_I32_LOAD8_S;
-        case 0x2D: return WM_F_I32_LOAD8_U;
-        case 0x2E: return WM_F_I32_LOAD16_S;
-        case 0x2F: return WM_F_I32_LOAD16_U;
-        case 0x36: return WM_F_I32_STORE;
-        case 0x3A: return WM_F_I32_STORE8;
-        case 0x3B: return WM_F_I32_STORE16;
+#define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)                                                                  \
+    case OP: return WM_F_##NAME;
+#include "wm_ops.def"
         default: return 0;
     }
 }

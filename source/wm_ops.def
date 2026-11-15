@@ -1,0 +1,127 @@
+/*
+ * The predecoded records, one line each, in the order of their codes: the
+ * one description the record kinds (WM_F_*), the fast loop's handler table,
+ * the predecoder's choice of record and the i32 operations both loops run
+ * are made from. Include it with the kinds you need defined; a kind left
+ * undefined is a plain WM_RECORD, and WM_RECORD left undefined is nothing.
+ *
+ * WM_RECORD(NAME, name)                   a record, its handler f_name
+ * WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)   an i32 access with the offset as
+ *                                         operand; KIND is LOAD or STORE
+ * WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)     an i32 instruction: EXPR of a and,
+ *                                         for two operands, b
+ * WM_RECORD_FUSED(NAME, name)                    the first record of a common run
+ * WM_RECORD_FUSED_BRANCH(NAME, name)             one ending in a branch (WM_FUSE)
+ */
+#ifndef WM_RECORD
+#define WM_RECORD(NAME, name)
+#endif
+#ifndef WM_RECORD_ACCESS
+#define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND) WM_RECORD(NAME, name)
+#endif
+#ifndef WM_RECORD_I32
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) WM_RECORD(NAME, name)
+#endif
+#ifndef WM_RECORD_FUSED
+#define WM_RECORD_FUSED(NAME, name) WM_RECORD(NAME, name)
+#endif
+#ifndef WM_RECORD_FUSED_BRANCH
+#define WM_RECORD_FUSED_BRANCH(NAME, name) WM_RECORD_FUSED(NAME, name)
+#endif
+
+WM_RECORD(UNREACHABLE, unreachable)
+WM_RECORD(NOP, nop)
+WM_RECORD(IF, if)
+WM_RECORD(JUMP, jump)
+WM_RECORD(BR, br)
+WM_RECORD(BR_IF, br_if)
+WM_RECORD(BR_TABLE, br_table)
+WM_RECORD(RETURN, return)
+WM_RECORD(CALL, call)
+WM_RECORD(CALL_INDIRECT, call_indirect)
+WM_RECORD(DROP, drop)
+WM_RECORD(SELECT, select)
+WM_RECORD(LOCAL_GET1, local_get1)
+WM_RECORD(LOCAL_SET1, local_set1)
+WM_RECORD(LOCAL_TEE1, local_tee1)
+WM_RECORD(LOCAL_GET, local_get)
+WM_RECORD(LOCAL_SET, local_set)
+WM_RECORD(LOCAL_TEE, local_tee)
+WM_RECORD(GLOBAL_GET, global_get)
+WM_RECORD(GLOBAL_SET, global_set)
+WM_RECORD(GLOBAL_GET1, global_get1)
+WM_RECORD(GLOBAL_SET1, global_set1)
+WM_RECORD(TABLE_GET, table_get)
+WM_RECORD(TABLE_SET, table_set)
+/* Every other access, through the table of sizes. */
+WM_RECORD(ACCESS, access)
+WM_RECORD_ACCESS(I32_LOAD, i32_load, 0x28, uint32_t, LOAD)
+WM_RECORD_ACCESS(I32_LOAD8_S, i32_load8_s, 0x2C, int8_t, LOAD)
+WM_RECORD_ACCESS(I32_LOAD8_U, i32_load8_u, 0x2D, uint8_t, LOAD)
+WM_RECORD_ACCESS(I32_LOAD16_S, i32_load16_s, 0x2E, int16_t, LOAD)
+WM_RECORD_ACCESS(I32_LOAD16_U, i32_load16_u, 0x2F, uint16_t, LOAD)
+WM_RECORD_ACCESS(I32_STORE, i32_store, 0x36, uint32_t, STORE)
+WM_RECORD_ACCESS(I32_STORE8, i32_store8, 0x3A, uint8_t, STORE)
+WM_RECORD_ACCESS(I32_STORE16, i32_store16, 0x3B, uint16_t, STORE)
+WM_RECORD(MEMORY_SIZE, memory_size)
+WM_RECORD(MEMORY_GROW, memory_grow)
+WM_RECORD(CONST16, const16)
+WM_RECORD(CONST32, const32)
+WM_RECORD(CONST64, const64)
+/* Every other numeric instruction, through the shared ones of wm_exec.c. */
+WM_RECORD(NUMERIC, numeric)
+WM_RECORD_I32(EQZ, eqz, 0x45, 1, a == 0)
+WM_RECORD_I32(EQ, eq, 0x46, 2, a == b)
+WM_RECORD_I32(NE, ne, 0x47, 2, a != b)
+WM_RECORD_I32(LT_S, lt_s, 0x48, 2, (int32_t)a < (int32_t)b)
+WM_RECORD_I32(LT_U, lt_u, 0x49, 2, a < b)
+WM_RECORD_I32(GT_S, gt_s, 0x4A, 2, (int32_t)a > (int32_t)b)
+WM_RECORD_I32(GT_U, gt_u, 0x4B, 2, a > b)
+WM_RECORD_I32(LE_S, le_s, 0x4C, 2, (int32_t)a <= (int32_t)b)
+WM_RECORD_I32(LE_U, le_u, 0x4D, 2, a <= b)
+WM_RECORD_I32(GE_S, ge_s, 0x4E, 2, (int32_t)a >= (int32_t)b)
+WM_RECORD_I32(GE_U, ge_u, 0x4F, 2, a >= b)
+WM_RECORD_I32(ADD, add, 0x6A, 2, a + b)
+WM_RECORD_I32(SUB, sub, 0x6B, 2, a - b)
+WM_RECORD_I32(MUL, mul, 0x6C, 2, a * b)
+WM_RECORD_I32(AND, and, 0x71, 2, a & b)
+WM_RECORD_I32(OR, or, 0x72, 2, a | b)
+WM_RECORD_I32(XOR, xor, 0x73, 2, a ^ b)
+WM_RECORD_I32(SHL, shl, 0x74, 2, a << (b & 31u))
+WM_RECORD_I32(SHR_S, shr_s, 0x75, 2, (uint32_t)((int32_t)a >> (b & 31u)))
+WM_RECORD_I32(SHR_U, shr_u, 0x76, 2, a >> (b & 31u))
+WM_RECORD(REF_NULL, ref_null)
+WM_RECORD(REF_IS_NULL, ref_is_null)
+WM_RECORD(REF_FUNC, ref_func)
+WM_RECORD(SAT, sat)
+WM_RECORD(MISC, misc)
+/*
+ * Fused: the first record of a common run gets one of these; it runs the
+ * whole run when there is fuel for it, else only its own instruction.
+ */
+WM_RECORD_FUSED(GET_CONST_ADD, get_const_add)
+WM_RECORD_FUSED(GET_GET_ADD, get_get_add)
+WM_RECORD_FUSED(GET_CONST, get_const)
+WM_RECORD_FUSED(GET_GET, get_get)
+WM_RECORD_FUSED(SET_GET, set_get)
+WM_RECORD_FUSED(CONST_ADD, const_add)
+WM_RECORD_FUSED(CONST_AND, const_and)
+WM_RECORD_FUSED(CONST_SUB, const_sub)
+WM_RECORD_FUSED(ADD_SET, add_set)
+WM_RECORD_FUSED(GET_LOAD, get_load)
+WM_RECORD_FUSED_BRANCH(TEE_BR_IF, tee_br_if)
+WM_RECORD_FUSED_BRANCH(SET_GET_BR_IF, set_get_br_if)
+WM_RECORD_FUSED_BRANCH(EQ_BR_IF, eq_br_if)
+WM_RECORD_FUSED_BRANCH(NE_BR_IF, ne_br_if)
+WM_RECORD_FUSED_BRANCH(EQZ_BR_IF, eqz_br_if)
+WM_RECORD_FUSED_BRANCH(LE_U_BR_IF, le_u_br_if)
+WM_RECORD_FUSED_BRANCH(LT_U_BR_IF, lt_u_br_if)
+WM_RECORD_FUSED_BRANCH(EQ_IF, eq_if)
+WM_RECORD_FUSED_BRANCH(NE_IF, ne_if)
+WM_RECORD_FUSED_BRANCH(EQZ_IF, eqz_if)
+
+#undef WM_RECORD
+#undef WM_RECORD_ACCESS
+#undef WM_RECORD_I32
+#undef WM_RECORD_FUSED
+#undef WM_RECORD_FUSED_BRANCH

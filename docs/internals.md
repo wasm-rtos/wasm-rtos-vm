@@ -34,6 +34,12 @@ so the three are one unit for the compiler.
   It is two to three times faster. A module whose operands do not fit runs
   in place.
 
+The records are listed once, in `source/wm_ops.def` (decision 9): their
+kinds, the loop's table of handlers and the predecoder's choice of record
+come from it, and so do the i32 operations with records of their own
+(`i32_add` and the rest), which both loops run. A new record is a line
+there and its handler; a new i32 operation is only the line.
+
 The top of the stack stays in a register (`tos`); its slot is written only
 when the stack goes to memory (`FAST_SPILL`): before a call, a helper, a
 branch that moves values, a stop. There the stack is in memory as the loop

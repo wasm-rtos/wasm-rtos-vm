@@ -57,32 +57,11 @@ static WmResult page_fault(WmRuntime* rt)
 WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 {
     static const void* const labels[WM_F_COUNT] = {
-        [WM_F_UNREACHABLE] = &&f_unreachable, [WM_F_NOP] = &&f_nop, [WM_F_IF] = &&f_if, [WM_F_JUMP] = &&f_jump,
-        [WM_F_BR] = &&f_br, [WM_F_BR_IF] = &&f_br_if, [WM_F_BR_TABLE] = &&f_br_table, [WM_F_RETURN] = &&f_return,
-        [WM_F_CALL] = &&f_call, [WM_F_CALL_INDIRECT] = &&f_call_indirect, [WM_F_DROP] = &&f_drop,
-        [WM_F_SELECT] = &&f_select, [WM_F_LOCAL_GET1] = &&f_local_get1, [WM_F_LOCAL_SET1] = &&f_local_set1,
-        [WM_F_LOCAL_TEE1] = &&f_local_tee1, [WM_F_LOCAL_GET] = &&f_local_get, [WM_F_LOCAL_SET] = &&f_local_set,
-        [WM_F_LOCAL_TEE] = &&f_local_tee, [WM_F_GLOBAL_GET] = &&f_global_get, [WM_F_GLOBAL_SET] = &&f_global_set,
-        [WM_F_GLOBAL_GET1] = &&f_global_get1, [WM_F_GLOBAL_SET1] = &&f_global_set1,
-        [WM_F_TABLE_GET] = &&f_table_get, [WM_F_TABLE_SET] = &&f_table_set, [WM_F_ACCESS] = &&f_access,
-        [WM_F_I32_LOAD] = &&f_i32_load, [WM_F_I32_LOAD8_S] = &&f_i32_load8_s, [WM_F_I32_LOAD8_U] = &&f_i32_load8_u,
-        [WM_F_I32_LOAD16_S] = &&f_i32_load16_s, [WM_F_I32_LOAD16_U] = &&f_i32_load16_u, [WM_F_I32_STORE] = &&f_i32_store,
-        [WM_F_I32_STORE8] = &&f_i32_store8, [WM_F_I32_STORE16] = &&f_i32_store16, [WM_F_MEMORY_SIZE] = &&f_memory_size,
-        [WM_F_MEMORY_GROW] = &&f_memory_grow, [WM_F_CONST16] = &&f_const16, [WM_F_CONST32] = &&f_const32,
-        [WM_F_CONST64] = &&f_const64,
-        [WM_F_NUMERIC] = &&f_numeric, [WM_F_EQZ] = &&f_eqz, [WM_F_EQ] = &&f_eq, [WM_F_NE] = &&f_ne,
-        [WM_F_LT_S] = &&f_lt_s, [WM_F_LT_U] = &&f_lt_u, [WM_F_GT_S] = &&f_gt_s, [WM_F_GT_U] = &&f_gt_u,
-        [WM_F_LE_S] = &&f_le_s, [WM_F_LE_U] = &&f_le_u, [WM_F_GE_S] = &&f_ge_s, [WM_F_GE_U] = &&f_ge_u,
-        [WM_F_ADD] = &&f_add, [WM_F_SUB] = &&f_sub, [WM_F_MUL] = &&f_mul, [WM_F_AND] = &&f_and, [WM_F_OR] = &&f_or,
-        [WM_F_XOR] = &&f_xor, [WM_F_SHL] = &&f_shl, [WM_F_SHR_S] = &&f_shr_s, [WM_F_SHR_U] = &&f_shr_u,
-        [WM_F_REF_NULL] = &&f_ref_null, [WM_F_REF_IS_NULL] = &&f_ref_is_null, [WM_F_REF_FUNC] = &&f_ref_func,
-        [WM_F_SAT] = &&f_sat, [WM_F_MISC] = &&f_misc, [WM_F_GET_CONST_ADD] = &&f_get_const_add,
-        [WM_F_GET_GET_ADD] = &&f_get_get_add, [WM_F_GET_CONST] = &&f_get_const, [WM_F_GET_GET] = &&f_get_get,
-        [WM_F_SET_GET] = &&f_set_get, [WM_F_CONST_ADD] = &&f_const_add, [WM_F_CONST_AND] = &&f_const_and,
-        [WM_F_CONST_SUB] = &&f_const_sub, [WM_F_ADD_SET] = &&f_add_set, [WM_F_GET_LOAD] = &&f_get_load,
-#if WM_FUSE
-        [WM_F_TEE_BR_IF] = &&f_tee_br_if, [WM_F_SET_GET_BR_IF] = &&f_set_get_br_if, [WM_F_EQ_BR_IF] = &&f_eq_br_if, [WM_F_NE_BR_IF] = &&f_ne_br_if, [WM_F_EQZ_BR_IF] = &&f_eqz_br_if, [WM_F_LE_U_BR_IF] = &&f_le_u_br_if, [WM_F_LT_U_BR_IF] = &&f_lt_u_br_if, [WM_F_EQ_IF] = &&f_eq_if, [WM_F_NE_IF] = &&f_ne_if, [WM_F_EQZ_IF] = &&f_eqz_if,
+#define WM_RECORD(NAME, name) [WM_F_##NAME] = &&f_##name,
+#if !WM_FUSE
+#define WM_RECORD_FUSED_BRANCH(NAME, name)
 #endif
+#include "wm_ops.def"
     };
     uint32_t entry_depth;
     WmCode* code;
@@ -224,13 +203,14 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         tos = (VALUE);                                                                                         \
         ++sp;                                                                                                  \
     } while (0)
-#define FAST_BINARY(NAME, EXPR)                                                                                \
-    NAME:                                                                                                      \
+/* An i32 instruction of wm_ops.def: one operand, tos, or two, the one below and tos. */
+#define FAST_I32(name, ARITY)                                                                                  \
+    f_##name:                                                                                                  \
     {                                                                                                          \
         uint32_t b = tos;                                                                                      \
-        uint32_t a = sp[-2];                                                                                   \
-        --sp;                                                                                                  \
-        tos = (uint32_t)(EXPR);                                                                                \
+        uint32_t a = (ARITY) == 2 ? sp[-2] : b;                                                                \
+        sp -= (ARITY) - 1;                                                                                     \
+        tos = i32_##name(a, b);                                                                                \
         FAST_NEXT();                                                                                           \
     }
 
@@ -552,14 +532,8 @@ f_access:
         FAST_RELOAD();                                                                                         \
         FAST_NEXT();                                                                                           \
     }
-    FAST_LOAD(f_i32_load, 0x28u, uint32_t)
-    FAST_LOAD(f_i32_load8_s, 0x2Cu, int8_t)
-    FAST_LOAD(f_i32_load8_u, 0x2Du, uint8_t)
-    FAST_LOAD(f_i32_load16_s, 0x2Eu, int16_t)
-    FAST_LOAD(f_i32_load16_u, 0x2Fu, uint16_t)
-    FAST_STORE(f_i32_store, 0x36u, uint32_t)
-    FAST_STORE(f_i32_store8, 0x3Au, uint8_t)
-    FAST_STORE(f_i32_store16, 0x3Bu, uint16_t)
+#define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND) FAST_##KIND(f_##name, OP##u, TYPE)
+#include "wm_ops.def"
 #undef FAST_STORE
 #undef FAST_LOAD
 f_memory_size:
@@ -604,28 +578,8 @@ f_numeric:
     FAST_RELOAD();
     FAST_NEXT();
 }
-f_eqz:
-    tos = tos == 0;
-    FAST_NEXT();
-    FAST_BINARY(f_eq, a == b)
-    FAST_BINARY(f_ne, a != b)
-    FAST_BINARY(f_lt_s, (int32_t)a < (int32_t)b)
-    FAST_BINARY(f_lt_u, a < b)
-    FAST_BINARY(f_gt_s, (int32_t)a > (int32_t)b)
-    FAST_BINARY(f_gt_u, a > b)
-    FAST_BINARY(f_le_s, (int32_t)a <= (int32_t)b)
-    FAST_BINARY(f_le_u, a <= b)
-    FAST_BINARY(f_ge_s, (int32_t)a >= (int32_t)b)
-    FAST_BINARY(f_ge_u, a >= b)
-    FAST_BINARY(f_add, a + b)
-    FAST_BINARY(f_sub, a - b)
-    FAST_BINARY(f_mul, a * b)
-    FAST_BINARY(f_and, a & b)
-    FAST_BINARY(f_or, a | b)
-    FAST_BINARY(f_xor, a ^ b)
-    FAST_BINARY(f_shl, a << (b & 31u))
-    FAST_BINARY(f_shr_s, (uint32_t)((int32_t)a >> (b & 31u)))
-    FAST_BINARY(f_shr_u, a >> (b & 31u))
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) FAST_I32(name, ARITY)
+#include "wm_ops.def"
 #if WM_HAS_REF_TYPES
 f_ref_null:
     FAST_SPILL();
@@ -810,14 +764,14 @@ f_set_get_br_if:
         ip = (EXPR) ? ip + 1 : ip + SIMM_OF(ip[0]);                                                            \
         FAST_NEXT();                                                                                           \
     }
-    FAST_CMP_BR_IF(f_eq_br_if, f_eq, 2, sp[-2], a == b)
-    FAST_CMP_BR_IF(f_ne_br_if, f_ne, 2, sp[-2], a != b)
-    FAST_CMP_BR_IF(f_eqz_br_if, f_eqz, 1, 0u, ((void)a, b == 0))
-    FAST_CMP_BR_IF(f_le_u_br_if, f_le_u, 2, sp[-2], a <= b)
-    FAST_CMP_BR_IF(f_lt_u_br_if, f_lt_u, 2, sp[-2], a < b)
-    FAST_CMP_IF(f_eq_if, f_eq, 2, sp[-2], a == b)
-    FAST_CMP_IF(f_ne_if, f_ne, 2, sp[-2], a != b)
-    FAST_CMP_IF(f_eqz_if, f_eqz, 1, 0u, ((void)a, b == 0))
+    FAST_CMP_BR_IF(f_eq_br_if, f_eq, 2, sp[-2], i32_eq(a, b))
+    FAST_CMP_BR_IF(f_ne_br_if, f_ne, 2, sp[-2], i32_ne(a, b))
+    FAST_CMP_BR_IF(f_eqz_br_if, f_eqz, 1, b, i32_eqz(a, b))
+    FAST_CMP_BR_IF(f_le_u_br_if, f_le_u, 2, sp[-2], i32_le_u(a, b))
+    FAST_CMP_BR_IF(f_lt_u_br_if, f_lt_u, 2, sp[-2], i32_lt_u(a, b))
+    FAST_CMP_IF(f_eq_if, f_eq, 2, sp[-2], i32_eq(a, b))
+    FAST_CMP_IF(f_ne_if, f_ne, 2, sp[-2], i32_ne(a, b))
+    FAST_CMP_IF(f_eqz_if, f_eqz, 1, b, i32_eqz(a, b))
 #undef FAST_CMP_IF
 #undef FAST_CMP_BR_IF
 #undef FAST_TAKE_BR_IF
@@ -921,7 +875,7 @@ suspend:
         rt->fuel = fuel;
     rt->suspended = 1;
     return stop;
-#undef FAST_BINARY
+#undef FAST_I32
 #undef IMM
 #undef SIMM
 #undef IMM_OF

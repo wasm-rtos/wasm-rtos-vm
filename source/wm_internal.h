@@ -142,6 +142,7 @@ void wm_free(void* ptr);
 #define WM_HOT
 #endif
 #define WM_NOINLINE __attribute__((noinline))
+#define WM_ALWAYS_INLINE inline __attribute__((always_inline))
 /*
  * Short immediates are read in the instruction's own code where calls cost
  * much (Xtensa); elsewhere the compiler decides, which measured faster.
@@ -378,97 +379,11 @@ typedef union WmCell
     int32_t s32;
 } WmCell;
 
-/* The predecoded records' kinds, each the code of one handler. */
+/* The predecoded records' kinds, each the code of one handler (wm_ops.def). */
 enum
 {
-    WM_F_UNREACHABLE,
-    WM_F_NOP,
-    WM_F_IF,
-    WM_F_JUMP,
-    WM_F_BR,
-    WM_F_BR_IF,
-    WM_F_BR_TABLE,
-    WM_F_RETURN,
-    WM_F_CALL,
-    WM_F_CALL_INDIRECT,
-    WM_F_DROP,
-    WM_F_SELECT,
-    WM_F_LOCAL_GET1,
-    WM_F_LOCAL_SET1,
-    WM_F_LOCAL_TEE1,
-    WM_F_LOCAL_GET,
-    WM_F_LOCAL_SET,
-    WM_F_LOCAL_TEE,
-    WM_F_GLOBAL_GET,
-    WM_F_GLOBAL_SET,
-    WM_F_GLOBAL_GET1,
-    WM_F_GLOBAL_SET1,
-    WM_F_TABLE_GET,
-    WM_F_TABLE_SET,
-    WM_F_ACCESS,
-    WM_F_I32_LOAD,
-    WM_F_I32_LOAD8_S,
-    WM_F_I32_LOAD8_U,
-    WM_F_I32_LOAD16_S,
-    WM_F_I32_LOAD16_U,
-    WM_F_I32_STORE,
-    WM_F_I32_STORE8,
-    WM_F_I32_STORE16,
-    WM_F_MEMORY_SIZE,
-    WM_F_MEMORY_GROW,
-    WM_F_CONST16,
-    WM_F_CONST32,
-    WM_F_CONST64,
-    WM_F_NUMERIC,
-    WM_F_EQZ,
-    WM_F_EQ,
-    WM_F_NE,
-    WM_F_LT_S,
-    WM_F_LT_U,
-    WM_F_GT_S,
-    WM_F_GT_U,
-    WM_F_LE_S,
-    WM_F_LE_U,
-    WM_F_GE_S,
-    WM_F_GE_U,
-    WM_F_ADD,
-    WM_F_SUB,
-    WM_F_MUL,
-    WM_F_AND,
-    WM_F_OR,
-    WM_F_XOR,
-    WM_F_SHL,
-    WM_F_SHR_S,
-    WM_F_SHR_U,
-    WM_F_REF_NULL,
-    WM_F_REF_IS_NULL,
-    WM_F_REF_FUNC,
-    WM_F_SAT,
-    WM_F_MISC,
-    /*
-     * Fused: the first record of a common run gets one of these; it runs the
-     * whole run when there is fuel for it, else only its own instruction.
-     */
-    WM_F_GET_CONST_ADD,
-    WM_F_GET_GET_ADD,
-    WM_F_GET_CONST,
-    WM_F_GET_GET,
-    WM_F_SET_GET,
-    WM_F_CONST_ADD,
-    WM_F_CONST_AND,
-    WM_F_CONST_SUB,
-    WM_F_ADD_SET,
-    WM_F_GET_LOAD,
-    WM_F_TEE_BR_IF,
-    WM_F_SET_GET_BR_IF,
-    WM_F_EQ_BR_IF,
-    WM_F_NE_BR_IF,
-    WM_F_EQZ_BR_IF,
-    WM_F_LE_U_BR_IF,
-    WM_F_LT_U_BR_IF,
-    WM_F_EQ_IF,
-    WM_F_NE_IF,
-    WM_F_EQZ_IF,
+#define WM_RECORD(NAME, name) WM_F_##NAME,
+#include "wm_ops.def"
     WM_F_COUNT
 };
 
