@@ -76,6 +76,23 @@ static uint8_t fast_numeric(uint8_t op)
     }
 }
 
+/* The i32 memory accesses with handlers of their own, the offset as operand, by opcode; 0 for the others. */
+static uint8_t fast_access(uint8_t op)
+{
+    switch (op)
+    {
+        case 0x28: return WM_F_I32_LOAD;
+        case 0x2C: return WM_F_I32_LOAD8_S;
+        case 0x2D: return WM_F_I32_LOAD8_U;
+        case 0x2E: return WM_F_I32_LOAD16_S;
+        case 0x2F: return WM_F_I32_LOAD16_U;
+        case 0x36: return WM_F_I32_STORE;
+        case 0x3A: return WM_F_I32_STORE8;
+        case 0x3B: return WM_F_I32_STORE16;
+        default: return 0;
+    }
+}
+
 /* Whether a constant fits a record's signed 16-bit operand. */
 static int fits16(int64_t value)
 {
@@ -193,7 +210,7 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
                 uint32_t offset;
                 leb_u32(&p);
                 offset = leb_u32(&p);
-                *cells = (op == 0x28u || op == 0x36u) && offset <= 0xFFFFu ? 1u : 2u;
+                *cells = fast_access(op) && offset <= 0xFFFFu ? 1u : 2u;
             }
     }
     return p;
@@ -459,7 +476,7 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
                     break;
                 case 0x11:
                     kind = WM_F_CALL_INDIRECT;
-                    operand = leb_u32(&p);
+                    operand = m->types[leb_u32(&p)].canon;
                     out[1].u32 = leb_u32(&p);
                     break;
                 case 0x1A:
@@ -493,8 +510,12 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
                 }
                 case 0x23:
                 case 0x24:
-                    kind = op == 0x23u ? WM_F_GLOBAL_GET : WM_F_GLOBAL_SET;
+                    /* A global of one slot (i32, f32: the stack pointer of C programs) has handlers of its own. */
                     operand = leb_u32(&p);
+                    if (wm_type_slots(m->globals[operand].type) == 1u)
+                        kind = op == 0x23u ? WM_F_GLOBAL_GET1 : WM_F_GLOBAL_SET1;
+                    else
+                        kind = op == 0x23u ? WM_F_GLOBAL_GET : WM_F_GLOBAL_SET;
                     break;
                 case 0x25:
                 case 0x26:
@@ -561,7 +582,7 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
                     offset = leb_u32(&p);
                     if (n == 1u)
                     {
-                        kind = op == 0x28u ? WM_F_I32_LOAD : WM_F_I32_STORE;
+                        kind = fast_access(op);
                         operand = offset;
                     }
                     else

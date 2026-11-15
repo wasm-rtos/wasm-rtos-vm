@@ -211,12 +211,15 @@ int wm_bytes_equal(const uint8_t* program, uint32_t program_count, const uint8_t
 
 int wm_func_has_type(const WmFunc* f, const WmType* t)
 {
+    const WmType* own = f->type;
+    if (own == t)
+        return 1;
     /* A host function's types are in RAM, a program's where its bytes are. */
     if (!f->instance)
-        return wm_bytes_equal(t->params, t->param_count, f->params, f->param_count) &&
-               wm_bytes_equal(t->results, t->result_count, f->results, f->result_count);
-    return wm_types_equal(f->params, f->param_count, t->params, t->param_count) &&
-           wm_types_equal(f->results, f->result_count, t->results, t->result_count);
+        return wm_bytes_equal(t->params, t->param_count, own->params, own->param_count) &&
+               wm_bytes_equal(t->results, t->result_count, own->results, own->result_count);
+    return wm_types_equal(own->params, own->param_count, t->params, t->param_count) &&
+           wm_types_equal(own->results, own->result_count, t->results, t->result_count);
 }
 
 /* A value type; float types are refused when floating point is not built in. */
@@ -1217,6 +1220,14 @@ static void read_types(Loader* l, Reader* r)
                 if (is_ref(WM_RD8(types + k)))
                     m->stack_refs = 1;
         }
+        t->canon = (wm_count_t)(m->type_count - 1u);
+        for (uint32_t k = 0; k + 1u < m->type_count; ++k)
+            if (wm_types_equal(m->types[k].params, m->types[k].param_count, t->params, t->param_count) &&
+                wm_types_equal(m->types[k].results, m->types[k].result_count, t->results, t->result_count))
+            {
+                t->canon = (wm_count_t)k;
+                break;
+            }
     }
 }
 

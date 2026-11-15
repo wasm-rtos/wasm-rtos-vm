@@ -604,10 +604,19 @@ static uint32_t grow_table(WmTable* t, uint32_t delta, uintptr_t init)
 
 uint32_t wm_table_grow(WmTable* table, uint32_t delta) { return grow_table(table, delta, 0); }
 
-/* The bulk memory and table instructions after 0xFC: all but the saturating conversions. */
-static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_t** stack)
+/* A helper's trap: noted in *trap, and NULL for the stack. */
+static uint32_t* trapped(WmResult* trap, WmResult e)
 {
-    uint32_t* sp = *stack;
+    *trap = e;
+    return NULL;
+}
+
+/*
+ * The bulk memory and table instructions after 0xFC: all but the saturating
+ * conversions. The stack after it, or NULL and *trap, as the numeric helpers.
+ */
+static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_t* sp, WmResult* trap)
+{
     WmMemory* memory = inst->memory;
     wm_size mem_size = memory ? WM_MEMORY_SIZE(memory) : 0;
     uint32_t a = 0;
@@ -632,10 +641,10 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             ++*pc;
             sp -= 3;
             if (wm_out_of_bounds(src, n, size) || wm_out_of_bounds(dst, n, mem_size))
-                return T_OOB_MEMORY;
+                return trapped(trap, T_OOB_MEMORY);
 #if WM_HAS_MMU
             if ((result = wm_memory_write(memory, dst, s->data + src, n)))
-                return result;
+                return trapped(trap, result);
 #else
             for (uint32_t i = 0; i < n; ++i)
                 memory->data[dst + i] = WM_RD8(s->data + src + i);
@@ -650,10 +659,10 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             *pc += sub == 10u ? 2 : 1;
             sp -= 3;
             if (wm_out_of_bounds(dst, n, mem_size) || (sub == 10u && wm_out_of_bounds(src, n, mem_size)))
-                return T_OOB_MEMORY;
+                return trapped(trap, T_OOB_MEMORY);
 #if WM_HAS_MMU
             if ((result = sub == 10u ? wm_memory_copy(memory, dst, src, n) : wm_memory_fill(memory, dst, (uint8_t)src, n)))
-                return result;
+                return trapped(trap, result);
 #else
             if (sub == 10u)
                 memmove(memory->data + dst, memory->data + src, n);
@@ -674,7 +683,7 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             uint32_t n = sp[-1], src = sp[-2], dst = sp[-3];
             sp -= 3;
             if (wm_out_of_bounds(src, n, src_table->size) || wm_out_of_bounds(dst, n, t->size))
-                return T_OOB_TABLE;
+                return trapped(trap, T_OOB_TABLE);
             memmove(t->elems + dst, src_table->elems + src, (size_t)n * sizeof(uintptr_t));
             break;
         }
@@ -693,15 +702,14 @@ static WmResult misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32_
             value = get_ref(sp);
             a = *--sp;
             if (wm_out_of_bounds(a, b, t->size))
-                return T_OOB_TABLE;
+                return trapped(trap, T_OOB_TABLE);
             for (uint32_t k = 0; k < b; ++k)
                 t->elems[a + k] = value;
             break;
         }
 #endif
     }
-    *stack = sp;
-    return result;
+    return result ? trapped(trap, result) : sp;
 }
 
 /*
@@ -791,8 +799,11 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         [WM_F_SELECT] = &&f_select, [WM_F_LOCAL_GET1] = &&f_local_get1, [WM_F_LOCAL_SET1] = &&f_local_set1,
         [WM_F_LOCAL_TEE1] = &&f_local_tee1, [WM_F_LOCAL_GET] = &&f_local_get, [WM_F_LOCAL_SET] = &&f_local_set,
         [WM_F_LOCAL_TEE] = &&f_local_tee, [WM_F_GLOBAL_GET] = &&f_global_get, [WM_F_GLOBAL_SET] = &&f_global_set,
+        [WM_F_GLOBAL_GET1] = &&f_global_get1, [WM_F_GLOBAL_SET1] = &&f_global_set1,
         [WM_F_TABLE_GET] = &&f_table_get, [WM_F_TABLE_SET] = &&f_table_set, [WM_F_ACCESS] = &&f_access,
-        [WM_F_I32_LOAD] = &&f_i32_load, [WM_F_I32_STORE] = &&f_i32_store, [WM_F_MEMORY_SIZE] = &&f_memory_size,
+        [WM_F_I32_LOAD] = &&f_i32_load, [WM_F_I32_LOAD8_S] = &&f_i32_load8_s, [WM_F_I32_LOAD8_U] = &&f_i32_load8_u,
+        [WM_F_I32_LOAD16_S] = &&f_i32_load16_s, [WM_F_I32_LOAD16_U] = &&f_i32_load16_u, [WM_F_I32_STORE] = &&f_i32_store,
+        [WM_F_I32_STORE8] = &&f_i32_store8, [WM_F_I32_STORE16] = &&f_i32_store16, [WM_F_MEMORY_SIZE] = &&f_memory_size,
         [WM_F_MEMORY_GROW] = &&f_memory_grow, [WM_F_CONST16] = &&f_const16, [WM_F_CONST32] = &&f_const32,
         [WM_F_CONST64] = &&f_const64,
         [WM_F_NUMERIC] = &&f_numeric, [WM_F_EQZ] = &&f_eqz, [WM_F_EQ] = &&f_eq, [WM_F_NE] = &&f_ne,
@@ -816,7 +827,12 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     const WmCell* ip;
     uint32_t* fp;
     uint32_t* sp;
-    /* The top of the stack, also in sp[-1]: values are read back from here, not from memory. */
+    /*
+     * The top of the stack. Its slot, sp[-1], is written only when the stack
+     * goes to memory (FAST_SPILL): before a call, a helper, a branch that
+     * moves values, a stop. With nothing on the stack tos holds what sp[-1]
+     * holds, so writing it there changes nothing.
+     */
     uint32_t tos = 0;
     uint8_t* mem;
     wm_size mem_size;
@@ -934,13 +950,23 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 #define SIMM_OF(C) ((C).s32 >> 16)
 /* After code that changed the stack in memory only. */
 #define FAST_RELOAD() (tos = sp[-1])
+/* The whole stack in memory, for code that works on it there. */
+#define FAST_SPILL() (sp[-1] = tos)
+/* A value on top: the one below goes to its slot. */
+#define FAST_PUSH(VALUE)                                                                                       \
+    do                                                                                                         \
+    {                                                                                                          \
+        sp[-1] = tos;                                                                                          \
+        tos = (VALUE);                                                                                         \
+        ++sp;                                                                                                  \
+    } while (0)
 #define FAST_BINARY(NAME, EXPR)                                                                                \
     NAME:                                                                                                      \
     {                                                                                                          \
         uint32_t b = tos;                                                                                      \
         uint32_t a = sp[-2];                                                                                   \
         --sp;                                                                                                  \
-        sp[-1] = tos = (uint32_t)(EXPR);                                                                       \
+        tos = (uint32_t)(EXPR);                                                                                \
         FAST_NEXT();                                                                                           \
     }
 
@@ -964,6 +990,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         TRAP(T_STACK);
     zero_slots(sp, code->local_slots);
     sp += code->local_slots;
+    FAST_RELOAD();
     ip = code->fast;
     FAST_NEXT();
 
@@ -1012,6 +1039,7 @@ f_br:
 take:
     if (drop)
     {
+        FAST_SPILL();
         copy_slots(sp - keep - drop, sp - keep, keep);
         sp -= drop;
         FAST_RELOAD();
@@ -1034,6 +1062,7 @@ f_return:
 {
     uint32_t n = func->result_slots;
     WmFrame* frame;
+    FAST_SPILL();
     copy_slots(fp, sp - n, n);
     sp = fp + n;
     if (rt->depth == entry_depth)
@@ -1055,6 +1084,7 @@ f_call:
     goto call;
 f_call_indirect:
 {
+    /* The record has the type as functions point to it (WM_TYPE). */
     const WmType* type = &inst->module->types[IMM];
     WmTable* table = inst->tables[ip[0].u32];
     uint32_t index = tos;
@@ -1065,9 +1095,12 @@ f_call_indirect:
     callee = (WmFunc*)table->elems[index];
     if (!callee)
         TRAP(WM_ERR_TRAP("trap: uninitialized element"));
-    if (!wm_func_has_type(callee, type))
+    /* The same type is the same pointer; only another module's or a host's needs comparing. */
+    if (callee->type != type && !wm_func_has_type(callee, type))
         TRAP(WM_ERR_TRAP("trap: indirect call type mismatch"));
-    goto call;
+    /* Below the index the stack is in memory already; tos becomes the last argument. */
+    FAST_RELOAD();
+    goto call_spilled;
 }
 f_drop:
     sp -= IMM;
@@ -1076,6 +1109,14 @@ f_drop:
 f_select:
 {
     uint32_t n = IMM;
+    if (n == 1u)
+    {
+        uint32_t c = tos;
+        sp -= 2;
+        tos = c ? sp[-1] : sp[0];
+        FAST_NEXT();
+    }
+    FAST_SPILL();
     if (!*--sp)
         copy_slots(sp - 2u * n, sp - n, n);
     sp -= n;
@@ -1083,7 +1124,7 @@ f_select:
     FAST_NEXT();
 }
 f_local_get1:
-    *sp++ = tos = fp[IMM];
+    FAST_PUSH(fp[IMM]);
     FAST_NEXT();
 f_local_set1:
     fp[IMM] = tos;
@@ -1094,20 +1135,31 @@ f_local_tee1:
     fp[IMM] = tos;
     FAST_NEXT();
 f_local_get:
+    FAST_SPILL();
     copy_slots(sp, fp + IMM, ip[0].u32);
     sp += ip[0].u32;
     ++ip;
     FAST_RELOAD();
     FAST_NEXT();
 f_local_set:
+    FAST_SPILL();
     sp -= ip[0].u32;
     copy_slots(fp + IMM, sp, ip[0].u32);
     ++ip;
     FAST_RELOAD();
     FAST_NEXT();
 f_local_tee:
+    FAST_SPILL();
     copy_slots(fp + IMM, sp - ip[0].u32, ip[0].u32);
     ++ip;
+    FAST_NEXT();
+f_global_get1:
+    FAST_PUSH((uint32_t)inst->globals[IMM]->value);
+    FAST_NEXT();
+f_global_set1:
+    inst->globals[IMM]->value = tos;
+    --sp;
+    FAST_RELOAD();
     FAST_NEXT();
 f_global_get:
     keep = 1;
@@ -1118,6 +1170,7 @@ global:
 {
     WmGlobal* g = inst->globals[IMM];
     uint32_t n = wm_type_slots(g->type);
+    FAST_SPILL();
     if (keep)
     {
         if (n == 1u)
@@ -1146,6 +1199,7 @@ table:
 #if WM_HAS_REF_TYPES
 {
     WmTable* t = inst->tables[IMM];
+    FAST_SPILL();
     int set = keep != 0;
     uintptr_t r = 0;
     uint32_t i;
@@ -1180,18 +1234,21 @@ f_access:
     uint32_t above = op >= 0x36u ? ((d & 8u) ? 2u : 1u) : 0u;
     uint64_t value = 0;
     uint8_t* host;
+    /* tos is a load's address or a store's value; a 64-bit value is read from memory. */
+    if (above == 2u)
+        FAST_SPILL();
     /* Loads by the TLB's load tag, stores by its store tag. */
-    FAST_ADDR(sp[-1 - (int32_t)above], offset, size, host, op, ip - 1, 2u, (above ? e_->wtag : e_->tag));
+    FAST_ADDR(above ? sp[-1 - (int32_t)above] : tos, offset, size, host, op, ip - 1, 2u,
+              (above ? e_->wtag : e_->tag));
     ++ip;
     if (op >= 0x36u)
     {
-        value = above == 2u ? get64(sp - 2) : sp[-1];
+        value = above == 2u ? get64(sp - 2) : tos;
         sp -= above + 1u;
         store_bytes(host, value, size);
         FAST_RELOAD();
         FAST_NEXT();
     }
-    --sp;
     value = load_bytes(host, size);
     if (d & 4u)
     {
@@ -1200,52 +1257,67 @@ f_access:
     }
     if (d & 8u)
     {
-        put64(sp, value);
-        sp += 2;
+        put64(sp - 1, value);
+        ++sp;
+        FAST_RELOAD();
     }
     else
-        *sp++ = (uint32_t)value;
-    FAST_RELOAD();
+        tos = (uint32_t)value;
     FAST_NEXT();
 }
-f_i32_load:
-{
-    uint32_t offset = IMM;
-    uint32_t address = tos;
-    uint32_t value;
-    uint8_t* host;
-    FAST_ADDR(address, offset, 4u, host, 0x28u, ip - 1, 1u, e_->tag);
-    __builtin_memcpy(&value, host, 4);
-    sp[-1] = tos = value;
-    FAST_NEXT();
-}
-f_i32_store:
-{
-    uint32_t offset = IMM;
-    uint32_t address = sp[-2];
-    uint8_t* host;
-    FAST_ADDR(address, offset, 4u, host, 0x36u, ip - 1, 1u, e_->wtag);
-    __builtin_memcpy(host, &tos, 4);
-    sp -= 2;
-    FAST_RELOAD();
-    FAST_NEXT();
-}
+    /*
+     * The common i32 accesses, the offset as operand. A load's address is
+     * tos and its value goes there; a store's value is tos, its address
+     * below. Memory is little-endian, as WebAssembly's.
+     */
+#define FAST_LOAD(NAME, OP, TYPE)                                                                              \
+    NAME:                                                                                                      \
+    {                                                                                                          \
+        TYPE value;                                                                                            \
+        uint8_t* host;                                                                                         \
+        FAST_ADDR(tos, IMM, sizeof(TYPE), host, OP, ip - 1, 1u, e_->tag);                                      \
+        __builtin_memcpy(&value, host, sizeof(TYPE));                                                          \
+        tos = (uint32_t)(int32_t)value;                                                                        \
+        FAST_NEXT();                                                                                           \
+    }
+#define FAST_STORE(NAME, OP, TYPE)                                                                             \
+    NAME:                                                                                                      \
+    {                                                                                                          \
+        TYPE value = (TYPE)tos;                                                                                \
+        uint8_t* host;                                                                                         \
+        FAST_ADDR(sp[-2], IMM, sizeof(TYPE), host, OP, ip - 1, 1u, e_->wtag);                                  \
+        __builtin_memcpy(host, &value, sizeof(TYPE));                                                          \
+        sp -= 2;                                                                                               \
+        FAST_RELOAD();                                                                                         \
+        FAST_NEXT();                                                                                           \
+    }
+    FAST_LOAD(f_i32_load, 0x28u, uint32_t)
+    FAST_LOAD(f_i32_load8_s, 0x2Cu, int8_t)
+    FAST_LOAD(f_i32_load8_u, 0x2Du, uint8_t)
+    FAST_LOAD(f_i32_load16_s, 0x2Eu, int16_t)
+    FAST_LOAD(f_i32_load16_u, 0x2Fu, uint16_t)
+    FAST_STORE(f_i32_store, 0x36u, uint32_t)
+    FAST_STORE(f_i32_store8, 0x3Au, uint8_t)
+    FAST_STORE(f_i32_store16, 0x3Bu, uint16_t)
+#undef FAST_STORE
+#undef FAST_LOAD
 f_memory_size:
-    *sp++ = tos = inst->memory->pages;
+    FAST_PUSH(inst->memory->pages);
     FAST_NEXT();
 f_memory_grow:
     /* Making frames may drop predecoded code: not this function's. */
     rt->caller = func;
-    sp[-1] = tos = wm_memory_grow(inst->memory, tos);
+    tos = wm_memory_grow(inst->memory, tos);
     FAST_REFRESH();
     FAST_NEXT();
 f_const16:
-    *sp++ = tos = (uint32_t)SIMM;
+    FAST_PUSH((uint32_t)SIMM);
     FAST_NEXT();
 f_const32:
-    *sp++ = tos = (ip++)->u32;
+    FAST_PUSH((ip++)->u32);
     FAST_NEXT();
 f_const64:
+    FAST_SPILL();
     sp[0] = ip[0].u32;
     sp[1] = tos = ip[1].u32;
     sp += 2;
@@ -1255,6 +1327,7 @@ f_numeric:
 {
     uint8_t op = (uint8_t)IMM;
     uint8_t d = WM_ROM8(wm_numeric + (op - 0x45u));
+    FAST_SPILL();
     switch (d & 3u)
     {
         case WM_NUM_I32: sp = op_i32(op, d, sp, &trap); break;
@@ -1271,7 +1344,7 @@ f_numeric:
     FAST_NEXT();
 }
 f_eqz:
-    sp[-1] = tos = tos == 0;
+    tos = tos == 0;
     FAST_NEXT();
     FAST_BINARY(f_eq, a == b)
     FAST_BINARY(f_ne, a != b)
@@ -1294,17 +1367,20 @@ f_eqz:
     FAST_BINARY(f_shr_u, a >> (b & 31u))
 #if WM_HAS_REF_TYPES
 f_ref_null:
+    FAST_SPILL();
     put_ref(sp, 0);
     sp += WM_REF_SLOTS;
     FAST_RELOAD();
     FAST_NEXT();
 f_ref_is_null:
+    FAST_SPILL();
     sp -= WM_REF_SLOTS;
     *sp = get_ref(sp) == 0;
     ++sp;
     FAST_RELOAD();
     FAST_NEXT();
 f_ref_func:
+    FAST_SPILL();
     put_ref(sp, (uintptr_t)inst->funcs[IMM]);
     sp += WM_REF_SLOTS;
     FAST_RELOAD();
@@ -1320,6 +1396,7 @@ f_sat:
 {
     uint32_t sub = IMM;
     uint8_t d = (uint8_t)(((sub & 2u) ? WM_NUM_F64 : WM_NUM_F32) | (sub >= 4u ? WM_NUM_WIDE : 0));
+    FAST_SPILL();
     sp = op_float((uint8_t)(0xE0u + sub), d, sp, &trap);
     if (!sp)
         TRAP(trap);
@@ -1341,47 +1418,49 @@ f_sat:
     fuel -= (EXTRA)
 f_get_const_add:
     FUSED(2u, f_local_get1);
-    *sp++ = tos = fp[IMM] + (uint32_t)SIMM_OF(ip[0]);
+    FAST_PUSH(fp[IMM] + (uint32_t)SIMM_OF(ip[0]));
     ip += 2;
     FAST_NEXT();
 f_get_get_add:
     FUSED(2u, f_local_get1);
-    *sp++ = tos = fp[IMM] + fp[IMM_OF(ip[0])];
+    FAST_PUSH(fp[IMM] + fp[IMM_OF(ip[0])]);
     ip += 2;
     FAST_NEXT();
 f_get_const:
     FUSED(1u, f_local_get1);
+    sp[-1] = tos;
     sp[0] = fp[IMM];
-    sp[1] = tos = (uint32_t)SIMM_OF(ip[0]);
+    tos = (uint32_t)SIMM_OF(ip[0]);
     sp += 2;
     ++ip;
     FAST_NEXT();
 f_get_get:
     FUSED(1u, f_local_get1);
+    sp[-1] = tos;
     sp[0] = fp[IMM];
-    sp[1] = tos = fp[IMM_OF(ip[0])];
+    tos = fp[IMM_OF(ip[0])];
     sp += 2;
     ++ip;
     FAST_NEXT();
 f_set_get:
     FUSED(1u, f_local_set1);
     fp[IMM] = tos;
-    sp[-1] = tos = fp[IMM_OF(ip[0])];
+    tos = fp[IMM_OF(ip[0])];
     ++ip;
     FAST_NEXT();
 f_const_add:
     FUSED(1u, f_const16);
-    sp[-1] = tos = tos + (uint32_t)SIMM;
+    tos = tos + (uint32_t)SIMM;
     ++ip;
     FAST_NEXT();
 f_const_and:
     FUSED(1u, f_const16);
-    sp[-1] = tos = tos & (uint32_t)SIMM;
+    tos = tos & (uint32_t)SIMM;
     ++ip;
     FAST_NEXT();
 f_const_sub:
     FUSED(1u, f_const16);
-    sp[-1] = tos = tos - (uint32_t)SIMM;
+    tos = tos - (uint32_t)SIMM;
     ++ip;
     FAST_NEXT();
 f_add_set:
@@ -1407,7 +1486,7 @@ f_get_load:
         goto f_local_get1;
     }
     __builtin_memcpy(&value, mem + address + offset, 4);
-    *sp++ = tos = value;
+    FAST_PUSH(value);
     ++ip;
     FAST_NEXT();
 }
@@ -1490,7 +1569,8 @@ f_misc:
     ++ip;
     /* memory.init, copy and fill may make frames, which may drop predecoded code: not this function's. */
     rt->caller = func;
-    if ((trap = misc(inst, sub, &immediates, &sp)))
+    FAST_SPILL();
+    if (!(sp = misc(inst, sub, &immediates, sp, &trap)))
         TRAP(trap);
     FAST_REFRESH();
     FAST_RELOAD();
@@ -1498,6 +1578,8 @@ f_misc:
 }
 
 call:
+    FAST_SPILL();
+call_spilled:
     if (callee->code)
     {
         WmFrame* frame;
@@ -1515,6 +1597,9 @@ call:
             TRAP(T_STACK);
         zero_slots(sp, code->local_slots);
         sp += code->local_slots;
+        /* tos is what sp[-1] holds: a local, zeroed, or else the last argument, which it is already. */
+        if (code->local_slots)
+            tos = 0;
         /* No records: the loop stops in the new frame, wm_execute has them made and goes on at the first. */
         if (__builtin_expect(!code->fast, 0))
         {
@@ -1564,6 +1649,7 @@ mmu_fault:
 #endif
 
 suspend:
+    FAST_SPILL();
     rt->saved.entry_depth = entry_depth;
     rt->saved.func = func;
     rt->saved.pc = (const uint8_t*)(const void*)ip;
@@ -1580,6 +1666,8 @@ suspend:
 #undef IMM_OF
 #undef SIMM_OF
 #undef FAST_RELOAD
+#undef FAST_SPILL
+#undef FAST_PUSH
 #undef FAST_NEXT
 #undef FAST_REFRESH
 }
@@ -1953,7 +2041,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             CASE(0x10) callee = inst->funcs[imm_u32(&pc)]; goto call;
             CASE(0x11)
             {
-                const WmType* type = &inst->module->types[imm_u32(&pc)];
+                const WmType* type = WM_TYPE(inst->module, imm_u32(&pc));
                 WmTable* table = inst->tables[imm_u32(&pc)];
                 uint32_t index = *--sp;
                 if (index >= table->size)
@@ -1961,7 +2049,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 callee = (WmFunc*)table->elems[index];
                 if (!callee)
                     TRAP(WM_ERR_TRAP("trap: uninitialized element"));
-                if (!wm_func_has_type(callee, type))
+                if (callee->type != type && !wm_func_has_type(callee, type))
                     TRAP(WM_ERR_TRAP("trap: indirect call type mismatch"));
                 goto call;
             }
@@ -2172,7 +2260,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                     NEXT;
                 }
 #endif
-                if ((trap = misc(inst, sub, &pc, &sp)))
+                if (!(sp = misc(inst, sub, &pc, sp, &trap)))
                     TRAP(trap);
                 REFRESH();
                 NEXT;

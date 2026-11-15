@@ -258,7 +258,12 @@ typedef struct WmType
     wm_count_t result_count;
     wm_count_t param_slots;
     wm_count_t result_slots;
+    /* The first type of the module equal to it: functions point there, so the same type is the same pointer. */
+    wm_count_t canon;
 } WmType;
+
+/* A module's type by index, as functions point to it. */
+#define WM_TYPE(m, index) (&(m)->types[(m)->types[index].canon])
 
 /*
  * One branch-like instruction's entry: where execution goes when it is
@@ -381,11 +386,19 @@ enum
     WM_F_LOCAL_TEE,
     WM_F_GLOBAL_GET,
     WM_F_GLOBAL_SET,
+    WM_F_GLOBAL_GET1,
+    WM_F_GLOBAL_SET1,
     WM_F_TABLE_GET,
     WM_F_TABLE_SET,
     WM_F_ACCESS,
     WM_F_I32_LOAD,
+    WM_F_I32_LOAD8_S,
+    WM_F_I32_LOAD8_U,
+    WM_F_I32_LOAD16_S,
+    WM_F_I32_LOAD16_U,
     WM_F_I32_STORE,
+    WM_F_I32_STORE8,
+    WM_F_I32_STORE16,
     WM_F_MEMORY_SIZE,
     WM_F_MEMORY_GROW,
     WM_F_CONST16,
@@ -589,10 +602,9 @@ struct WmFunc
     /* NULL for host functions. */
     WmInstance* instance;
     const WmCode* code;
-    const uint8_t* params;
-    const uint8_t* results;
-    wm_count_t param_count;
-    wm_count_t result_count;
+    /* Its module's type (WM_TYPE), or a host function's own, after it in the same block. */
+    const WmType* type;
+    /* The type's, here as every call needs them. */
     wm_count_t param_slots;
     wm_count_t result_slots;
     WmHostFunction host;
