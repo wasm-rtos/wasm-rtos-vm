@@ -159,7 +159,9 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 [0x25] = &&l_0x25, [0x26] = &&l_0x26, [0xD0] = &&l_0xD0, [0xD1] = &&l_0xD1, [0xD2] = &&l_0xD2,
 #endif
                 /* The short paths last, so they win over the general code of the same opcodes. */
-                [0x45] = &&f_0x45, [0x46] = &&f_0x46, [0x47] = &&f_0x47, [0x48] = &&f_0x48, [0x49] = &&f_0x49, [0x4A] = &&f_0x4A, [0x4B] = &&f_0x4B, [0x4C] = &&f_0x4C, [0x4D] = &&f_0x4D, [0x4E] = &&f_0x4E, [0x4F] = &&f_0x4F, [0x6A] = &&f_0x6A, [0x6B] = &&f_0x6B, [0x6C] = &&f_0x6C, [0x71] = &&f_0x71, [0x72] = &&f_0x72, [0x73] = &&f_0x73, [0x74] = &&f_0x74, [0x75] = &&f_0x75, [0x76] = &&f_0x76, [0x28] = &&f_0x28, [0x36] = &&f_0x36, [0x20] = &&f_0x20, [0x21] = &&f_0x21, [0x41] = &&f_0x41,};
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) [OP] = &&l_i32_##name,
+#include "wm_ops.def"
+                [0x28] = &&f_0x28, [0x36] = &&f_0x36, [0x20] = &&f_0x20, [0x21] = &&f_0x21, [0x41] = &&f_0x41,};
 #pragma GCC diagnostic pop
             goto *dispatch[op];
         }
@@ -184,39 +186,22 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             continue;
         }
 #if WM_COMPUTED_GOTO
-        /* The most common i32 instructions, memory accesses among them, each with its own short path. */
-#define FAST_BINARY(OP, EXPR)                                                                                  \
-    f_##OP:                                                                                                    \
+        /*
+         * The most common instructions each with a short path, past the shared
+         * numeric code: the i32 ones of wm_ops.def, then memory accesses.
+         */
+#define INPLACE_I32(name, ARITY)                                                                               \
+    l_i32_##name:                                                                                              \
     {                                                                                                          \
         uint32_t b = sp[-1];                                                                                   \
-        uint32_t a = sp[-2];                                                                                   \
-        --sp;                                                                                                  \
-        sp[-1] = (uint32_t)(EXPR);                                                                             \
+        uint32_t a = (ARITY) == 2 ? sp[-2] : b;                                                                \
+        sp -= (ARITY) - 1;                                                                                     \
+        sp[-1] = i32_##name(a, b);                                                                             \
         continue;                                                                                              \
     }
-    f_0x45:
-        sp[-1] = sp[-1] == 0;
-        continue;
-        FAST_BINARY(0x46, a == b)
-        FAST_BINARY(0x47, a != b)
-        FAST_BINARY(0x48, (int32_t)a < (int32_t)b)
-        FAST_BINARY(0x49, a < b)
-        FAST_BINARY(0x4A, (int32_t)a > (int32_t)b)
-        FAST_BINARY(0x4B, a > b)
-        FAST_BINARY(0x4C, (int32_t)a <= (int32_t)b)
-        FAST_BINARY(0x4D, a <= b)
-        FAST_BINARY(0x4E, (int32_t)a >= (int32_t)b)
-        FAST_BINARY(0x4F, a >= b)
-        FAST_BINARY(0x6A, a + b)
-        FAST_BINARY(0x6B, a - b)
-        FAST_BINARY(0x6C, a * b)
-        FAST_BINARY(0x71, a & b)
-        FAST_BINARY(0x72, a | b)
-        FAST_BINARY(0x73, a ^ b)
-        FAST_BINARY(0x74, a << (b & 31u))
-        FAST_BINARY(0x75, (uint32_t)((int32_t)a >> (b & 31u)))
-        FAST_BINARY(0x76, a >> (b & 31u))
-#undef FAST_BINARY
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) INPLACE_I32(name, ARITY)
+#include "wm_ops.def"
+#undef INPLACE_I32
         /*
          * The commonest pairs run without a dispatch in between: the next
          * instruction is looked at, and taken here if there is fuel for it, so
