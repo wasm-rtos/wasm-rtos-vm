@@ -152,6 +152,9 @@ static const uint8_t* read_name(Reader* r, uint32_t* length)
     const uint8_t* name;
     *length = read_u32(r);
     name = skip(r, *length);
+    /* Past the section's end: no name to compare or print. */
+    if (r->error)
+        *length = 0;
     if (WM_HAS_VALIDATION && !r->error && !valid_utf8(name, *length))
         REJECT(r, WM_ERR_MALFORMED("malformed: malformed UTF-8 encoding"));
     return name;
@@ -1212,6 +1215,9 @@ static void read_types(Loader* l, Reader* r)
             const uint8_t* types = r->p;
             for (uint32_t k = 0; k < n && !r->error; ++k)
                 read_value_type(r);
+            /* A count past the section's end: its types were never there to count. */
+            if (r->error)
+                return;
             if (results)
                 t->results = types, t->result_count = n, t->result_slots = slots_of(types, n);
             else
