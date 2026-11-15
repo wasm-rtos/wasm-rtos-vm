@@ -13,11 +13,14 @@
 #define CASE(n) l_##n:
 #define DEFAULT l_default:
 #define NEXT continue
+#define FALLTHROUGH
 #else
 #define SWITCH(op) switch (op)
 #define CASE(n) case n:
 #define DEFAULT default:
 #define NEXT break
+/* Before a case its code runs into: a comment would not reach the compiler through CASE. */
+#define FALLTHROUGH __attribute__((fallthrough))
 #endif
 
 WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
@@ -325,7 +328,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                     ++st;
                     NEXT;
                 }
-                /* fall through */
+                FALLTHROUGH;
             CASE(0x05)
             CASE(0x0C)
                 taken = st;
@@ -340,7 +343,8 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             CASE(0x0B)
                 if (pc - 1 != code->end)
                     NEXT;
-                /* fall through: the function's own end returns */
+                /* The function's own end returns. */
+                FALLTHROUGH;
             CASE(0x0F)
             {
                 uint32_t n = func->result_slots;

@@ -570,9 +570,10 @@ void* wm_calloc(size_t count, size_t size)
         return calloc(count, size);
     if (size && count > (size_t)-1 / size)
         return NULL;
-    p = allocator(NULL, count * size ? count * size : 1u);
+    size_t bytes = count * size;
+    p = allocator(NULL, bytes ? bytes : 1u);
     if (p)
-        memset(p, 0, count * size);
+        memset(p, 0, bytes);
     return p;
 }
 
