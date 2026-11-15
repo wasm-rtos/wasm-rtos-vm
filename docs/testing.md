@@ -109,7 +109,7 @@ call: a short run, the same every time, for counting.
 
 - `tools/perf.sh base-tree`: machine instructions per WebAssembly
   instruction of that run under cachegrind, plain and as for chips, and
-  the Uno test program's flash, against another tree built by the same
+  the AVR test program's flash, against another tree built by the same
   compiler; fails past 2% worse. CI runs it against a pull request's base.
 
 ## Fuzzing

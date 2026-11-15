@@ -545,7 +545,7 @@ cost a few percent elsewhere could get in unseen.
   that moves 5 s a call, so the same run each time) under cachegrind;
   machine instructions per WebAssembly instruction, plain and as for chips,
   against the pull request's base built by the same compiler, as SQLite
-  (speedtest1) and rustc-perf measure. The Uno test program's flash the
+  (speedtest1) and rustc-perf measure. The AVR test program's flash the
   same way. Over 2% worse fails, unless the pull request has the label
   `slower-ok`.
 - CoreMark comes from its sources and a bare port at pinned commits
