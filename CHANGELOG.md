@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Snapshots are checked as modules are** (decision 11): reading one
+  validates each frame's function again up to the frame's position, and
+  refuses a frame between instructions, with another side table entry or
+  a stack of the wrong height, before anything of the instance changes.
+  A function reference on the stack is written as its index: it no longer
+  points into the instance it was taken from (that was a use after free
+  in a fresh instance). A CRC-32 ends every snapshot. **The snapshot
+  format is now version 2**: version 1 snapshots do not load.
+- **Fuzzing** (decision 10): libFuzzer targets for the loader, running a
+  module, snapshots, and the engine against itself (predecoded, in place
+  and in slices with a snapshot must agree); `tools/fuzz.sh`, a minute of
+  each in CI. It found two reads past the end of a module in the loader,
+  fixed. After a call that trapped the fuel left is not defined.
 - **The instructions described once** (decision 9): the predecoded records
   and the i32 operations both loops run are lines of `source/wm_ops.def`,
   from which their kinds, the handler table, the predecoder's choice and

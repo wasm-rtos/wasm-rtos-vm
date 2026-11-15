@@ -24,6 +24,10 @@ cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_CODE_LIMIT=1 source/*.c tools/
 python3 tools/spec.py build/wm-spec-code "$SPEC" >/dev/null && echo "spec (code cache of 1 byte): ok" || { echo "spec (code cache of 1 byte): FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/code.c -lm -o build/code || exit 1
 build/code >/dev/null && echo "code cache:    ok" || { echo "code cache:    FAIL"; build/code | grep FAIL; fail=1; }
+for mode in "" -DWM_PREDECODE=0; do
+    cc -std=gnu99 -O1 -g -fsanitize=address $mode source/*.c test/refs.c -lm -o build/refs || exit 1
+    build/refs >/dev/null && echo "snapshot refs and checks: ok $mode" || { echo "snapshot refs and checks: FAIL $mode"; build/refs | grep FAIL; fail=1; }
+done
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/room.c -lm -o build/room || exit 1
 build/room >/dev/null && echo "memory before code: ok" || { echo "memory before code: FAIL"; build/room | grep FAIL; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/pool.c -lm -o build/pool || exit 1
@@ -85,7 +89,7 @@ done
 xxd -i test/fuzz/snapshot.wasm > build/snapshot_wasm.h
 for t in load run diff snapshot; do
     ls test/fuzz/regress/$t/* >/dev/null 2>&1 || continue
-    cc -std=gnu99 -O1 -g -fsanitize=address,undefined -Ibuild source/*.c test/fuzz/fuzz_$t.c test/fuzz/replay.c -lm \
+    cc -std=gnu99 -O1 -g -fsanitize=address,undefined -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -Ibuild source/*.c test/fuzz/fuzz_$t.c test/fuzz/replay.c -lm \
         -o build/replay-$t || exit 1
     build/replay-$t test/fuzz/regress/$t/* 2>/dev/null && echo "fuzz finds ($t): ok" || { echo "fuzz finds ($t): FAIL"; fail=1; }
 done

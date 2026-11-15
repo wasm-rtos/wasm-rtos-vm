@@ -136,6 +136,7 @@ jobs:
           tools/fuzz.sh load 60
           tools/fuzz.sh run 60
           tools/fuzz.sh diff 60
+          tools/fuzz.sh snapshot 60
           tools/fuzz.sh run 30 chips
           tools/fuzz.sh diff 30 chips
           tools/fuzz.sh run 30 paged

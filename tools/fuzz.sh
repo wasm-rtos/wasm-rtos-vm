@@ -29,7 +29,8 @@ if [ "$target" = snapshot ]; then
     xxd -i test/fuzz/snapshot.wasm > "$out/snapshot_wasm.h"
 fi
 # shellcheck disable=SC2086
-"$FUZZ_CC" -std=gnu99 -O1 -g -fsanitize="$sanitizers" -fno-sanitize-recover=all -I"$out" $flags \
+"$FUZZ_CC" -std=gnu99 -O1 -g -fsanitize="$sanitizers" -fno-sanitize-recover=all -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION \
+    -I"$out" $flags \
     source/*.c "test/fuzz/fuzz_$target.c" -lm -o "$out/fuzz_$target-$build"
 max_len=65536
 if [ "$target" != snapshot ]; then
