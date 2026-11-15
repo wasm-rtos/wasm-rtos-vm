@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Less memory for every instance and module** (decision 7): function
+  objects only for a module's own functions and its unlinked imports, and
+  the module's arrays trimmed to their elements once it is loaded. The
+  tour program's module is 26% smaller and each of its processes 920 bytes
+  smaller on ESP32; the Uno test program runs again.
+
 ## 1.0.0 — 2026-11-13
 
 The first release: the WebAssembly interpreter wasm-rtos runs programs on.
