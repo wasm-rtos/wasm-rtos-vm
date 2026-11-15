@@ -510,8 +510,12 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
                 }
                 case 0x23:
                 case 0x24:
-                    kind = op == 0x23u ? WM_F_GLOBAL_GET : WM_F_GLOBAL_SET;
+                    /* A global of one slot (i32, f32: the stack pointer of C programs) has handlers of its own. */
                     operand = leb_u32(&p);
+                    if (wm_type_slots(m->globals[operand].type) == 1u)
+                        kind = op == 0x23u ? WM_F_GLOBAL_GET1 : WM_F_GLOBAL_SET1;
+                    else
+                        kind = op == 0x23u ? WM_F_GLOBAL_GET : WM_F_GLOBAL_SET;
                     break;
                 case 0x25:
                 case 0x26:

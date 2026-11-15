@@ -799,6 +799,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         [WM_F_SELECT] = &&f_select, [WM_F_LOCAL_GET1] = &&f_local_get1, [WM_F_LOCAL_SET1] = &&f_local_set1,
         [WM_F_LOCAL_TEE1] = &&f_local_tee1, [WM_F_LOCAL_GET] = &&f_local_get, [WM_F_LOCAL_SET] = &&f_local_set,
         [WM_F_LOCAL_TEE] = &&f_local_tee, [WM_F_GLOBAL_GET] = &&f_global_get, [WM_F_GLOBAL_SET] = &&f_global_set,
+        [WM_F_GLOBAL_GET1] = &&f_global_get1, [WM_F_GLOBAL_SET1] = &&f_global_set1,
         [WM_F_TABLE_GET] = &&f_table_get, [WM_F_TABLE_SET] = &&f_table_set, [WM_F_ACCESS] = &&f_access,
         [WM_F_I32_LOAD] = &&f_i32_load, [WM_F_I32_LOAD8_S] = &&f_i32_load8_s, [WM_F_I32_LOAD8_U] = &&f_i32_load8_u,
         [WM_F_I32_LOAD16_S] = &&f_i32_load16_s, [WM_F_I32_LOAD16_U] = &&f_i32_load16_u, [WM_F_I32_STORE] = &&f_i32_store,
@@ -1151,6 +1152,14 @@ f_local_tee:
     FAST_SPILL();
     copy_slots(fp + IMM, sp - ip[0].u32, ip[0].u32);
     ++ip;
+    FAST_NEXT();
+f_global_get1:
+    FAST_PUSH((uint32_t)inst->globals[IMM]->value);
+    FAST_NEXT();
+f_global_set1:
+    inst->globals[IMM]->value = tos;
+    --sp;
+    FAST_RELOAD();
     FAST_NEXT();
 f_global_get:
     keep = 1;
