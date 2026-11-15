@@ -85,6 +85,10 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     uint8_t fuel_on;
     uint32_t fuel;
     const WmCell* target;
+    /*
+     * Slots a branch keeps. Reused as a flag by the records that share code:
+     * global get (1) or set (0), table set (1) or get (0).
+     */
     uint32_t keep;
     uint32_t drop;
     /* The record's first cell; ip is past it, at the record's other cells. */
@@ -199,6 +203,12 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 #define SIMM_OF(C) ((C).s32 >> 16)
 /* After code that changed the stack in memory only. */
 #define FAST_RELOAD() (tos = sp[-1])
+#define FAST_POP(N)                                                                                            \
+    do                                                                                                         \
+    {                                                                                                          \
+        sp -= (N);                                                                                             \
+        FAST_RELOAD();                                                                                         \
+    } while (0)
 /* The whole stack in memory, for code that works on it there. */
 #define FAST_SPILL() (sp[-1] = tos)
 /* A value on top: the one below goes to its slot. */
@@ -262,8 +272,7 @@ f_nop:
 f_if:
 {
     uint32_t c = tos;
-    --sp;
-    FAST_RELOAD();
+    FAST_POP(1);
     ip = c ? ip : ip - 1 + SIMM;
     FAST_NEXT();
 }
@@ -273,8 +282,7 @@ f_jump:
 f_br_if:
 {
     uint32_t c = tos;
-    --sp;
-    FAST_RELOAD();
+    FAST_POP(1);
     if (!c)
     {
         ++ip;
@@ -291,8 +299,7 @@ take:
     {
         FAST_SPILL();
         copy_slots(sp - keep - drop, sp - keep, keep);
-        sp -= drop;
-        FAST_RELOAD();
+        FAST_POP(drop);
     }
     ip = target;
     FAST_NEXT();
@@ -301,8 +308,7 @@ f_br_table:
     uint32_t count = IMM;
     uint32_t index = tos;
     const WmCell* e = ip + 2u * (index < count ? index : count);
-    --sp;
-    FAST_RELOAD();
+    FAST_POP(1);
     target = ip - 1 + e[0].s32;
     keep = e[1].u32 & 0xFFFFu;
     drop = e[1].u32 >> 16;
@@ -353,8 +359,7 @@ f_call_indirect:
     goto call_spilled;
 }
 f_drop:
-    sp -= IMM;
-    FAST_RELOAD();
+    FAST_POP(IMM);
     FAST_NEXT();
 f_select:
 {
@@ -369,8 +374,7 @@ f_select:
     FAST_SPILL();
     if (!*--sp)
         copy_slots(sp - 2u * n, sp - n, n);
-    sp -= n;
-    FAST_RELOAD();
+    FAST_POP(n);
     FAST_NEXT();
 }
 f_local_get1:
@@ -378,8 +382,7 @@ f_local_get1:
     FAST_NEXT();
 f_local_set1:
     fp[IMM] = tos;
-    --sp;
-    FAST_RELOAD();
+    FAST_POP(1);
     FAST_NEXT();
 f_local_tee1:
     fp[IMM] = tos;
@@ -408,8 +411,7 @@ f_global_get1:
     FAST_NEXT();
 f_global_set1:
     inst->globals[IMM]->value = tos;
-    --sp;
-    FAST_RELOAD();
+    FAST_POP(1);
     FAST_NEXT();
 f_global_get:
     keep = 1;
@@ -535,8 +537,7 @@ f_access:
         uint8_t* host;                                                                                         \
         FAST_ADDR(sp[-2], IMM, sizeof(TYPE), host, OP, ip - 1, 1u, e_->wtag);                                  \
         __builtin_memcpy(host, &value, sizeof(TYPE));                                                          \
-        sp -= 2;                                                                                               \
-        FAST_RELOAD();                                                                                         \
+        FAST_POP(2);                                                                                           \
         FAST_NEXT();                                                                                           \
     }
 #define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND) FAST_##KIND(f_##name, OP##u, TYPE)
@@ -725,8 +726,7 @@ f_tee_br_if:
     uint32_t c = tos;
     FUSED(1u, f_local_tee1);
     fp[IMM] = c;
-    --sp;
-    FAST_RELOAD();
+    FAST_POP(1);
     if (!c)
     {
         ip += 2;
@@ -737,49 +737,47 @@ f_tee_br_if:
 f_set_get_br_if:
     FUSED(2u, f_local_set1);
     fp[IMM] = tos;
-    --sp;
-    FAST_RELOAD();
+    FAST_POP(1);
     if (!fp[IMM_OF(ip[0])])
     {
         ip += 3;
         FAST_NEXT();
     }
     FAST_TAKE_BR_IF(1);
-#define FAST_CMP_BR_IF(NAME, FIRST, POP, A, EXPR)                                                               \
-    NAME:                                                                                                      \
+/* An i32 compare of wm_ops.def, then br_if: operands as FAST_I32's, the br_if record after. */
+#define FAST_CMP_BR_IF(name, ARITY)                                                                            \
+    f_##name##_br_if:                                                                                          \
     {                                                                                                          \
         uint32_t b = tos;                                                                                      \
-        uint32_t a = (A);                                                                                      \
-        FUSED(1u, FIRST);                                                                                      \
-        sp -= (POP);                                                                                           \
-        FAST_RELOAD();                                                                                         \
-        if (!(EXPR))                                                                                           \
+        uint32_t a = (ARITY) == 2 ? sp[-2] : b;                                                                \
+        FUSED(1u, f_##name);                                                                                   \
+        FAST_POP(ARITY);                                                                                       \
+        if (!i32_##name(a, b))                                                                                 \
         {                                                                                                      \
             ip += 2;                                                                                           \
             FAST_NEXT();                                                                                       \
         }                                                                                                      \
         FAST_TAKE_BR_IF(0);                                                                                    \
     }
-/* The if record, at ip, is one cell: on to the record after it, or to its target. */
-#define FAST_CMP_IF(NAME, FIRST, POP, A, EXPR)                                                                  \
-    NAME:                                                                                                      \
+/* The same, then if: the if record, at ip, is one cell; on to the record after it, or to its target. */
+#define FAST_CMP_IF(name, ARITY)                                                                               \
+    f_##name##_if:                                                                                             \
     {                                                                                                          \
         uint32_t b = tos;                                                                                      \
-        uint32_t a = (A);                                                                                      \
-        FUSED(1u, FIRST);                                                                                      \
-        sp -= (POP);                                                                                           \
-        FAST_RELOAD();                                                                                         \
-        ip = (EXPR) ? ip + 1 : ip + SIMM_OF(ip[0]);                                                            \
+        uint32_t a = (ARITY) == 2 ? sp[-2] : b;                                                                \
+        FUSED(1u, f_##name);                                                                                   \
+        FAST_POP(ARITY);                                                                                       \
+        ip = i32_##name(a, b) ? ip + 1 : ip + SIMM_OF(ip[0]);                                                  \
         FAST_NEXT();                                                                                           \
     }
-    FAST_CMP_BR_IF(f_eq_br_if, f_eq, 2, sp[-2], i32_eq(a, b))
-    FAST_CMP_BR_IF(f_ne_br_if, f_ne, 2, sp[-2], i32_ne(a, b))
-    FAST_CMP_BR_IF(f_eqz_br_if, f_eqz, 1, b, i32_eqz(a, b))
-    FAST_CMP_BR_IF(f_le_u_br_if, f_le_u, 2, sp[-2], i32_le_u(a, b))
-    FAST_CMP_BR_IF(f_lt_u_br_if, f_lt_u, 2, sp[-2], i32_lt_u(a, b))
-    FAST_CMP_IF(f_eq_if, f_eq, 2, sp[-2], i32_eq(a, b))
-    FAST_CMP_IF(f_ne_if, f_ne, 2, sp[-2], i32_ne(a, b))
-    FAST_CMP_IF(f_eqz_if, f_eqz, 1, b, i32_eqz(a, b))
+    FAST_CMP_BR_IF(eq, 2)
+    FAST_CMP_BR_IF(ne, 2)
+    FAST_CMP_BR_IF(eqz, 1)
+    FAST_CMP_BR_IF(le_u, 2)
+    FAST_CMP_BR_IF(lt_u, 2)
+    FAST_CMP_IF(eq, 2)
+    FAST_CMP_IF(ne, 2)
+    FAST_CMP_IF(eqz, 1)
 #undef FAST_CMP_IF
 #undef FAST_CMP_BR_IF
 #undef FAST_TAKE_BR_IF
