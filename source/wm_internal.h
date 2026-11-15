@@ -178,6 +178,15 @@ void wm_free(void* ptr);
 #define WM_NOP_RUNS 1
 #endif
 #endif
+/*
+ * WM_PROFILE: count what runs, for tools/profile.py (a desktop build, off
+ * by default): every record by kind and every pair of records in a row in
+ * the fast loop, every opcode in the loop in place. At exit the counts go
+ * to the file WM_PROFILE_FILE names, the process id after it, if it is set.
+ */
+#ifndef WM_PROFILE
+#define WM_PROFILE 0
+#endif
 /* Computed goto for the interpreter's dispatch, where labels can be values. */
 #ifndef WM_COMPUTED_GOTO
 #if defined(__GNUC__) && !defined(__AVR__)

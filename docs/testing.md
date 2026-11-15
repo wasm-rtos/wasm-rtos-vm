@@ -101,3 +101,37 @@ memory).
 cc -std=gnu99 -O3 source/*.c tools/wm-bench.c -lm -o build/wm-bench
 build/wm-bench build/coremark.wasm 0
 ```
+
+`tools/coremark.sh` builds `build/coremark-wm.wasm`: CoreMark's sources and
+a bare port, fetched at pinned commits, for WebAssembly 2.0. With
+`WM_BENCH_CLOCK_STEP=5000` wm-bench gives CoreMark a clock that moves 5 s a
+call: a short run, the same every time, for counting.
+
+- `tools/perf.sh base-tree`: machine instructions per WebAssembly
+  instruction of that run under cachegrind, plain and as for chips, and
+  the Uno test program's flash, against another tree built by the same
+  compiler; fails past 2% worse. CI runs it against a pull request's base.
+
+## Fuzzing
+
+`tools/fuzz.sh load|run|diff|snapshot [seconds] [plain|chips|paged]` runs a
+libFuzzer target of `test/fuzz/` (decision 10); crashes land in
+`build/fuzz/`. An input that found a bug goes to `test/fuzz/regress/<target>/`,
+which `check.sh` runs every time.
+
+## What runs
+
+A build with `-DWM_PROFILE=1` counts every record the fast loop runs by
+kind, every pair in a row, and every opcode the loop in place runs; at
+exit it writes them to `$WM_PROFILE_FILE.<pid>`. `tools/profile.py` adds
+up any number of such files and prints the tables:
+
+```sh
+cc -std=gnu99 -O1 -DWM_PROFILE=1 -DWM_FUSE=1 -DWM_NOP_RUNS=1 source/*.c tools/wm-bench.c -lm -o build/wm-bench-profile
+WM_BENCH_CLOCK_STEP=5000 WM_PROFILE_FILE=build/prof/coremark build/wm-bench-profile build/coremark.wasm
+tools/profile.py build/prof/coremark.*
+```
+
+The kernel's tests profile the same way: `CFLAGS=-DWM_PROFILE=1
+WM_PROFILE_FILE=$PWD/build/prof/kernel tools/kernel-tests.sh`.
+

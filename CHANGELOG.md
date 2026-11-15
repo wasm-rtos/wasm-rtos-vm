@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **What runs, counted** (decision 12): a `WM_PROFILE` build counts every
+  record and pair of records the fast loop runs and every opcode run in
+  place; `tools/profile.py` prints them. CI compares the speed (machine
+  instructions per WebAssembly instruction of a short CoreMark under
+  cachegrind) and the Uno flash with a pull request's base, and fails past
+  2% worse.
 - **Snapshots are checked as modules are** (decision 11): reading one
   validates each frame's function again up to the frame's position, and
   refuses a frame between instructions, with another side table entry or

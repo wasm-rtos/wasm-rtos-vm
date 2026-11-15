@@ -25,6 +25,9 @@
 
 WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
 {
+#if WM_PROFILE
+    profile_start();
+#endif
 #if WM_PREDECODE
     if (WM_RUNS_FAST((resume ? rt->saved.func : func)->instance->module))
     {
@@ -139,6 +142,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             fuel = WM_NONE - 1u;
         }
         op = WM_RD8(pc++);
+        WM_PROFILE_OP(op);
 #if WM_COMPUTED_GOTO
         {
             /* One jump per instruction, straight to its code; the numeric ones share a path. */

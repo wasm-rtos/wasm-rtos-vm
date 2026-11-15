@@ -19,6 +19,7 @@ What was tried and not kept, with its numbers, is in
 | [9](#9-the-instructions-are-described-once) | The instructions are described once | 2026-11-15 | one list for every record; speed unchanged |
 | [10](#10-the-engine-is-fuzzed-and-against-itself) | The engine is fuzzed, and against itself | 2026-11-15 | two loader bugs found and fixed; the two loops agree |
 | [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
+| [12](#12-what-runs-is-counted-and-speed-is-guarded-by-counts) | What runs is counted, and speed is guarded by counts | 2026-11-16 | a profile of records and pairs; CI fails a change 2% slower |
 
 ## 1. The interpreter counts fuel itself
 
@@ -519,3 +520,57 @@ a snapshot is read, never while the program runs: the loops are the same.
 position, a side table index or a frame is refused, in both loops;
 `fuzz_snapshot` ran 5 minutes on the checks with the CRC skipped, and
 `fuzz_diff` writes and reads a snapshot in every run.
+
+## 12. What runs is counted, and speed is guarded by counts
+
+**Decided and built (2026-11-16).**
+
+### Problem
+
+What to make faster was chosen from what the code contains, not from what
+runs: `local.get` is a quarter of CoreMark's instructions, but how often
+each record and each pair of records runs was not known. And speed was
+measured by hand, on boards and a Mac, before a pull request: a change that
+cost a few percent elsewhere could get in unseen.
+
+### Decision
+
+- **`WM_PROFILE`**, a build flag off by default (no code without it): the
+  fast loop counts each record by kind and each pair in a row, the loop in
+  place each opcode; at exit the counts go to a file, and
+  `tools/profile.py` adds files up and prints them. As wasm3 counts its
+  operations (`d_m3EnableOpProfiling`) and CPython its instructions
+  (`--enable-pystats`).
+- **Speed in CI by instructions, not time**: a short CoreMark (a clock
+  that moves 5 s a call, so the same run each time) under cachegrind;
+  machine instructions per WebAssembly instruction, plain and as for chips,
+  against the pull request's base built by the same compiler, as SQLite
+  (speedtest1) and rustc-perf measure. The Uno test program's flash the
+  same way. Over 2% worse fails, unless the pull request has the label
+  `slower-ok`.
+- CoreMark comes from its sources and a bare port at pinned commits
+  (`tools/coremark.sh`), built for WebAssembly 2.0: nothing of it is kept
+  in the repository.
+
+### Why
+
+Time on a shared runner moves by ±10%; counts of instructions move by
+about 0.1% and say the same thing about the loop's work. Comparing with the
+base in the same job needs no stored numbers that would differ by compiler.
+
+### Instead
+
+- **Time in CI**: noise larger than the changes to catch.
+- **A stored baseline of counts**: it depends on the runner's compiler
+  version, and goes stale with each upgrade.
+- **The boards in CI**: they stay on a desk; their numbers are measured by
+  hand before a change that touches the loops, as before.
+
+### Measured
+
+CoreMark as for chips with `WM_PROFILE`: 20.8 million records ran for
+32.9 million instructions, 41.8% of them fused. The commonest pairs of
+plain records: `local_tee1 → const16` 2.4%, `const16 → shr_u` 1.8%,
+`i32_store → local_get1` 1.5%. Without the flag the machine code of every
+build is the same as before (Mac clang, Xtensa and ARM GCC).
+
