@@ -478,6 +478,7 @@ f_access:
 {
     uint8_t op = (uint8_t)IMM;
     uint32_t offset = ip[0].u32;
+    WM_PROFILE_SHARED(op);
     uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
     uint8_t size = (uint8_t)(1u << (d & 3u));
     /* A store's value is above the address: slots of it. */
@@ -568,6 +569,7 @@ f_numeric:
 {
     uint8_t op = (uint8_t)IMM;
     uint8_t d = WM_ROM8(wm_numeric + (op - 0x45u));
+    WM_PROFILE_SHARED(op);
     FAST_SPILL();
     switch (d & 3u)
     {

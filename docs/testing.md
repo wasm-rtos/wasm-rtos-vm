@@ -135,3 +135,13 @@ tools/profile.py build/prof/coremark.*
 The kernel's tests profile the same way: `CFLAGS=-DWM_PROFILE=1
 WM_PROFILE_FILE=$PWD/build/prof/kernel tools/kernel-tests.sh`.
 
+
+## Checkpoints
+
+Not everything after every change:
+
+| When | What | Time |
+|---|---|---|
+| After an edit | `tools/quick.sh`: the build with warnings as errors, the spec suite predecoded and in place, the fuzz finds; with `SHA=1`, whether the loops' machine code changed | under a minute |
+| At the end of a step | `tools/check.sh` in full, CoreMark on a Mac | about 15 min |
+| Before a pull request | CoreMark on the boards (ESP32 at -O2 and -Os, Black Pill), then one pull request for the whole piece of work; CI runs everything and `perf` | about 40 min |
