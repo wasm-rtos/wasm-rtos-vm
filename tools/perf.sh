@@ -28,6 +28,11 @@ per_instruction() {
     local machine wasm_count
     machine=$(sed -n 's/.*I *refs: *\([0-9,]*\).*/\1/p' "$out/grind.txt" | tr -d ,)
     wasm_count=$(sed -n 's/^\([0-9]*\) instructions.*/\1/p' "$out/run.txt")
+    if [ -z "$machine" ] || [ -z "$wasm_count" ]; then
+        echo "no counts from $1 [$2]:" >&2
+        cat "$out/run.txt" "$out/grind.txt" >&2
+        exit 1
+    fi
     awk -v m="$machine" -v w="$wasm_count" 'BEGIN { printf "%.4f", m / w }'
 }
 
