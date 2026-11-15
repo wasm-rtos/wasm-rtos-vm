@@ -3,6 +3,20 @@
 Why the engine is the way it is: each entry says what was decided, why, and
 what was considered instead. New entries start as **Proposed** and are
 discussed before any code; once built they say what was measured.
+What was tried and not kept, with its numbers, is in
+[experiments.md](experiments.md).
+
+| # | Decision | Built | What it gave |
+|---|---|---|---|
+| [1](#1-the-interpreter-counts-fuel-itself) | The interpreter counts fuel itself | 2026-11-08 | fuel = the module's instructions, the same on every device |
+| [2](#2-records-follow-instructions-one-to-one) | Records follow instructions one to one | 2026-11-09 | snapshots move between builds and chips |
+| [3](#3-code-is-a-cache) | Code is a cache | 2026-11-12 | 14–36% less RAM for code; ESP32 runs 18 programs at once, not 12 |
+| [4](#4-memory-in-one-block-while-ram-has-room) | Memory in one block while RAM has room | 2026-11-12 | Mac CoreMark with a pager +10.7% |
+| [5](#5-no-tuning-of-code-layout-per-processor) | No tuning of code layout per processor | 2026-11-12 | — (a rule for changes) |
+| [6](#6-frames-come-from-a-pool-a-block-is-frames-in-a-row) | Frames come from a pool | 2026-11-12 | an ESP32 memory gets its block back (912 ms) |
+| [7](#7-an-instance-and-a-module-keep-only-the-memory-they-use) | An instance and a module keep only what they use | 2026-11-15 | module −26%, −920 bytes a process on ESP32; Uno runs again |
+| [8](#8-the-fast-loop-does-what-other-interpreters-do) | The fast loop does what other interpreters do | 2026-11-15 | CoreMark ESP32 +28.8%, Mac +15.5% |
+| [9](#9-the-instructions-are-described-once) | The instructions are described once | 2026-11-15 | one list for every record; speed unchanged |
 
 ## 1. The interpreter counts fuel itself
 
@@ -215,9 +229,16 @@ size is known only after validation. Trimming once is one place for all.
 
 ### Measured
 
-Module after loading (64-bit build): the tour program 42 568 → 31 376
-bytes, the Arduino sketch test 44 636 → 36 220, CoreMark 10 376 → 6 248.
-The Uno test program runs again: 305 bytes free after its instance,
+Module after loading, 64-bit build:
+
+| Program | Before | After | Change |
+|---|---:|---:|---:|
+| tour | 42 568 B | 31 376 B | −26% |
+| Arduino sketch test | 44 636 B | 36 220 B | −19% |
+| CoreMark | 10 376 B | 6 248 B | −40% |
+
+Every process of the tour program is 920 bytes smaller on an ESP32. The
+Uno test program runs again: 305 bytes free after its instance,
 `fib(10)` in 31 ms as before; flash +570 bytes.
 
 ## 8. The fast loop does what other interpreters do
@@ -275,11 +296,25 @@ instruction.
 
 ### Measured
 
-CoreMark: ESP32 12.03 → 15.49 (+28.8%, 544 bytes more heap); Mac 2587 →
-2988 (+15.5%), built as for chips 2503 → 3065 (+22%). Of the steps on
-ESP32, `misc` alone gave +6.6%; the top of the stack in a register alone
-cost 0.5% there (on Xtensa the compiler keeps `tos` in memory: too few
-registers), and gave +8% and +15% on Mac.
+CoreMark:
+
+| Machine | Before | After | Change |
+|---|---:|---:|---:|
+| ESP32 (GCC -O2) | 12.03 | 15.49 | +28.8% |
+| Mac | 2587 | 2988 | +15.5% |
+| Mac, built as for chips | 2503 | 3065 | +22% |
+
+The ESP32 has 544 bytes less heap. The first two steps, against the
+loop before the decision:
+
+| Steps | ESP32 | Mac | Mac, as for chips |
+|---|---:|---:|---:|
+| `misc` returns the stack | +6.6% | ±0 | +1.3% |
+| and the top of the stack in a register | +6.1% | +7.6% | +14.7% |
+
+So the register cost the ESP32 0.5%: on Xtensa the compiler keeps `tos`
+in memory, too few registers. The rest of the decision gave the ESP32
+the remaining +21%.
 
 ## 9. The instructions are described once
 
@@ -323,19 +358,21 @@ build, nothing generated to keep in the repository for the boards' builds.
   and generated files would cost more than they save.
 - **The list as a macro taking a macro** instead of a file included: no
   `#if` inside it, and records only built with `WM_FUSE` need one.
-- **Sign extension back to shifts.** Since the analyzer's change it is a
-  `switch` (the shifts could shift by 64 as far as the analyzer knew), and
-  ESP32 -O2 went from 15.49 to 15.40: the compiler gives `run_fast` other
-  registers. Shifts with `WM_ASSERT(size >= 1 && size < 8)`, which the
-  analyzer accepts, give 15.54 on ESP32 but cost a Mac 2.4% (2819 → 2750,
-  slower in every one of four runs); `(v ^ sign) - sign` gives 15.35. The
-  `switch` stays: no change may lose on one machine to win on another.
+- **Sign extension back to shifts**, for the 0.6% the ESP32 lost with the
+  analyzer's change: +0.9% there, but −2.4% on a Mac
+  ([experiments](experiments.md#sign-extension-shifts-or-a-switch)).
 
 ### Measured
 
+| | Before | After | Change |
+|---|---:|---:|---:|
+| ESP32 CoreMark, GCC -O2 | 15.40 | 15.42 | ±0 |
+| ESP32 CoreMark, GCC -Os | 13.65 | 13.77 | +0.9% |
+| Mac CoreMark | 2833 | 2865 | ±0 (noise) |
+| Mac CoreMark, built as for chips | 2978 | 3011 | ±0 (noise) |
+| AVR flash | 35 584 B | 35 588 B | +4 B |
+
 The fast loop's machine code is the same on a Mac (clang -O2). On Xtensa
 (GCC 14.2 -O2) `run_fast` is 3 instructions and 3 bytes of padding
-shorter, and `op_i32` 6 instructions shorter; the rest moved. CoreMark on a
-Mac in slices of fuel: 2833 → 2865, built as for chips 2978 → 3011 (within
-noise; the same 41 963 863 173 instructions). ESP32 (GCC 14.2): -O2
-15.40 → 15.42, -Os 13.65 → 13.77, the same heap. AVR flash +4 bytes.
+shorter and `op_i32` 6 instructions shorter; the rest moved. CoreMark ran
+the same 41 963 863 173 instructions; the ESP32's heap is the same.

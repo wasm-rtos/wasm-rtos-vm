@@ -1,7 +1,8 @@
 # How wasm-rtos-vm works
 
 For people who change the engine. Using it needs only the
-[README](../README.md).
+[README](../README.md). Why it is so: [decisions.md](decisions.md); what
+was tried and not kept: [experiments.md](experiments.md).
 
 ## Loading
 

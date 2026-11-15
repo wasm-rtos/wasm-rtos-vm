@@ -1,0 +1,355 @@
+# Experiments
+
+What was tried on the engine and how it came out, kept or not, so nobody
+measures it again without knowing. [decisions.md](decisions.md) says what
+the engine is; this file also says what it is not, and why.
+
+A change stays only if it loses on none of the machines: a Mac, an ESP32
+(Xtensa), a Black Pill (STM32F411, Cortex-M4), and an Uno for size.
+CoreMark is the benchmark unless an entry says otherwise; on a Mac it runs
+in slices of fuel, as an operating system runs it. Changes are against
+the build before the experiment; ±0 is within noise.
+
+## Summary
+
+| Experiment | Result | ESP32 | Mac | Black Pill |
+|---|---|---:|---:|---:|
+| **Dispatch** | | | | |
+| [Handlers the loop does not need](#handlers-the-loop-does-not-need) | rejected | | −24% | |
+| [Fused instruction runs](#fused-instruction-runs) | microcontrollers only | gain | loss | gain |
+| [Runs of block, loop, end, nop in one step](#runs-of-block-loop-end-and-nop-in-one-step) | microcontrollers only | gain | −12% | |
+| [No records for block and end](#no-records-for-block-and-end) | rejected on paper | | | |
+| [Aligning handlers](#aligning-handlers) | rejected | crash / +323 B | | |
+| [The two loops as separate .c files](#the-two-loops-as-separate-c-files) | rejected | 2 copies | no inlining | |
+| [Both loops generated from one description](#both-loops-generated-from-one-description) | rejected on paper | | | |
+| **Stack and registers** | | | | |
+| [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
+| [`misc` taking the stack pointer's address](#misc-taking-the-stack-pointers-address) | fixed | +6.6% | ±0 | |
+| [`bytes` and `fuel_on` out of the loop's state](#bytes-and-fuel_on-out-of-the-loops-state) | rejected | code +44% | | |
+| [Not reloading the instance after a call](#not-reloading-the-instance-after-a-call) | rejected on paper | | | |
+| [Sign extension: shifts or a switch](#sign-extension-shifts-or-a-switch) | switch stays | +0.9% | −2.4% | |
+| **Calls inside the loop** | | | | |
+| [A call from a handler](#a-call-from-a-handler) | rejected | −15% | | |
+| **Memory and paging** | | | | |
+| [A window of memory in registers](#a-window-of-memory-in-registers) | rejected | −7.7% | −1% | +2.4% |
+| [A TLB of 16 entries, not 64](#a-tlb-of-16-entries-not-64) | kept | | ±0 | |
+| [Every memory paged once there is a pager](#every-memory-paged-once-there-is-a-pager) | replaced | | −10% | |
+| [A block gathered from the heap](#a-block-gathered-from-the-heap) | replaced by a pool | no block | | |
+| [Dirty frames](#dirty-frames) | kept | SD writes −38% | | |
+| **Records and code** | | | | |
+| [Records in 32-bit cells](#records-in-32-bit-cells) | kept, a trade | −6% | −11% | −8%, in the OS ×2.06 |
+| [All records at load, or none](#all-records-at-load-or-none) | replaced by a cache | 12 → 18 programs | | 6 → 9 programs |
+| [A compact loop on the ESP32](#a-compact-loop-on-the-esp32) | kept | queue 89 → 53 ms | | |
+| **Building** | | | | |
+| [ESP32 Arduino's default flags](#esp32-arduinos-default-flags) | flags set | about +20% | | |
+
+## Dispatch
+
+### Handlers the loop does not need
+
+**Rejected** · 2026-11-09
+
+**Tried.** More handlers in the fast loop than a build uses.
+
+| Machine | Result |
+|---|---|
+| Mac | −24% with handlers that never ran |
+
+**Why.** Branch prediction and the loop's size suffer from every handler
+there is. Each handler has to earn its place; a function whose operands do
+not fit the records runs in place rather than getting handlers of its own.
+
+### Fused instruction runs
+
+**Kept on microcontrollers only** (`WM_FUSE`) · 2026-11-09
+
+**Tried.** The commonest pairs and runs as one handler (superinstructions):
+`local.get` + `i32.const`, a compare + `br_if`, and so on.
+
+| Machine | Result |
+|---|---|
+| ESP32, Black Pill | faster |
+| Mac | slower: dispatch is cheap where branch prediction is good |
+
+**Why.** Off on x86 and 64-bit ARM, on elsewhere.
+
+### Runs of block, loop, end and nop in one step
+
+**Kept on microcontrollers only** (`WM_NOP_RUNS`) · 2026-11-09
+
+**Tried.** One handler skips a whole run of these and pays its fuel at
+once; they are about 13% of the instructions run.
+
+| Machine | Result |
+|---|---|
+| Mac | −12%: the skipped dispatches helped predict the next ones |
+| Mac, second try | no gain |
+
+### No records for block and end
+
+**Rejected on paper** · 2026-11-15
+
+**Tried.** Leaving `block` and `end` (9–11% of instructions) without records.
+
+**Why.** Records would no longer follow instructions one to one; fuel and
+snapshots depend on that ([decision 2](decisions.md#2-records-follow-instructions-one-to-one)).
+
+### Aligning handlers
+
+**Rejected** · 2026-11-12
+
+**Found.** An ESP32 loop over memory went 6.6% slower after an unrelated
+change: 34 of 76 handlers had moved across 4-byte words, and a 3-byte
+first instruction across a word costs a cycle on every jump to it.
+
+| Tried | Result |
+|---|---|
+| `-falign-labels` for the library | crashed with an illegal instruction |
+| aligning only the loop's labels | +323 bytes; moves again with the next change |
+
+**Why.** It fixes one build of one toolchain. Builds are compared by
+CoreMark and the board checks together, not by one loop
+([decision 5](decisions.md#5-no-tuning-of-code-layout-per-processor)).
+
+### The two loops as separate .c files
+
+**Rejected** · 2026-11-15
+
+**Tried.** `wm_exec_fast.c` and `wm_exec_inplace.c` compiled on their own.
+
+| Machine | Result |
+|---|---|
+| desktop | the shared numeric helpers no longer inline into the loops (`WM_INLINE_OPS`) |
+| ESP32 | a copy of them for each loop in flash |
+
+**Kept instead.** `.c.h` files included at the end of `wm_exec.c`, as
+CPython's `ceval.c` includes its cases: one unit to the compiler, machine
+code the same byte for byte.
+
+### Both loops generated from one description
+
+**Rejected on paper** · 2026-11-15
+
+**Tried.** A generator writing both loops from one description of every
+instruction's body, as CPython does.
+
+**Why.** A tool in the build and generated files to keep, for about eighty
+records and two stacks of different shape. A list included with the
+preprocessor does the part worth doing ([decision 9](decisions.md#9-the-instructions-are-described-once)).
+
+## Stack and registers
+
+### The top of the stack in a register
+
+**Kept** · 2026-11-15
+
+**Tried.** `tos` in a register, its slot written only when the stack goes
+to memory, as wasm3's `_r0` and HotSpot's interpreter do.
+
+| Machine | Result (with `misc` returning the stack, against it alone) |
+|---|---|
+| ESP32 | −0.5%: GCC keeps `tos` in the C stack, too few registers |
+| Mac | +7.6% |
+| Mac, built as for chips | +14.7% |
+
+**Why kept.** With the rest of [decision 8](decisions.md#8-the-fast-loop-does-what-other-interpreters-do)
+the ESP32 went +28.8%.
+
+### `misc` taking the stack pointer's address
+
+**Fixed** · 2026-11-15
+
+**Found.** `misc(..., &sp)` for the rare bulk instructions made the
+compiler keep the loop's stack pointer in memory on Xtensa: a store on
+every change of it.
+
+| Machine | `misc` returning the stack |
+|---|---|
+| ESP32 | 12.03 → 12.82 (+6.6%) |
+| Mac | ±0 |
+| Mac, built as for chips | +1.3% |
+
+### `bytes` and `fuel_on` out of the loop's state
+
+**Rejected** · 2026-11-15
+
+**Tried.** Freeing a register on Xtensa by reading these from the runtime.
+
+| Machine | Result |
+|---|---|
+| ESP32 | the fuel test reads the runtime in every handler; the loop's code +44% |
+
+### Not reloading the instance after a call
+
+**Rejected on paper** · 2026-11-15
+
+**Why.** A call may grow memory, so memory must be read again after a call
+in any case, as in wasm3; what was left to save was a load or two, the
+cost of the test for it.
+
+### Sign extension: shifts or a switch
+
+**The switch stays** · 2026-11-15
+
+**Found.** Since the static analyzer's change sign extension is a
+`switch` (the shifts could shift by 64 as far as the analyzer knew), and
+the ESP32 gives `run_fast` other registers.
+
+| Variant | ESP32 -O2 | ESP32 -Os | Mac | Mac, as for chips |
+|---|---:|---:|---:|---:|
+| shifts (before the analyzer) | 15.49 | | | |
+| `switch` (now) | 15.40 | 13.77 | 2819 | 2930 |
+| shifts + `WM_ASSERT(size >= 1 && size < 8)` | 15.54 | 13.78 | 2750 (−2.4%) | 2921 (−0.3%) |
+| `(v ^ sign) - sign` | 15.35 | | | |
+
+Mac figures are the mean of four runs each, the shifts slower in all
+four. **Why.** No change may lose on one machine to win on another.
+
+## Calls inside the loop
+
+### A call from a handler
+
+**Rejected** · 2026-11-09
+
+**Found.** On an ESP32 any function call in a handler costs the whole
+loop, even when it only runs on a TLB miss: Xtensa's windowed calls make
+the compiler give the loop worse registers everywhere.
+
+| Variant (ESP32, memory in one block) | CoreMark | Against no MMU |
+|---|---:|---:|
+| no MMU | 12.29 | |
+| a miss handled by a call | 10.49 | −15% |
+| the slow path written inside the handlers | 12.06 | −1.9% (larger code) |
+| a miss as an exception that stops the loop | 12.19 | −0.8% |
+
+**Kept.** A TLB miss and a call into a function without records stop the
+loop like fuel; the instruction runs again. Nothing is called from inside
+the loop.
+
+## Memory and paging
+
+### A window of memory in registers
+
+**Rejected** · 2026-11-09
+
+**Tried.** The bounds of the whole memory, or of the last page used, in
+registers before the TLB.
+
+| Machine | Whole memory | Last page |
+|---|---:|---:|
+| Mac | ±0 | −1% |
+| Black Pill | +2.4% | |
+| ESP32 | −7.7% (the TLB alone −2.4%) | |
+
+**Why.** It loses on the ESP32: too few registers, the window goes to the
+stack.
+
+### A TLB of 16 entries, not 64
+
+**Kept** · 2026-11-09
+
+| Machine | 64 entries | 16 entries |
+|---|---:|---:|
+| Mac | 2408 | 2405 |
+
+16 entries are 128 bytes.
+
+### Every memory paged once there is a pager
+
+**Replaced** · 2026-11-12
+
+| Machine | Paged | One block |
+|---|---:|---:|
+| Mac | 2343 | 2595 (+10.7%) |
+
+**Kept instead.** Memory in one block while the RAM budget has room
+([decision 4](decisions.md#4-memory-in-one-block-while-ram-has-room)), as
+an operating system keeps huge pages and splits them under pressure.
+
+### A block gathered from the heap
+
+**Replaced by a pool** · 2026-11-12
+
+**Found.** On an ESP32 with a page store, after paging the heap had
+163 KB free but no piece over 59 KB, so a 64 KB memory never went back
+into one block.
+
+| Tried | Result |
+|---|---|
+| write the frames out, free them, read them back | the whole memory written and read each time; still depends on the heap |
+| frames from a pool, a block is frames in a row | the block came back in 912 ms |
+
+See [decision 6](decisions.md#6-frames-come-from-a-pool-a-block-is-frames-in-a-row).
+
+### Dirty frames
+
+**Kept** · 2026-11-11
+
+**Tried.** A frame not written since it was read is not written again.
+
+| ESP32 with an SD card, same card state | Before | After |
+|---|---:|---:|
+| writes | 216 | 134 (−38%) |
+| time | 6270 ms | 5854 ms (−7%) |
+
+## Records and code
+
+### Records in 32-bit cells
+
+**Kept, a trade** · 2026-11-09
+
+**Tried.** A record's first cell holds its handler as a 16-bit offset and
+a 16-bit operand on every target, instead of a pointer and full operands.
+
+| | Before | After |
+|---|---:|---:|
+| CoreMark's records | 30.9 KB (61.8 KB on a Mac) | 16.7 KB (−46%) |
+| Mac CoreMark | 2940 | 2620 (−11%) |
+| ESP32 CoreMark | 13.09 | 12.29 (−6%) |
+| Black Pill CoreMark, bare | 6.30 | 5.79 (−8%) |
+| Black Pill CoreMark, in the OS | 2.79 (records did not fit) | 5.74 (×2.06) |
+| ESP32 programs at once | 10 | 12 |
+
+**Why kept.** On a board the records have to fit, or the program runs in
+place, two to three times slower.
+
+### All records at load, or none
+
+**Replaced by a code cache** · 2026-11-12
+
+| | Before | After |
+|---|---:|---:|
+| RAM for code in the wasm-rtos tests | | 14–36% less |
+| ESP32 programs at once | 12 | 18 |
+| Black Pill programs at once | 6 | 9 |
+| Mac CoreMark | 2619 | 2619 |
+
+Only the module in place is two to three times slower. See
+[decision 3](decisions.md#3-code-is-a-cache).
+
+### A compact loop on the ESP32
+
+**Kept** · 2026-11-08
+
+**Found.** Code runs from flash through a 32 KB cache; a larger loop
+pushed the kernel's code out of it.
+
+| ESP32, a queue of 500 exchanges | Time |
+|---|---:|
+| before | 45 ms |
+| larger loop | 89 ms |
+| compact loop | 53 ms |
+
+## Building
+
+### ESP32 Arduino's default flags
+
+**Flags set for the engine** · 2026-11-08
+
+**Found.** The Arduino core builds with `-fno-jump-tables` and
+`-fno-builtin-memcpy`: the interpreter's switches become chains of
+compares, its copies calls.
+
+**Kept.** The engine's files are built with `-fjump-tables
+-ftree-switch-conversion` there (about 20% faster; see the README), and
+the loop copies with `__builtin_memcpy`, which stays inline.
