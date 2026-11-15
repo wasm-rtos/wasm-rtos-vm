@@ -18,10 +18,16 @@ the engine's own arrays in bounds stay.
 
 ## Two loops
 
-- **In place** (`wm_execute`): runs the module's bytes with the side table.
-  Every build has it; on AVR it is the only one.
-- **Predecoded** (`run_fast`, with `WM_PREDECODE`, the default where labels
-  can be values): runs records, one per instruction, in 32-bit cells. The
+What they share (traps, immediates, stack slots, memory accesses, numeric
+and bulk instructions) is `source/wm_exec.c`, which includes the two loops
+so the three are one unit for the compiler.
+
+- **In place** (`wm_execute`, `source/wm_exec_inplace.c.h`): runs the
+  module's bytes with the side table. Every build has it; on AVR it is the
+  only one.
+- **Predecoded** (`run_fast`, `source/wm_exec_fast.c.h`, with
+  `WM_PREDECODE`, the default where labels can be values): runs records,
+  one per instruction, in 32-bit cells. The
   first cell holds the handler (an offset from the first handler) and a
   16-bit operand (a local's index, a small constant, a call's function, a
   branch's distance), so most instructions take one cell and branches two.
