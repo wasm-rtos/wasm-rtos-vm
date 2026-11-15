@@ -2,7 +2,7 @@
 # The engine's speed and size against another tree of it, by counts that do
 # not move with the machine's load: machine instructions per WebAssembly
 # instruction of a short CoreMark under cachegrind (the same run every time:
-# a clock that moves 5 s a call), and the Uno test program's flash.
+# a clock that moves 5 s a call), and the AVR test program's flash.
 #   tools/perf.sh base-tree [program.wasm]
 # Both trees are built here by the same compiler, the engine's sources of
 # each with this tree's wm-bench. Fails when this tree is worse than the base
@@ -56,10 +56,11 @@ for build in "plain:" "as for chips:-DWM_FUSE=1 -DWM_NOP_RUNS=1"; do
 done
 if command -v avr-gcc > /dev/null || [ -x "${AVR_BIN:-}/avr-gcc" ]; then
     export AVR_BIN="${AVR_BIN:-$(dirname "$(command -v avr-gcc)")}"
-    # Each tree's own script: it builds that tree's engine.
-    base_flash=$("$base/tools/avr-size.sh" | sed -n 's/^flash \([0-9]*\).*/\1/p')
-    this_flash=$(tools/avr-size.sh | sed -n 's/^flash \([0-9]*\).*/\1/p')
-    compare "Uno test program, flash bytes" "$base_flash" "$this_flash"
+    # Each tree's own script: it builds that tree's engine. Linked for a chip with room, as a
+    # newer avr-gcc may not fit the Uno's 32 KiB: the change in bytes is the same.
+    base_flash=$("$base/tools/avr-size.sh" atmega2560 | sed -n 's/^flash \([0-9]*\).*/\1/p')
+    this_flash=$(tools/avr-size.sh atmega2560 | sed -n 's/^flash \([0-9]*\).*/\1/p')
+    compare "AVR test program, flash bytes" "$base_flash" "$this_flash"
 fi
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
