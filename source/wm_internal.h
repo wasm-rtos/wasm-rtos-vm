@@ -57,6 +57,21 @@ static inline int wm_out_of_bounds(uint32_t start, uint32_t count, wm_size size)
 #endif
 
 /*
+ * What must hold (WM_ASSERT): checked in the test builds (WM_CHECKS=1) and
+ * known to the static analyzer; nothing in the others, so it costs a chip
+ * neither time nor flash.
+ */
+#ifndef WM_CHECKS
+#define WM_CHECKS 0
+#endif
+#if WM_CHECKS || defined(__clang_analyzer__)
+#include <assert.h>
+#define WM_ASSERT(x) assert(x)
+#else
+#define WM_ASSERT(x) ((void)0)
+#endif
+
+/*
  * Traces (WM_HAS_TRACE, off on AVR): after a trap the runtime tells the
  * functions it was in, and functions have the names of the module's name
  * section. It costs no time: the trap's own exit notes where it was.
@@ -601,7 +616,7 @@ struct WmFunc
 {
     /* NULL for host functions. */
     WmInstance* instance;
-    const WmCode* code;
+    WmCode* code;
     /* Its module's type (WM_TYPE), or a host function's own, after it in the same block. */
     const WmType* type;
     /* The type's, here as every call needs them. */
@@ -717,7 +732,7 @@ void wm_tlb_init(WmTlb* tlb);
 WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t offset, uint32_t size, int write);
 extern const char wm_page_emulate[];
 /* One byte of a memory, reading an untouched frame as zero. */
-uint8_t wm_memory_byte(const WmMemory* memory, uint32_t address);
+uint8_t wm_memory_byte(WmMemory* memory, uint32_t address);
 #endif
 
 /* memory.fill and memory.copy, one block or paged. */
@@ -729,7 +744,7 @@ WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t l
 
 struct WmInstance
 {
-    const WmModule* module;
+    WmModule* module;
     WmFunc** funcs;
     /* The module's own functions, then a stub for each function import nothing was linked to. */
     WmFunc* own_funcs;

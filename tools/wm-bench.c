@@ -49,8 +49,8 @@ int main(int argc, char** argv)
     WmRuntime* rt = wm_runtime_new(64 * 1024, 1000);
     uint32_t result[2];
     uint64_t slices = 1;
-    (void)slices;
     uint32_t start;
+    uint32_t elapsed;
     float score;
     if (!f)
     {
@@ -83,8 +83,16 @@ int main(int argc, char** argv)
         printf("trap %s\n", r);
         return 1;
     }
+    elapsed = now_ms() - start;
     memcpy(&score, result, 4);
-    printf("CoreMark %.1f in %u ms (%s)\n", score, now_ms() - start, slice ? "slices of fuel" : "no fuel");
+    printf("CoreMark %.1f in %u ms (%s)\n", score, elapsed, slice ? "slices of fuel" : "no fuel");
+    /* Fuel counts WebAssembly instructions: the time of one, whatever compiled the engine. */
+    if (slice)
+    {
+        uint64_t instructions = (slices - 1u) * slice + (slice - wm_get_fuel(rt));
+        printf("%llu instructions, %.3f ns each\n", (unsigned long long)instructions,
+               (double)elapsed * 1e6 / (double)instructions);
+    }
     /* Side table, records and local offsets: the records only of the functions that ran. */
     printf("code %u bytes besides the module\n", wm_module_code_bytes(m));
     return 0;

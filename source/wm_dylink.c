@@ -64,7 +64,7 @@ typedef struct Metadata
 typedef struct Object
 {
     char* name;
-    const WmModule* module;
+    WmModule* module;
     WmInstance* instance;
     Metadata meta;
     uint32_t memory_base;
@@ -503,7 +503,7 @@ static int find_dependency(State* s, const char* name)
     return -1;
 }
 
-static WmResult add_object(State* s, const char* name, const WmModule* module, int is_main, uint32_t* index)
+static WmResult add_object(State* s, const char* name, WmModule* module, int is_main, uint32_t* index)
 {
     Object* o;
     Reader section;
@@ -739,7 +739,7 @@ static WmResult fill_got(State* s)
             return result;
         if (g->func && found.as.func && table_index(s, found.as.func) >= 0)
             value = (uint32_t)table_index(s, found.as.func);
-        else if (!g->func && found.as.global)
+        else if (!g->func && found.as.global && owner)
         {
             uint32_t relative;
             if (found.as.global->type != WM_I32)
@@ -795,7 +795,7 @@ static WmResult initialize(State* s, const uint32_t* order, uint32_t count)
     return NULL;
 }
 
-static WmResult load(State* s, const WmModule* program, const char* name, uint32_t** order_out)
+static WmResult load(State* s, WmModule* program, const char* name, uint32_t** order_out)
 {
     uint32_t* order;
     uint32_t main_index, count = 0;
@@ -917,7 +917,7 @@ static WmResult load(State* s, const WmModule* program, const char* name, uint32
     return initialize(s, order, count);
 }
 
-WmResult wm_dylink_load(WmDylink** out, const WmModule* program, const char* name, WmRuntime* runtime,
+WmResult wm_dylink_load(WmDylink** out, WmModule* program, const char* name, WmRuntime* runtime,
                         const WmDylinkOptions* options)
 {
     State* s;
@@ -966,7 +966,7 @@ void wm_dylink_free(WmDylink* s)
         free_metadata(&o->meta);
         wm_free(o->name);
         if (!o->is_main)
-            wm_module_free((WmModule*)o->module);
+            wm_module_free(o->module);
     }
     wm_free(s->objects);
     wm_free(s->globals);

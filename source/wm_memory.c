@@ -156,6 +156,7 @@ static void ring_remove(WmMemory* memory, uint32_t index)
     if (!memory->ring_place || (place = memory->ring_place[index]) == WM_NONE)
         return;
     memory->ring_place[index] = WM_NONE;
+    WM_ASSERT(g_ring && place < g_ring_count);
     /* The last frame in the ring takes its place. */
     if (place != --g_ring_count)
     {
@@ -329,7 +330,8 @@ static uint8_t* new_frame(WmMemory* memory, uint32_t index)
  */
 static int finish_loading(WmMemory* memory, uint32_t index)
 {
-    if (!memory->marks || !(memory->marks[index] & WM_MARK_LOADING))
+    /* Only a memory with a pager has marks and slots. */
+    if (!memory->pager || !(memory->marks[index] & WM_MARK_LOADING))
         return 1;
     memory->marks[index] &= (uint16_t)~WM_MARK_LOADING;
     if (!(g_frame_error = memory->pager->finish(memory->pager->context, memory->slots[index])))
@@ -349,13 +351,13 @@ static void free_frame(WmMemory* memory, uint32_t index)
         return;
     /* No read or write may go on with a frame that is freed. */
     (void)finish_loading(memory, index);
-    if (memory->marks && (memory->marks[index] & WM_MARK_WRITING))
+    if (memory->pager && (memory->marks[index] & WM_MARK_WRITING))
     {
         memory->marks[index] &= (uint16_t)~(WM_MARK_WRITING | WM_MARK_LEAVING);
         (void)memory->pager->finish(memory->pager->context, memory->slots[index]);
     }
     frame = memory->frames[index];
-    if (memory->slots && memory->slots[index] != WM_NONE)
+    if (memory->pager && memory->slots[index] != WM_NONE)
     {
         memory->pager->drop(memory->pager->context, memory->slots[index]);
         memory->slots[index] = WM_NONE;
@@ -414,17 +416,17 @@ static uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
 }
 
 /* A frame to read from: an untouched one reads as zeros, without being made. NULL: it could not come back. */
-static const uint8_t* frame_to_read(const WmMemory* memory, uint32_t index)
+static const uint8_t* frame_to_read(WmMemory* memory, uint32_t index)
 {
     static const uint8_t zeros[WM_FRAME];
     if (memory->data)
         return memory->data + ((wm_size)index << WM_FRAME_LOG2);
     if (!memory->frames[index])
         return zeros;
-    return wm_memory_frame((WmMemory*)memory, index, 0);
+    return wm_memory_frame(memory, index, 0);
 }
 
-uint8_t wm_memory_byte(const WmMemory* memory, uint32_t address)
+uint8_t wm_memory_byte(WmMemory* memory, uint32_t address)
 {
     const uint8_t* frame = frame_to_read(memory, address >> WM_FRAME_LOG2);
     return frame ? frame[address & (WM_FRAME - 1u)] : 0;
@@ -1358,7 +1360,7 @@ WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, 
     return NULL;
 }
 
-WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uint32_t length)
+WmResult wm_memory_read(WmMemory* memory, uint32_t address, void* out, uint32_t length)
 {
     uint8_t* to = (uint8_t*)out;
     if (!in_bounds(memory, address, length))

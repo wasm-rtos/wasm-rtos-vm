@@ -44,10 +44,12 @@ static int64_t read_signed(const uint8_t** p)
     return (int64_t)value;
 }
 
+/* A constant expression's value; 0 in *out, and an error, for one that is not (a module not validated). */
 static WmResult wm_eval_const(WmInstance* instance, const uint8_t* expr, uint64_t* out)
 {
     const uint8_t* p = expr;
     uint64_t value = 0;
+    *out = 0;
     for (;;)
     {
         uint8_t op = WM_RD8(p++);
@@ -228,8 +230,8 @@ static WmResult initialize(WmInstance* inst, int kept_memory)
         {
             uint64_t offset;
             WmResult result;
-            wm_eval_const(inst, s->offset, &offset);
-            if ((result = wm_table_init(inst, i, inst->tables[s->table], (uint32_t)offset, 0, s->count)))
+            if ((result = wm_eval_const(inst, s->offset, &offset)) ||
+                (result = wm_table_init(inst, i, inst->tables[s->table], (uint32_t)offset, 0, s->count)))
                 return result;
         }
         if (s->mode != WM_SEGMENT_PASSIVE)
@@ -242,9 +244,12 @@ static WmResult initialize(WmInstance* inst, int kept_memory)
         {
             uint64_t value;
             uint32_t offset;
-            wm_eval_const(inst, s->offset, &value);
+            WmResult result;
+            if ((result = wm_eval_const(inst, s->offset, &value)))
+                return result;
             offset = (uint32_t)value;
-            if (wm_out_of_bounds(offset, s->size, WM_MEMORY_SIZE(inst->memory)))
+            /* No memory for a data segment only in a module not validated. */
+            if (!inst->memory || wm_out_of_bounds(offset, s->size, WM_MEMORY_SIZE(inst->memory)))
                 return WM_ERR_TRAP("trap: out of bounds memory access");
             /* A memory kept from before has its bytes already. */
             if (kept_memory)
@@ -300,7 +305,7 @@ static WmResult make_own_funcs(WmInstance* inst)
 }
 
 /* An instance of m; with kept a memory from an earlier instance, which it takes as its own. */
-static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
+static WmResult instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, WmResolver resolver,
                             void* context, WmMemory* kept)
 {
     WmInstance* inst;
@@ -339,7 +344,11 @@ static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runt
         g->type = m->globals[i].type;
         g->mutable_ = m->globals[i].mutable_;
         inst->globals[i] = g;
-        wm_eval_const(inst, m->globals[i].init, &g->value);
+        if ((result = wm_eval_const(inst, m->globals[i].init, &g->value)))
+        {
+            wm_instance_free(inst);
+            return result;
+        }
     }
     for (uint32_t i = m->table_imports; i < m->table_count; ++i)
     {
@@ -380,7 +389,7 @@ static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runt
 
 #if WM_PREDECODE
     /* Once the instance has its memory, which matters more than speed. */
-    wm_module_predecode((WmModule*)m);
+    wm_module_predecode(m);
 #endif
     /* From here on effects can be seen through shared imports, so a failure keeps the instance. */
     *out = inst;
@@ -392,13 +401,13 @@ static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runt
     return NULL;
 }
 
-WmResult wm_instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
+WmResult wm_instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, WmResolver resolver,
                         void* context)
 {
     return instantiate(out, m, runtime, resolver, context, NULL);
 }
 
-WmResult wm_instantiate_with_memory(WmInstance** out, const WmModule* m, WmMemory* memory, WmResolver resolver,
+WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* m, WmMemory* memory, WmResolver resolver,
                                     void* context)
 {
     WmResult result = instantiate(out, m, NULL, resolver, context, memory);
@@ -561,9 +570,10 @@ void* wm_calloc(size_t count, size_t size)
         return calloc(count, size);
     if (size && count > (size_t)-1 / size)
         return NULL;
-    p = allocator(NULL, count * size ? count * size : 1u);
+    size_t bytes = count * size;
+    p = allocator(NULL, bytes ? bytes : 1u);
     if (p)
-        memset(p, 0, count * size);
+        memset(p, 0, bytes);
     return p;
 }
 
@@ -713,7 +723,11 @@ WmResult wm_call(WmRuntime* rt, WmFunc* f, const uint32_t* args, uint32_t* resul
     if ((uint32_t)(rt->stack_end - base) < room)
         return WM_ERR_EXHAUSTION("exhaustion: call stack exhausted");
     if (f->param_slots)
+    {
+        if (!args)
+            return WM_ERR_INVALID("invalid: arguments missing");
         memcpy(base, args, f->param_slots * 4u);
+    }
 #if WM_HAS_TRACE
     rt->trap_func = NULL;
 #endif

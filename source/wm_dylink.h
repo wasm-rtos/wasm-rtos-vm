@@ -40,7 +40,7 @@ int wm_module_is_dylink(const WmModule* module);
  * The program stays the caller's; the libraries belong to the process,
  * which is kept on failure too, so that wm_dylink_free releases it.
  */
-WmResult wm_dylink_load(WmDylink** out, const WmModule* program, const char* name, WmRuntime* runtime,
+WmResult wm_dylink_load(WmDylink** out, WmModule* program, const char* name, WmRuntime* runtime,
                         const WmDylinkOptions* options);
 /* The program's instance. */
 WmInstance* wm_dylink_instance(const WmDylink* process);
