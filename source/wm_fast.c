@@ -459,7 +459,7 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
                     break;
                 case 0x11:
                     kind = WM_F_CALL_INDIRECT;
-                    operand = leb_u32(&p);
+                    operand = m->types[leb_u32(&p)].canon;
                     out[1].u32 = leb_u32(&p);
                     break;
                 case 0x1A:

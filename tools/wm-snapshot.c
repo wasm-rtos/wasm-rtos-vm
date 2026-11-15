@@ -157,6 +157,6 @@ static void link_stubs(WmInstance* inst, WmFunc** stubs)
     {
         WmFunc* f = inst->funcs[i];
         f->host = stub;
-        f->user = f->result_count ? (void*)1 : NULL;
+        f->user = f->type->result_count ? (void*)1 : NULL;
     }
 }

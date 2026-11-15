@@ -1081,6 +1081,7 @@ f_call:
     goto call;
 f_call_indirect:
 {
+    /* The record has the type as functions point to it (WM_TYPE). */
     const WmType* type = &inst->module->types[IMM];
     WmTable* table = inst->tables[ip[0].u32];
     uint32_t index = tos;
@@ -1091,7 +1092,8 @@ f_call_indirect:
     callee = (WmFunc*)table->elems[index];
     if (!callee)
         TRAP(WM_ERR_TRAP("trap: uninitialized element"));
-    if (!wm_func_has_type(callee, type))
+    /* The same type is the same pointer; only another module's or a host's needs comparing. */
+    if (callee->type != type && !wm_func_has_type(callee, type))
         TRAP(WM_ERR_TRAP("trap: indirect call type mismatch"));
     /* Below the index the stack is in memory already; tos becomes the last argument. */
     FAST_RELOAD();
@@ -2014,7 +2016,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             CASE(0x10) callee = inst->funcs[imm_u32(&pc)]; goto call;
             CASE(0x11)
             {
-                const WmType* type = &inst->module->types[imm_u32(&pc)];
+                const WmType* type = WM_TYPE(inst->module, imm_u32(&pc));
                 WmTable* table = inst->tables[imm_u32(&pc)];
                 uint32_t index = *--sp;
                 if (index >= table->size)
@@ -2022,7 +2024,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 callee = (WmFunc*)table->elems[index];
                 if (!callee)
                     TRAP(WM_ERR_TRAP("trap: uninitialized element"));
-                if (!wm_func_has_type(callee, type))
+                if (callee->type != type && !wm_func_has_type(callee, type))
                     TRAP(WM_ERR_TRAP("trap: indirect call type mismatch"));
                 goto call;
             }

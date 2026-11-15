@@ -82,10 +82,7 @@ static WmResult wm_eval_const(WmInstance* instance, const uint8_t* expr, uint64_
 
 static void set_signature(WmFunc* f, const WmType* t)
 {
-    f->params = t->params;
-    f->param_count = t->param_count;
-    f->results = t->results;
-    f->result_count = t->result_count;
+    f->type = t;
     f->param_slots = t->param_slots;
     f->result_slots = t->result_slots;
 }
@@ -141,7 +138,7 @@ static WmResult link_imports(WmInstance* inst, WmResolver resolver, void* contex
             case WM_EXTERN_FUNC:
             {
                 WmFunc* f = ext.as.func;
-                const WmType* t = &m->types[m->func_types[imp->index]];
+                const WmType* t = WM_TYPE(m, m->func_types[imp->index]);
                 /* Unresolved: it gets a stub of this instance that traps until linked. */
                 if (!f)
                     break;
@@ -294,7 +291,7 @@ static WmResult make_own_funcs(WmInstance* inst)
             continue;
         f = &inst->own_funcs[count++];
         f->instance = inst;
-        set_signature(f, &m->types[m->func_types[i]]);
+        set_signature(f, WM_TYPE(m, m->func_types[i]));
         if (i >= m->func_imports)
             f->code = &m->codes[i - m->func_imports];
         inst->funcs[i] = f;
@@ -472,25 +469,28 @@ WmMemory* wm_instance_memory(const WmInstance* inst) { return inst->memory; }
 WmFunc* wm_host_function_new(const uint8_t* params, uint32_t param_count, const uint8_t* results,
                              uint32_t result_count, WmHostFunction function, void* user)
 {
-    WmFunc* f = (WmFunc*)wm_calloc(1, sizeof(WmFunc) + param_count + result_count);
+    /* The function, its type and the type's bytes in one block. */
+    WmFunc* f = (WmFunc*)wm_calloc(1, sizeof(WmFunc) + sizeof(WmType) + param_count + result_count);
+    WmType* t;
     uint8_t* types;
     if (!f)
         return NULL;
-    types = (uint8_t*)(f + 1);
+    t = (WmType*)(f + 1);
+    types = (uint8_t*)(t + 1);
     /* NULL types for none: memcpy may not be given NULL, even for no bytes. */
     if (param_count)
         memcpy(types, params, param_count);
     if (result_count)
         memcpy(types + param_count, results, result_count);
-    f->params = types;
-    f->param_count = param_count;
-    f->results = types + param_count;
-    f->result_count = result_count;
-    f->param_slots = 0;
+    t->params = types;
+    t->param_count = param_count;
+    t->results = types + param_count;
+    t->result_count = result_count;
     for (uint32_t i = 0; i < param_count; ++i)
-        f->param_slots += wm_type_slots(params[i]);
+        t->param_slots += wm_type_slots(params[i]);
     for (uint32_t i = 0; i < result_count; ++i)
-        f->result_slots += wm_type_slots(results[i]);
+        t->result_slots += wm_type_slots(results[i]);
+    set_signature(f, t);
     f->host = function;
     f->user = user;
     return f;
@@ -501,10 +501,10 @@ void wm_host_function_free(WmFunc* f) { wm_free(f); }
 void wm_func_type(const WmFunc* f, const uint8_t** params, uint32_t* param_count, const uint8_t** results,
                   uint32_t* result_count)
 {
-    *params = f->params;
-    *param_count = f->param_count;
-    *results = f->results;
-    *result_count = f->result_count;
+    *params = f->type->params;
+    *param_count = f->type->param_count;
+    *results = f->type->results;
+    *result_count = f->type->result_count;
 }
 
 WmGlobal* wm_global_new(uint8_t type, uint8_t mutable_, uint64_t value)

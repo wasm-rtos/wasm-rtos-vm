@@ -677,9 +677,7 @@ static WmResult link_functions(State* s, const uint32_t* order, uint32_t count)
                 return result;
             if (!found.as.func || found.as.func == stub || !found.as.func->code)
                 continue;
-            if (!wm_types_equal(stub->params, stub->param_count, found.as.func->params, found.as.func->param_count) ||
-                !wm_types_equal(stub->results, stub->result_count, found.as.func->results,
-                                found.as.func->result_count))
+            if (!wm_func_has_type(found.as.func, stub->type))
                 return E_TYPE;
             *stub = *found.as.func;
         }
@@ -771,7 +769,7 @@ static WmResult call_optional(State* s, WmInstance* inst, const char* name, int*
     *found = wm_instance_export(inst, name, (uint32_t)strlen(name), &f) == NULL && f.kind == WM_EXTERN_FUNC;
     if (!*found)
         return NULL;
-    if (f.as.func->param_count || f.as.func->result_count)
+    if (f.as.func->type->param_count || f.as.func->type->result_count)
         return E_TYPE;
     return wm_call(s->runtime, f.as.func, NULL, NULL);
 }

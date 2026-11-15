@@ -327,10 +327,10 @@ static void command(char* line)
             }
             printf("ok");
             at = 0;
-            for (uint32_t i = 0; i < f->result_count; ++i)
+            for (uint32_t i = 0; i < f->type->result_count; ++i)
             {
-                print_value(f->results[i], results + at);
-                at += wm_type_slots(f->results[i]);
+                print_value(f->type->results[i], results + at);
+                at += wm_type_slots(f->type->results[i]);
             }
             printf("\n");
         }
