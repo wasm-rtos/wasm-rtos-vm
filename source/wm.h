@@ -359,7 +359,9 @@ uint32_t wm_call_depth(const WmRuntime* runtime);
 /*
  * Fuel: one unit is one WebAssembly instruction. With fuel set, a call
  * stops before the instruction that finds none left. A host function may
- * set it to 0 to stop the program once it returns.
+ * set it to 0 to stop the program once it returns. After a call that
+ * trapped, the fuel left is not defined: the loops keep it in a register
+ * and write it back only where the program can go on.
  */
 void wm_set_fuel(WmRuntime* runtime, uint32_t fuel);
 void wm_disable_fuel(WmRuntime* runtime);

@@ -1,0 +1,35 @@
+;; A program for fuzz_snapshot: stopped deep in a recursion through a
+;; table, with globals of three types, locals of i64 and f64 in every frame
+;; and writes to memory, so a snapshot of it has all of these to read back.
+(module
+  (type $step (func (param i32) (result i32)))
+  (memory 1)
+  (table 2 funcref)
+  (elem (i32.const 0) $even $odd)
+  (global $calls (mut i32) (i32.const 0))
+  (global $sum (mut i64) (i64.const 0))
+  (global $half (mut f64) (f64.const 0))
+  (func $count (param $n i32)
+    (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
+    (global.set $sum (i64.add (global.get $sum) (i64.extend_i32_u (local.get $n))))
+    (global.set $half (f64.add (global.get $half) (f64.const 0.5)))
+    (i32.store (i32.and (i32.mul (local.get $n) (i32.const 4)) (i32.const 0xFFFC)) (local.get $n)))
+  (func $even (param $n i32) (result i32) (local $wide i64) (local $real f64)
+    (call $count (local.get $n))
+    (local.set $wide (i64.mul (i64.extend_i32_u (local.get $n)) (i64.const 3)))
+    (local.set $real (f64.convert_i32_u (local.get $n)))
+    (if (result i32) (i32.eqz (local.get $n))
+      (then (i32.const 1))
+      (else (i32.add
+        (call_indirect (type $step) (i32.sub (local.get $n) (i32.const 1)) (i32.const 1))
+        (i32.wrap_i64 (i64.sub (local.get $wide) (i64.trunc_f64_u (f64.mul (local.get $real) (f64.const 3)))))))))
+  (func $odd (param $n i32) (result i32) (local $wide i64)
+    (call $count (local.get $n))
+    (local.set $wide (i64.extend_i32_u (local.get $n)))
+    (if (result i32) (i32.eqz (local.get $n))
+      (then (i32.const 0))
+      (else (i32.add
+        (call_indirect (type $step) (i32.sub (local.get $n) (i32.const 1)) (i32.const 0))
+        (i32.wrap_i64 (i64.sub (local.get $wide) (local.get $wide)))))))
+  (func (export "run") (param $n i32) (result i32)
+    (call $even (local.get $n))))

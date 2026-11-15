@@ -128,3 +128,23 @@ jobs:
 
       - name: Run tools/check.sh
         run: tools/check.sh
+
+      # A minute of each fuzz target from the spec suite's modules; what
+      # it finds is kept as an artifact (test/fuzz/, decision 10).
+      - name: Fuzz
+        run: |
+          tools/fuzz.sh load 60
+          tools/fuzz.sh run 60
+          tools/fuzz.sh diff 60
+          tools/fuzz.sh run 30 chips
+          tools/fuzz.sh diff 30 chips
+          tools/fuzz.sh run 30 paged
+          tools/fuzz.sh diff 30 paged
+
+      - name: Keep what the fuzzers found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-finds
+          path: build/fuzz/crash-*
+          if-no-files-found: ignore

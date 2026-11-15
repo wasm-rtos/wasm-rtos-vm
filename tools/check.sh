@@ -81,6 +81,14 @@ for size in 256 1024 65536; do
     done
     [ $ok = 1 ] && echo "frames $size:  ok (spec swapped, paged, swap, state)"
 done
+# The inputs that once made a fuzz target find a bug (test/fuzz/regress/), each through its target.
+xxd -i test/fuzz/snapshot.wasm > build/snapshot_wasm.h
+for t in load run diff snapshot; do
+    ls test/fuzz/regress/$t/* >/dev/null 2>&1 || continue
+    cc -std=gnu99 -O1 -g -fsanitize=address,undefined -Ibuild source/*.c test/fuzz/fuzz_$t.c test/fuzz/replay.c -lm \
+        -o build/replay-$t || exit 1
+    build/replay-$t test/fuzz/regress/$t/* 2>/dev/null && echo "fuzz finds ($t): ok" || { echo "fuzz finds ($t): FAIL"; fail=1; }
+done
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 out="$(tools/kernel-tests.sh)" || fail=1
 echo "kernel tests:  $(tail -1 <<<"$out")"

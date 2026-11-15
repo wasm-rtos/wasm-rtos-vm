@@ -376,3 +376,60 @@ The fast loop's machine code is the same on a Mac (clang -O2). On Xtensa
 (GCC 14.2 -O2) `run_fast` is 3 instructions and 3 bytes of padding
 shorter and `op_i32` 6 instructions shorter; the rest moved. CoreMark ran
 the same 41 963 863 173 instructions; the ESP32's heap is the same.
+
+## 10. The engine is fuzzed, and against itself
+
+**Decided (2026-11-15).**
+
+### Problem
+
+Every byte a program, a page store or an SD card hands the engine comes
+from outside it: a module to load and run, a snapshot to go on from. The
+spec suite checks what the standard says a module does; nothing checks
+what the engine does with bytes nobody wrote on purpose. And with two
+loops, fused records, the top of the stack in a register and snapshots,
+a wrong answer can come without a crash, where no sanitizer sees it.
+
+### Decision
+
+Four libFuzzer targets in `test/fuzz/`, built with the address sanitizer
+(and the undefined behaviour one where it does not stop predecoding), as
+wasm3 and WAMR are fuzzed in OSS-Fuzz:
+
+- **`fuzz_load`**: any bytes through `wm_module_load`.
+- **`fuzz_run`**: a module loaded, instantiated with every import made for
+  it (functions that return zeros, memories, tables and globals of the
+  types it asks for), its start function and every exported function run
+  with a budget of fuel.
+- **`fuzz_diff`**: the same module run three ways, which must agree on
+  every result, trap, fuel spent, global and byte of memory: predecoded
+  in one slice of fuel; in place; predecoded in small slices with a
+  snapshot written and read back at the first stop. This is the engine
+  fuzzed against itself, as wasmtime fuzzes engines against each other.
+- **`fuzz_snapshot`**: any bytes through `wm_snapshot_read` into a known
+  program stopped in the middle, which then goes on.
+
+No allocation over 16 MiB succeeds while fuzzing, so a module that asks
+for 4 GiB of memory meets a failed allocation, as on a board, and not the
+fuzzer's limit. `fuzz_run` and `fuzz_diff` are also built as for chips
+(fused runs) and with every memory paged in small frames.
+
+Inputs start from the spec suite's modules and the engine's own test
+programs; the fuzzer mutates them from there. `tools/fuzz.sh` runs a
+target locally; CI runs each for a minute on every change. Every bug found
+is fixed with its input kept in `test/fuzz/regress/`, which `check.sh`
+runs every time.
+
+### Why
+
+Mature engines are fuzzed continuously; most of their memory bugs are
+found that way. Two loops that must agree are a free oracle: a difference
+is a bug in one of them, found without knowing the right answer.
+
+### Instead
+
+- **Generating valid modules** (`wasm-smith`): reaches deeper into the
+  interpreter than mutated bytes, but needs Rust in the build. Later, if
+  mutation stops finding anything.
+- **OSS-Fuzz now**: it runs fuzzers around the clock for free, but takes
+  an application and a project people use. Later.
