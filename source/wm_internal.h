@@ -226,14 +226,16 @@ extern const char wm_error_unsupported[];
 #define WM_ERR_UNSUPPORTED(text) text
 #endif
 
-/* Read-only tables: in flash on AVR, read with WM_ROM8. */
+/* Read-only tables: in flash on AVR, read with WM_ROM8 and WM_ROM32. */
 #ifdef __AVR__
 #include <avr/pgmspace.h>
 #define WM_ROM PROGMEM
 #define WM_ROM8(p) pgm_read_byte(p)
+#define WM_ROM32(p) pgm_read_dword(p)
 #else
 #define WM_ROM
 #define WM_ROM8(p) (*(p))
+#define WM_ROM32(p) (*(p))
 #endif
 
 /* All reads of module bytes go through this, so code can later live where plain loads cannot reach. */
@@ -519,11 +521,11 @@ struct WmModule
     uint8_t predecode_tried;
     /* Why predecoding failed and the functions run in place; NULL when it worked. */
     WmResult predecode_result;
+    /* The code section's first entry: functions are validated again from here (wm_code_side, wm_code_stack). */
+    const uint8_t* code_entries;
 #if WM_PREDECODE
     /* The next module in the code cache, when this one runs predecoded. */
     struct WmModule* cached_next;
-    /* The code section's first entry: functions are validated again from here for their records. */
-    const uint8_t* code_entries;
 #endif
 };
 
@@ -779,6 +781,21 @@ void wm_module_predecode(WmModule* module);
 WmResult wm_code_load(WmFunc* func);
 WmResult wm_code_make(WmModule* module, WmCode* code, const WmSide* side);
 WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
+/* What a function's operand stack and locals hold at one of its instructions (wm_code_stack). */
+typedef struct WmCodeStack
+{
+    /* The side table entry the instruction is at, in the module's table. */
+    uint32_t side;
+    /* Offset of the instruction before it in the module, WM_NONE for the first. */
+    uint32_t prev;
+    /* Operand types, the bottom first, and their slots; the locals' types, parameters first (both wm_free). */
+    uint8_t* types;
+    uint32_t count;
+    uint32_t slots;
+    uint8_t* locals;
+    uint32_t local_count;
+} WmCodeStack;
+WmResult wm_code_stack(const WmModule* module, uint32_t index, uint32_t offset, WmCodeStack* out);
 /* One function's records dropped, by CLOCK, for an allocation the heap refused; 0 when none can go. */
 int wm_code_drop_one(void);
 void* wm_code_malloc(size_t size);

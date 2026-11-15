@@ -152,6 +152,9 @@ static const uint8_t* read_name(Reader* r, uint32_t* length)
     const uint8_t* name;
     *length = read_u32(r);
     name = skip(r, *length);
+    /* Past the section's end: no name to compare or print. */
+    if (r->error)
+        *length = 0;
     if (WM_HAS_VALIDATION && !r->error && !valid_utf8(name, *length))
         REJECT(r, WM_ERR_MALFORMED("malformed: malformed UTF-8 encoding"));
     return name;
@@ -302,11 +305,9 @@ typedef struct Loader
     uint32_t defined_funcs;
     uint8_t has_data_count;
     uint32_t data_count;
-#if WM_PREDECODE
-    /* Validating a function again, for its side table entries (wm_code_side): the module is known valid. */
+    /* Validating a function again (wm_code_side, wm_code_stack): the module is known valid. */
     uint8_t again;
     WmCode scratch;
-#endif
 } Loader;
 
 static void declare(Loader* l, Reader* r, uint32_t func)
@@ -329,10 +330,8 @@ static void declare(Loader* l, Reader* r, uint32_t func)
 
 static int is_declared(const Loader* l, uint32_t func)
 {
-#if WM_PREDECODE
     if (l->again)
         return 1;
-#endif
     return l->declared && func < l->declared_count && (l->declared[func / 8u] & (1u << (func % 8u)));
 }
 
@@ -445,6 +444,10 @@ typedef struct Validator
     uint32_t max_slots;
     uint8_t* locals;
     uint32_t local_count;
+    /* Validating again up to stop (wm_code_stack): stopped there, prev the instruction before it. */
+    const uint8_t* stop;
+    const uint8_t* prev;
+    uint8_t stopped;
 } Validator;
 
 static void push(Validator* v, uint8_t type)
@@ -799,9 +802,33 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
     while (v->ctl_count > 0 && !r->error)
     {
         const uint8_t* at = r->p;
-        uint8_t op = read_u8(r);
+        uint8_t op;
         Control* c = &v->ctls[v->ctl_count - 1u];
         uint32_t index;
+        if (v->stop)
+        {
+            if (at == v->stop)
+            {
+                /*
+                 * A branch lands on its block's end, reached or not by the code
+                 * before it: there the stack is the block's and its results.
+                 */
+                if (WM_RD8(at) == 0x0Bu)
+                {
+                    v->val_count = c->height;
+                    v->slots = c->slots;
+                    push_types(v, c->results, c->result_count);
+                    v->stopped = !r->error;
+                }
+                else
+                    v->stopped = !c->unreachable;
+                return;
+            }
+            if (at > v->stop)
+                return;
+            v->prev = at;
+        }
+        op = read_u8(r);
         if (op >= 0x45u && op <= 0xC4u)
         {
             apply_numeric(v, WM_ROM8(wm_numeric + (op - 0x45u)));
@@ -1099,12 +1126,8 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
 static void read_code(Loader* l, Reader* r, uint32_t index, Validator* v)
 {
     WmModule* m = l->m;
-#if WM_PREDECODE
     /* Again: the function's own WmCode stays as it is. */
     WmCode* code = l->again ? &l->scratch : &m->codes[index];
-#else
-    WmCode* code = &m->codes[index];
-#endif
     const WmType* type = &m->types[m->func_types[m->func_imports + index]];
     uint32_t size = read_u32(r);
     uint32_t groups;
@@ -1163,10 +1186,8 @@ static void read_code(Loader* l, Reader* r, uint32_t index, Validator* v)
     code->local_slots = slots - type->param_slots;
     code->body = body.p;
     code->side = m->side_count;
-#if WM_PREDECODE
     if (l->again)
         identity = 1;
-#endif
     if (!identity)
     {
         uint32_t offset = 0;
@@ -1212,6 +1233,9 @@ static void read_types(Loader* l, Reader* r)
             const uint8_t* types = r->p;
             for (uint32_t k = 0; k < n && !r->error; ++k)
                 read_value_type(r);
+            /* A count past the section's end: its types were never there to count. */
+            if (r->error)
+                return;
             if (results)
                 t->results = types, t->result_count = n, t->result_slots = slots_of(types, n);
             else
@@ -1471,9 +1495,7 @@ static void read_codes(Loader* l, Reader* r)
     memset(&v, 0, sizeof(v));
     v.l = l;
     v.m = m;
-#if WM_PREDECODE
     m->code_entries = r->p;
-#endif
     for (uint32_t i = 0; i < count && !r->error; ++i)
         read_code(l, r, i, &v);
     wm_free(v.vals);
@@ -1720,43 +1742,94 @@ void wm_module_predecode(WmModule* m)
         wm_code_add_module(m);
     }
 }
+#endif
 
 /*
- * One function's side table entries, made again: its body validated once
- * more against a copy of the module whose side table starts empty. *out
- * (wm_free) holds them, NULL when the function has none.
+ * Function index (of the module's own) validated once more against a copy
+ * of the module whose side table starts empty, up to stop if not NULL.
+ * The copy's side table and the validator's arrays are the caller's.
  */
-WmResult wm_code_side(const WmModule* m, uint32_t index, WmSide** out)
+static WmResult validate_again(const WmModule* m, uint32_t index, const uint8_t* stop, WmModule* shadow, Validator* v)
 {
-    WmModule shadow = *m;
     Loader l;
     Reader r;
-    Validator v;
+    *shadow = *m;
     memset(&l, 0, sizeof(l));
-    memset(&v, 0, sizeof(v));
-    shadow.side = NULL;
-    shadow.side_count = 0;
-    l.m = &shadow;
+    memset(v, 0, sizeof(*v));
+    shadow->side = NULL;
+    shadow->side_count = 0;
+    l.m = shadow;
     l.again = 1;
     l.has_data_count = 1;
     l.data_count = m->data_count;
-    v.l = &l;
-    v.m = &shadow;
+    v->l = &l;
+    v->m = shadow;
+    v->stop = stop;
     r.p = m->code_entries;
     r.end = m->bytes + m->size;
     r.error = NULL;
     for (uint32_t i = 0; i < index && !r.error; ++i)
         skip(&r, read_u32(&r));
-    read_code(&l, &r, index, &v);
+    read_code(&l, &r, index, v);
+    /* The loader and reader were this call's: only the validator's arrays go back. */
+    v->l = NULL;
+    v->r = NULL;
+    return r.error;
+}
+
+#if WM_PREDECODE
+/*
+ * One function's side table entries, made again. *out (wm_free) holds
+ * them, NULL when the function has none.
+ */
+WmResult wm_code_side(const WmModule* m, uint32_t index, WmSide** out)
+{
+    WmModule shadow;
+    Validator v;
+    WmResult result = validate_again(m, index, NULL, &shadow, &v);
     wm_free(v.vals);
     wm_free(v.ctls);
     wm_free(v.locals);
-    if (r.error)
+    if (result)
     {
         wm_free(shadow.side);
         shadow.side = NULL;
     }
     *out = shadow.side;
-    return r.error;
+    return result;
 }
 #endif
+
+/*
+ * What function index (of the module's own) holds at the instruction that
+ * starts at offset in the module: validated again up to it. NULL, or
+ * wm_snapshot_invalid when no reachable instruction starts there.
+ */
+WmResult wm_code_stack(const WmModule* m, uint32_t index, uint32_t offset, WmCodeStack* out)
+{
+    WmModule shadow;
+    Validator v;
+    WmResult result;
+    memset(out, 0, sizeof(*out));
+    if (index >= m->func_count - m->func_imports || offset >= m->size)
+        return wm_snapshot_invalid;
+    result = validate_again(m, index, m->bytes + offset, &shadow, &v);
+    wm_free(shadow.side);
+    wm_free(v.ctls);
+    if (!result && !v.stopped)
+        result = wm_snapshot_invalid;
+    if (result)
+    {
+        wm_free(v.vals);
+        wm_free(v.locals);
+        return result;
+    }
+    out->side = m->codes[index].side + shadow.side_count;
+    out->prev = v.prev ? (uint32_t)(v.prev - m->bytes) : WM_NONE;
+    out->types = v.vals;
+    out->count = v.val_count;
+    out->slots = v.slots;
+    out->locals = v.locals;
+    out->local_count = v.local_count;
+    return NULL;
+}

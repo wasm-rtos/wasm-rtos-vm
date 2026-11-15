@@ -130,7 +130,17 @@ chip loads into another: a 64-bit build with records and a 32-bit one
 running in place agree. Loading a snapshot of a predecoded module makes the
 records once every frame is on the runtime, so making some cannot drop
 others the snapshot stopped in. The width of references matters only to
-modules that can have them on the value stack.
+modules that can have them on the value stack, where a function reference
+is written as its index, as in globals and tables.
+
+Reading a snapshot, each frame's function is validated again up to the
+frame's position (`wm_code_stack`): that says what the stack holds there,
+so the frames are checked against their code and each other (decision 11),
+and the slots with references are found, before memory, globals or tables
+change. A branch lands on its block's `end`, so a frame may stand on one
+the code before it never reaches; there the stack is the block's and its
+results. A CRC-32 ends the stream; fuzzing builds
+(`FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION`) skip comparing it.
 
 A state snapshot (`wm_snapshot_write_state`) is all of it but the memory's
 bytes, for a program swapped out with its memory left to the pager: the

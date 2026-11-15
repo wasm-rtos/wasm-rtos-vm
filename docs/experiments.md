@@ -40,6 +40,10 @@ the build before the experiment; ±0 is within noise.
 | [Records in 32-bit cells](#records-in-32-bit-cells) | kept, a trade | −6% | −11% | −8%, in the OS ×2.06 |
 | [All records at load, or none](#all-records-at-load-or-none) | replaced by a cache | 12 → 18 programs | | 6 → 9 programs |
 | [A compact loop on the ESP32](#a-compact-loop-on-the-esp32) | kept | queue 89 → 53 ms | | |
+| **Checks** | | | | |
+| [Writing the fuel back at every trap](#writing-the-fuel-back-at-every-trap) | rejected on paper | | | |
+| [Trusting snapshots, with a CRC only](#trusting-snapshots-with-a-crc-only) | rejected | | | |
+| [Checking snapshots against the code](#checking-snapshots-against-the-code) | kept | +2.9 KB flash | | +2.0 KB flash |
 | **Building** | | | | |
 | [ESP32 Arduino's default flags](#esp32-arduinos-default-flags) | flags set | about +20% | | |
 
@@ -339,6 +343,54 @@ pushed the kernel's code out of it.
 | before | 45 ms |
 | larger loop | 89 ms |
 | compact loop | 53 ms |
+
+## Checks
+
+### Writing the fuel back at every trap
+
+**Rejected on paper** · 2026-11-15
+
+**Found.** `fuzz_diff`: after a call that trapped, the fuel left differs
+between the loops. Both keep it in a register and write it back only
+where the program can go on (a stop, a host call); the predecoded loop had
+written it at a miss in the code cache, the loop in place had not.
+
+**Why not.** A store on every trap path of the fast loop, for a number no
+host needs: a trapped program ends. `wm.h` says it is not defined.
+
+### Trusting snapshots, with a CRC only
+
+**Rejected** · 2026-11-15
+
+**Found.** `fuzz_snapshot`: a frame placed between two instructions
+passed the old checks, and the loop in place read past its arrays.
+
+**Why not.** A CRC catches a card that changed a byte, not a snapshot
+made to break the engine, and moving programs between devices needs
+exactly the second. See [decision 11](decisions.md#11-a-snapshot-is-checked-as-a-module-is).
+
+### Checking snapshots against the code
+
+**Kept** · 2026-11-15
+
+**Tried.** Each frame's function validated again up to the frame's
+position: the frames checked against what the code holds there, and the
+stack's references found.
+
+| | Before | After |
+|---|---:|---:|
+| ESP32 flash, loader and snapshots | 19 420 B | 22 371 B |
+| Black Pill flash, the same | 18 000 B | 20 040 B |
+| funcref on the stack in a fresh instance | use after free | right |
+
+**Found on the way.** A branch lands on its block's `end`, which the code
+before it may never reach: the first version refused real snapshots
+stopped there (`fuzz_diff` found it in its corpus). At an `end` the stack
+is the block's and its results, however it is reached.
+
+**Kept too.** Fuzzing builds skip comparing the CRC
+(`FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION`, the libFuzzer and OSS-Fuzz
+custom), or mutated snapshots would never get past it.
 
 ## Building
 

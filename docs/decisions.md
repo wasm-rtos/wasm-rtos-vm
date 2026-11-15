@@ -17,6 +17,8 @@ What was tried and not kept, with its numbers, is in
 | [7](#7-an-instance-and-a-module-keep-only-the-memory-they-use) | An instance and a module keep only what they use | 2026-11-15 | module −26%, −920 bytes a process on ESP32; Uno runs again |
 | [8](#8-the-fast-loop-does-what-other-interpreters-do) | The fast loop does what other interpreters do | 2026-11-15 | CoreMark ESP32 +28.8%, Mac +15.5% |
 | [9](#9-the-instructions-are-described-once) | The instructions are described once | 2026-11-15 | one list for every record; speed unchanged |
+| [10](#10-the-engine-is-fuzzed-and-against-itself) | The engine is fuzzed, and against itself | 2026-11-15 | two loader bugs found and fixed; the two loops agree |
+| [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
 
 ## 1. The interpreter counts fuel itself
 
@@ -376,3 +378,144 @@ The fast loop's machine code is the same on a Mac (clang -O2). On Xtensa
 (GCC 14.2 -O2) `run_fast` is 3 instructions and 3 bytes of padding
 shorter and `op_i32` 6 instructions shorter; the rest moved. CoreMark ran
 the same 41 963 863 173 instructions; the ESP32's heap is the same.
+
+## 10. The engine is fuzzed, and against itself
+
+**Decided and built (2026-11-15).**
+
+### Problem
+
+Every byte a program, a page store or an SD card hands the engine comes
+from outside it: a module to load and run, a snapshot to go on from. The
+spec suite checks what the standard says a module does; nothing checks
+what the engine does with bytes nobody wrote on purpose. And with two
+loops, fused records, the top of the stack in a register and snapshots,
+a wrong answer can come without a crash, where no sanitizer sees it.
+
+### Decision
+
+Four libFuzzer targets in `test/fuzz/`, built with the address sanitizer
+(and the undefined behaviour one where it does not stop predecoding), as
+wasm3 and WAMR are fuzzed in OSS-Fuzz:
+
+- **`fuzz_load`**: any bytes through `wm_module_load`.
+- **`fuzz_run`**: a module loaded, instantiated with every import made for
+  it (functions that return zeros, memories, tables and globals of the
+  types it asks for), its start function and every exported function run
+  with a budget of fuel.
+- **`fuzz_diff`**: the same module run three ways, which must agree on
+  every result, trap, fuel spent, global and byte of memory: predecoded
+  in one slice of fuel; in place; predecoded in small slices with a
+  snapshot written and read back at the first stop. This is the engine
+  fuzzed against itself, as wasmtime fuzzes engines against each other.
+- **`fuzz_snapshot`**: any bytes through `wm_snapshot_read` into a known
+  program stopped in the middle, which then goes on.
+
+No allocation over 16 MiB succeeds while fuzzing, so a module that asks
+for 4 GiB of memory meets a failed allocation, as on a board, and not the
+fuzzer's limit. `fuzz_run` and `fuzz_diff` are also built as for chips
+(fused runs) and with every memory paged in small frames.
+
+Inputs start from the spec suite's modules and the engine's own test
+programs; the fuzzer mutates them from there. `tools/fuzz.sh` runs a
+target locally; CI runs each for a minute on every change. Every bug found
+is fixed with its input kept in `test/fuzz/regress/`, which `check.sh`
+runs every time.
+
+### Why
+
+Mature engines are fuzzed continuously; most of their memory bugs are
+found that way. Two loops that must agree are a free oracle: a difference
+is a bug in one of them, found without knowing the right answer.
+
+### Instead
+
+- **Generating valid modules** (`wasm-smith`): reaches deeper into the
+  interpreter than mutated bytes, but needs Rust in the build. Later, if
+  mutation stops finding anything.
+- **OSS-Fuzz now**: it runs fuzzers around the clock for free, but takes
+  an application and a project people use. Later.
+
+### Found
+
+| Target | What | Now |
+|---|---|---|
+| `fuzz_load` | a type's count of values past the section's end: counted anyway, read past the module | fixed |
+| `fuzz_run` | an export name longer than what was left: compared at its length | fixed |
+| `fuzz_diff` | the fuel left after a trap differs between the loops: neither writes it back there | not defined (`wm.h`); compared only without a trap |
+| `fuzz_snapshot` | a frame between instructions passed, and the loop in place read past its arrays | [decision 11](#11-a-snapshot-is-checked-as-a-module-is) |
+
+### Measured
+
+Each target for 2 to 5 minutes on a Mac, in every build, with nothing
+left: `fuzz_load` 6.2 million inputs, `fuzz_run` 11 million, `fuzz_diff`
+5.1 million (as for chips 2.2, paged 1.6), `fuzz_snapshot` 255 000. The
+corpora reach 97% of the fast loop's lines (`fuzz_run`), 85% of the loop
+in place and 76% of the snapshot code (`fuzz_diff`), 94% of the loader.
+
+## 11. A snapshot is checked as a module is
+
+**Decided and built (2026-11-15).**
+
+### Problem
+
+Fuzzing snapshots (decision 10) found two things. A snapshot's positions
+were checked only roughly: an offset inside its function's body, a side
+table index no larger than the table, frames inside the stack. One that
+passed could stand between two instructions, with a side table entry of
+another place or a stack of the wrong height, and the loop in place then
+read past its arrays. And a reference on the value stack was written as
+the host address it is: read into another instance of the module (a
+program swapped out and back, or moved to another device) it pointed at
+the old instance's function, freed by then.
+
+### Decision
+
+- **Each frame is checked against its function**, where the module is
+  validated (`WM_HAS_VALIDATION`): the function's body is validated again
+  up to the frame's position, which gives what the stack holds there. The
+  position must be the start of a reachable instruction, its side table
+  index the one there, and its stack exactly as high as validation says.
+  A caller's position must follow a call of the function above it (or of
+  a function of the type a `call_indirect` names), and that function's
+  frame start where the call's arguments are. The entry function's frame
+  starts at the call's base. All of it before memory, globals or tables
+  are touched: a snapshot that does not fit changes nothing of them.
+- **References on the stack are written as references**, as globals and
+  tables already are: a function as its index, in every build; the types
+  of the stack's slots come from the same validation, run only for
+  modules that can have references there (C programs cannot).
+- **A CRC-32 of the whole stream** at its end, against a card or a cable
+  that changed a byte; the snapshot format's version goes to 2. A version
+  1 snapshot does not load.
+- Without `WM_HAS_VALIDATION` (the Uno, trusted builds) a snapshot is
+  trusted as the module is: no checks beyond the CRC, no code for them.
+
+### Why
+
+A snapshot is a program's state from outside the engine, as a module is
+its code: an SD card, a page store, another device. The loop runs both
+without checking what validation checked once. The checks are made when
+a snapshot is read, never while the program runs: the loops are the same.
+
+### Instead
+
+- **Trusting snapshots, with a CRC only**, as checkpoint tools for
+  processes do: a corrupted card is caught, a snapshot made to break the
+  engine is not, and moving programs between devices needs exactly that.
+- **Keeping the stack's types in the snapshot**: larger snapshots, and
+  still to be checked against the code.
+
+### Measured
+
+| | Before | After |
+|---|---:|---:|
+| ESP32 flash, loader and snapshots (GCC -O2) | 19 420 B | 22 371 B (+2 951) |
+| Black Pill flash, the same (GCC -O2) | 18 000 B | 20 040 B (+2 040) |
+| Uno test program flash | 35 604 B | 35 512 B (snapshots not linked) |
+| A funcref on the stack, read into a fresh instance | use after free | the fresh instance's function |
+
+`test/refs.c` checks references and that a snapshot changed in a byte, a
+position, a side table index or a frame is refused, in both loops;
+`fuzz_snapshot` ran 5 minutes on the checks with the CRC skipped, and
+`fuzz_diff` writes and reads a snapshot in every run.
