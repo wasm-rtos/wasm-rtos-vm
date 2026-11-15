@@ -739,7 +739,7 @@ static WmResult fill_got(State* s)
             return result;
         if (g->func && found.as.func && table_index(s, found.as.func) >= 0)
             value = (uint32_t)table_index(s, found.as.func);
-        else if (!g->func && found.as.global)
+        else if (!g->func && found.as.global && owner)
         {
             uint32_t relative;
             if (found.as.global->type != WM_I32)

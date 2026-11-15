@@ -156,6 +156,7 @@ static void ring_remove(WmMemory* memory, uint32_t index)
     if (!memory->ring_place || (place = memory->ring_place[index]) == WM_NONE)
         return;
     memory->ring_place[index] = WM_NONE;
+    WM_ASSERT(g_ring && place < g_ring_count);
     /* The last frame in the ring takes its place. */
     if (place != --g_ring_count)
     {
@@ -329,7 +330,8 @@ static uint8_t* new_frame(WmMemory* memory, uint32_t index)
  */
 static int finish_loading(WmMemory* memory, uint32_t index)
 {
-    if (!memory->marks || !(memory->marks[index] & WM_MARK_LOADING))
+    /* Only a memory with a pager has marks and slots. */
+    if (!memory->pager || !(memory->marks[index] & WM_MARK_LOADING))
         return 1;
     memory->marks[index] &= (uint16_t)~WM_MARK_LOADING;
     if (!(g_frame_error = memory->pager->finish(memory->pager->context, memory->slots[index])))
@@ -349,13 +351,13 @@ static void free_frame(WmMemory* memory, uint32_t index)
         return;
     /* No read or write may go on with a frame that is freed. */
     (void)finish_loading(memory, index);
-    if (memory->marks && (memory->marks[index] & WM_MARK_WRITING))
+    if (memory->pager && (memory->marks[index] & WM_MARK_WRITING))
     {
         memory->marks[index] &= (uint16_t)~(WM_MARK_WRITING | WM_MARK_LEAVING);
         (void)memory->pager->finish(memory->pager->context, memory->slots[index]);
     }
     frame = memory->frames[index];
-    if (memory->slots && memory->slots[index] != WM_NONE)
+    if (memory->pager && memory->slots[index] != WM_NONE)
     {
         memory->pager->drop(memory->pager->context, memory->slots[index]);
         memory->slots[index] = WM_NONE;

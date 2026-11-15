@@ -153,6 +153,18 @@ static WM_IMM void zero_slots(uint32_t* dst, uint32_t n)
         *dst++ = 0;
 }
 
+/* A signed load's value from its SIZE low bytes (a 64-bit load needs nothing). */
+static WM_IMM uint64_t sign_extend(uint64_t value, uint8_t size)
+{
+    switch (size)
+    {
+        case 1: return (uint64_t)(int64_t)(int8_t)value;
+        case 2: return (uint64_t)(int64_t)(int16_t)value;
+        case 4: return (uint64_t)(int64_t)(int32_t)value;
+        default: return value;
+    }
+}
+
 /* Little-endian memory of any access size, aligned or not. */
 static WM_IMM uint64_t load_bytes(const uint8_t* p, uint8_t size)
 {
@@ -219,10 +231,7 @@ static uint32_t* paged_access(WmMemory* memory, uint8_t op, uint32_t offset, uin
     for (uint32_t i = 0; i < size; ++i)
         value |= (uint64_t)bytes[i] << (8u * i);
     if (d & 4u)
-    {
-        uint8_t shift = (uint8_t)(64u - 8u * size);
-        value = (uint64_t)((int64_t)(value << shift) >> shift);
-    }
+        value = sign_extend(value, size);
     if (d & 8u)
     {
         put64(sp, value);
@@ -1251,10 +1260,7 @@ f_access:
     }
     value = load_bytes(host, size);
     if (d & 4u)
-    {
-        uint8_t shift = (uint8_t)(64u - 8u * size);
-        value = (uint64_t)((int64_t)(value << shift) >> shift);
-    }
+        value = sign_extend(value, size);
     if (d & 8u)
     {
         put64(sp - 1, value);
@@ -1795,7 +1801,6 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         REFRESH();
         pc = code->body;
         st = side + code->side;
-        callee = func;
         goto enter;
     }
 
@@ -2197,10 +2202,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 }
                 value = load_bytes(mem + address, size);
                 if (d & 4u)
-                {
-                    uint8_t shift = (uint8_t)(64u - 8u * size);
-                    value = (uint64_t)((int64_t)(value << shift) >> shift);
-                }
+                    value = sign_extend(value, size);
                 if (d & 8u)
                 {
                     put64(sp, value);

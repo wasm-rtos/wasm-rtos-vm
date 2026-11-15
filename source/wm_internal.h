@@ -57,6 +57,21 @@ static inline int wm_out_of_bounds(uint32_t start, uint32_t count, wm_size size)
 #endif
 
 /*
+ * What must hold (WM_ASSERT): checked in the test builds (WM_CHECKS=1) and
+ * known to the static analyzer; nothing in the others, so it costs a chip
+ * neither time nor flash.
+ */
+#ifndef WM_CHECKS
+#define WM_CHECKS 0
+#endif
+#if WM_CHECKS || defined(__clang_analyzer__)
+#include <assert.h>
+#define WM_ASSERT(x) assert(x)
+#else
+#define WM_ASSERT(x) ((void)0)
+#endif
+
+/*
  * Traces (WM_HAS_TRACE, off on AVR): after a trap the runtime tells the
  * functions it was in, and functions have the names of the module's name
  * section. It costs no time: the trap's own exit notes where it was.

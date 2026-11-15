@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# Everything that must pass after a change: the spec suite (also with 32-bit
-# sizes and terse errors), the fuel test and the wasm-rtos tests on the engine.
+# Everything that must pass after a change: the static analyzer, the spec
+# suite (also with 32-bit sizes and terse errors), the fuel test and the
+# wasm-rtos tests on the engine.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 SPEC="${SPEC:-$HOME/wasm-rtos/third-party/spec-2.0/json}"
 mkdir -p build
 fail=0
-cc -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec || exit 1
+cc -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -fsanitize=address,undefined -DWM_CHECKS=1 source/*.c tools/wm-spec.c -lm -o build/wm-spec || exit 1
 echo "spec:          $(python3 tools/spec.py build/wm-spec "$SPEC" | tail -1)" ; python3 tools/spec.py build/wm-spec "$SPEC" >/dev/null || fail=1
+out="$(tools/analyze.sh)" && echo "analyzer:      ok" || { echo "analyzer:      FAIL"; echo "$out"; fail=1; }
 # A plain optimized build must predecode, or every program runs in place.
 cc -std=gnu99 -O2 source/*.c test/predecoded.c -lm -o build/predecoded || exit 1
 build/predecoded >/dev/null && echo "predecoded:    ok (-O2)" || { echo "predecoded:    FAIL $(build/predecoded)"; fail=1; }
 # UBSan makes the interpreter too large to predecode, so the runs above go
 # through the code in place; these, with ASan only, run the predecoded loop.
-cc -std=gnu99 -O1 -g -fsanitize=address source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast || exit 1
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast || exit 1
 python3 tools/spec.py build/wm-spec-fast "$SPEC" >/dev/null && echo "spec (predecoded): ok" || { echo "spec (predecoded): FAIL"; fail=1; }
-cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_PAGER=3 source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast-swap || exit 1
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 -DWM_SPEC_PAGER=3 source/*.c tools/wm-spec.c -lm -o build/wm-spec-fast-swap || exit 1
 python3 tools/spec.py build/wm-spec-fast-swap "$SPEC" >/dev/null 2>&1 && echo "spec (predecoded, swapped): ok" || { echo "spec (predecoded, swapped): FAIL"; fail=1; }
 # A code cache of one byte: records only for the functions on the stack, every other call makes them again.
 cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_CODE_LIMIT=1 source/*.c tools/wm-spec.c -lm -o build/wm-spec-code || exit 1
