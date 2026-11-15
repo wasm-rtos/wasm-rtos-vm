@@ -111,6 +111,7 @@ jobs:
           -DWM_HAS_ALLOCATOR=0
           -DWM_FUSE=1 -DWM_NOP_RUNS=1
           -DWM_INLINE_OPS=0
+          -DWM_PROFILE=1
           -DWM_FRAME_SIZE=0 -DWM_PREDECODE=0 -DWM_HAS_TRACE=0 -DWM_TERSE_ERRORS=1
           EOF
           exit $fail
@@ -149,3 +150,44 @@ jobs:
           name: fuzz-finds
           path: build/fuzz/crash-*
           if-no-files-found: ignore
+
+  # Speed and size against the pull request's base, by counts that do not
+  # move with the runner's load (tools/perf.sh, decision 12). A job of its
+  # own: its tools come from Ubuntu's packages. The label slower-ok lets a
+  # change that is slower or larger on purpose through.
+  perf:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install valgrind and avr-gcc
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q valgrind gcc-avr avr-libc
+
+      - name: Install the WASI SDK
+        env:
+          WASI_SDK_VERSION: "34"
+          WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+        run: |
+          archive="wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/$archive"
+          echo "$WASI_SDK_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/wasi-sdk"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/wasi-sdk" --strip-components=1
+
+      - name: Build CoreMark
+        run: WASI_SDK="$RUNNER_TEMP/wasi-sdk" tools/coremark.sh
+
+      - name: Against the base
+        env:
+          PERF_LIMIT: ${{ contains(github.event.pull_request.labels.*.name, 'slower-ok') && '1000' || '2' }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "${{ github.event.pull_request.base.sha }}"
+          tools/perf.sh "$RUNNER_TEMP/base"

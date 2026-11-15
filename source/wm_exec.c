@@ -745,5 +745,72 @@ static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32
 #define TRAP_AFTER_HOST(e) return (e)
 #endif
 
+#if WM_PROFILE
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static const char* const g_record_names[WM_F_COUNT] = {
+#define WM_RECORD(NAME, name) #name,
+#include "wm_ops.def"
+};
+static uint64_t g_profile_records[WM_F_COUNT];
+/* The previous record's kind first, WM_F_COUNT for none yet. */
+static uint64_t g_profile_pairs[WM_F_COUNT + 1u][WM_F_COUNT];
+static uint64_t g_profile_ops[256];
+#if WM_PREDECODE
+/* Kinds by their handler's offset (wm_exec_fast.c.h). */
+static uint8_t g_profile_kinds[65536];
+static uint8_t g_profile_previous = WM_F_COUNT;
+#endif
+
+static void profile_write(void)
+{
+    const char* name = getenv("WM_PROFILE_FILE");
+    char path[512];
+    FILE* f;
+    if (!name)
+        return;
+    snprintf(path, sizeof(path), "%s.%ld", name, (long)getpid());
+    if (!(f = fopen(path, "w")))
+        return;
+    for (uint32_t k = 0; k < WM_F_COUNT; ++k)
+        if (g_profile_records[k])
+            fprintf(f, "record %s %llu\n", g_record_names[k], (unsigned long long)g_profile_records[k]);
+    for (uint32_t a = 0; a < WM_F_COUNT; ++a)
+        for (uint32_t b = 0; b < WM_F_COUNT; ++b)
+            if (g_profile_pairs[a][b])
+                fprintf(f, "pair %s %s %llu\n", g_record_names[a], g_record_names[b],
+                        (unsigned long long)g_profile_pairs[a][b]);
+    for (uint32_t op = 0; op < 256; ++op)
+        if (g_profile_ops[op])
+            fprintf(f, "op 0x%02X %llu\n", op, (unsigned long long)g_profile_ops[op]);
+    fclose(f);
+}
+
+static void profile_start(void)
+{
+    static int started;
+    if (!started)
+    {
+        started = 1;
+        atexit(profile_write);
+    }
+}
+
+#define WM_PROFILE_OP(op) (++g_profile_ops[op])
+#define WM_PROFILE_RECORD(offset)                                                                              \
+    do                                                                                                         \
+    {                                                                                                          \
+        uint8_t kind_ = g_profile_kinds[offset];                                                               \
+        ++g_profile_records[kind_];                                                                            \
+        ++g_profile_pairs[g_profile_previous][kind_];                                                          \
+        g_profile_previous = kind_;                                                                            \
+    } while (0)
+#else
+#define WM_PROFILE_OP(op) ((void)0)
+#define WM_PROFILE_RECORD(offset) ((void)0)
+#endif
+
 #include "wm_exec_fast.c.h"
 #include "wm_exec_inplace.c.h"

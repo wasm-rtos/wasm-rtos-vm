@@ -109,6 +109,11 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
             g_fast_offsets[k] = labels[k] ? (uint16_t)((const char*)labels[k] - lowest) : 0u;
         g_fast_shift = lowest - (const char*)&&f_unreachable;
         g_fast_handlers = g_fast_offsets;
+#if WM_PROFILE
+        for (uint32_t k = 0; k < WM_F_COUNT; ++k)
+            if (labels[k])
+                g_profile_kinds[g_fast_offsets[k]] = (uint8_t)k;
+#endif
         return NULL;
     }
     base = (char*)&&f_unreachable + g_fast_shift;
@@ -140,6 +145,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
             fuel = WM_NONE - 1u;                                                                               \
         }                                                                                                      \
         cell = (ip++)->u32;                                                                                    \
+        WM_PROFILE_RECORD(cell & 0xFFFFu);                                                                     \
         goto *(void*)(base + (cell & 0xFFFFu));                                                          \
     } while (0)
 /*
