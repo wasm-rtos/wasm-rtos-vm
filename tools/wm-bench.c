@@ -23,18 +23,29 @@ static uint32_t now_ms(void)
 static uint32_t g_clock_step;
 static uint32_t g_fake_ms;
 
+/* The clock, as an i32 or an i64 of milliseconds: user is 2 for an i64. */
 static WmResult clock_ms(WmRuntime* rt, void* user, uint32_t* slots, WmMemory* memory)
 {
-    (void)rt, (void)user, (void)memory;
+    (void)rt, (void)memory;
     slots[0] = g_clock_step ? (g_fake_ms += g_clock_step) : now_ms();
+    if (user)
+        slots[1] = 0;
     return NULL;
 }
 
 static WmFunc* g_clock;
 
+/* The clock of the type the program declares for it. */
 static WmResult resolve(void* c, const char* mo, uint32_t ml, const char* n, uint32_t nl, uint8_t k, WmExtern* out)
 {
-    (void)c, (void)mo, (void)ml, (void)n, (void)nl, (void)k;
+    const uint8_t* params;
+    const uint8_t* results;
+    uint32_t param_count, result_count;
+    (void)mo, (void)ml, (void)nl, (void)k;
+    if (!wm_module_import_type((const WmModule*)c, n, &params, &param_count, &results, &result_count) ||
+        param_count || result_count != 1 || (results[0] != WM_I32 && results[0] != WM_I64))
+        return "unlinkable: the clock is clock_ms() -> i32 or i64";
+    g_clock = wm_host_function_new(NULL, 0, results, 1, clock_ms, results[0] == WM_I64 ? (void*)2 : NULL);
     out->kind = WM_EXTERN_FUNC;
     out->as.func = g_clock;
     return NULL;
@@ -42,7 +53,6 @@ static WmResult resolve(void* c, const char* mo, uint32_t ml, const char* n, uin
 
 int main(int argc, char** argv)
 {
-    static const uint8_t i32[] = {WM_I32};
     uint32_t slice = argc > 2 ? (uint32_t)atoi(argv[2]) : 10000u;
     FILE* f = fopen(argc > 1 ? argv[1] : "", "rb");
     static uint8_t bytes[1 << 20];
@@ -68,8 +78,7 @@ int main(int argc, char** argv)
         g_clock_step = (uint32_t)strtoul(getenv("WM_BENCH_CLOCK_STEP"), NULL, 0);
     size = fread(bytes, 1, sizeof bytes, f);
     fclose(f);
-    g_clock = wm_host_function_new(NULL, 0, i32, 1, clock_ms, NULL);
-    if ((r = wm_module_load(&m, bytes, (uint32_t)size)) || (r = wm_instantiate(&in, m, rt, resolve, NULL)) ||
+    if ((r = wm_module_load(&m, bytes, (uint32_t)size)) || (r = wm_instantiate(&in, m, rt, resolve, m)) ||
         (r = wm_instance_export(in, "run", 3, &run)))
     {
         printf("error %s\n", r);
