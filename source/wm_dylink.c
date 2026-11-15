@@ -651,8 +651,8 @@ static int table_index(const State* s, const WmFunc* f)
 /* A function import nothing has bound yet: still this instance's stub. */
 static int unbound(const WmInstance* inst, uint32_t index)
 {
-    return inst->funcs[index] == &inst->own_funcs[index] && !inst->own_funcs[index].code &&
-           !inst->own_funcs[index].host;
+    const WmFunc* f = inst->funcs[index];
+    return f->instance == inst && !f->code && !f->host;
 }
 
 /* Function imports of other modules' code: deps first, so that a re-exported import is linked when copied. */
@@ -672,7 +672,7 @@ static WmResult link_functions(State* s, const uint32_t* order, uint32_t count)
             WmResult result;
             if (imp->kind != WM_EXTERN_FUNC || !unbound(inst, imp->index))
                 continue;
-            stub = &inst->own_funcs[imp->index];
+            stub = inst->funcs[imp->index];
             if ((result = find_symbol(s, WM_EXTERN_FUNC, imp->name, imp->name_length, &found, &owner)))
                 return result;
             if (!found.as.func || found.as.func == stub || !found.as.func->code)

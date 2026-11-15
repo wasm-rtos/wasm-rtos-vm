@@ -719,7 +719,9 @@ struct WmInstance
 {
     const WmModule* module;
     WmFunc** funcs;
+    /* The module's own functions, then a stub for each function import nothing was linked to. */
     WmFunc* own_funcs;
+    uint32_t own_func_count;
     WmGlobal** globals;
     WmGlobal* own_globals;
     WmTable** tables;

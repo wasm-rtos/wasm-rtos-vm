@@ -89,19 +89,28 @@ static uint32_t module_hash(const WmModule* m)
     return hash;
 }
 
-/* A function of this instance by index, or WM_NONE. */
+/* A function object of this instance by its index, or WM_NONE: its own functions come first, then import stubs. */
 static uint32_t func_index(const WmInstance* inst, const WmFunc* f)
 {
-    if (f >= inst->own_funcs && f < inst->own_funcs + inst->module->func_count)
-        return (uint32_t)(f - inst->own_funcs);
+    const WmModule* m = inst->module;
+    uint32_t own = m->func_count - m->func_imports;
+    if (f < inst->own_funcs || f >= inst->own_funcs + inst->own_func_count)
+        return WM_NONE;
+    if (f < inst->own_funcs + own)
+        return m->func_imports + (uint32_t)(f - inst->own_funcs);
+    for (uint32_t i = 0; i < m->func_imports; ++i)
+        if (inst->funcs[i] == f)
+            return i;
     return WM_NONE;
 }
 
 static WmFunc* func_at(const WmInstance* inst, uint32_t index)
 {
-    if (index >= inst->module->func_count || !inst->own_funcs[index].code)
+    WmFunc* f;
+    if (index >= inst->module->func_count)
         return NULL;
-    return &inst->own_funcs[index];
+    f = inst->funcs[index];
+    return func_index(inst, f) == index && f->code ? f : NULL;
 }
 
 static void put_position(Stream* s, const WmInstance* inst, const WmRuntime* rt, const WmFunc* func,

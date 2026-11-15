@@ -1575,6 +1575,18 @@ static WmResult load(Loader* l)
     return r.error;
 }
 
+/* Arrays grow by doubling while the module loads (append); once it is loaded each keeps only its elements. */
+static void trim(void* array, uint32_t count, size_t size)
+{
+    void** at = (void**)array;
+    void* fit;
+    if (!*at || !count)
+        return;
+    fit = wm_realloc(*at, (size_t)count * size);
+    if (fit)
+        *at = fit;
+}
+
 WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size)
 {
     Loader l;
@@ -1596,6 +1608,15 @@ WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size)
         wm_module_free(l.m);
         return result;
     }
+    trim(&l.m->types, l.m->type_count, sizeof(WmType));
+    trim(&l.m->imports, l.m->import_count, sizeof(WmImport));
+    trim(&l.m->func_types, l.m->func_count, sizeof(uint32_t));
+    trim(&l.m->tables, l.m->table_count, sizeof(WmTableType));
+    trim(&l.m->globals, l.m->global_count, sizeof(WmGlobalType));
+    trim(&l.m->exports, l.m->export_count, sizeof(WmExport));
+    trim(&l.m->elems, l.m->elem_count, sizeof(WmElemSegment));
+    trim(&l.m->datas, l.m->data_count, sizeof(WmDataSegment));
+    trim(&l.m->side, l.m->side_count, sizeof(WmSide));
     *out = l.m;
     return NULL;
 }
