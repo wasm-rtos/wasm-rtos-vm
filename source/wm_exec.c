@@ -830,7 +830,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 #endif
     };
     uint32_t entry_depth;
-    const WmCode* code;
+    WmCode* code;
     WmInstance* inst;
     const uint8_t* bytes;
     const WmCell* ip;
@@ -855,7 +855,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     uint32_t drop;
     /* The record's first cell; ip is past it, at the record's other cells. */
     uint32_t cell = 0;
-    const char* base;
+    char* base;
 
     if (!rt)
     {
@@ -877,7 +877,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         g_fast_handlers = g_fast_offsets;
         return NULL;
     }
-    base = (const char*)&&f_unreachable + g_fast_shift;
+    base = (char*)&&f_unreachable + g_fast_shift;
     entry_depth = rt->depth;
     fuel_on = rt->fuel_on && rt->nesting == 1u;
     fuel = fuel_on ? rt->fuel : WM_NONE;
@@ -1613,7 +1613,7 @@ call_spilled:
             stop = wm_code_stop;
             goto suspend;
         }
-        ((WmCode*)code)->used = 1;
+        code->used = 1;
         ip = code->fast;
         FAST_NEXT();
     }

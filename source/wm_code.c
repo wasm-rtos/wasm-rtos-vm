@@ -81,7 +81,7 @@ void wm_code_remove_module(WmModule* m)
 static void pin_func(const WmFunc* f, uint8_t on)
 {
     if (f && f->code)
-        ((WmCode*)f->code)->pinned = on;
+        f->code->pinned = on;
 }
 
 /* Mark (or unmark) every function on a call stack. */
@@ -167,8 +167,8 @@ WmResult wm_code_make(WmModule* m, WmCode* code, const WmSide* side)
 
 WmResult wm_code_load(WmFunc* func)
 {
-    WmModule* m = (WmModule*)func->instance->module;
-    WmCode* code = (WmCode*)func->code;
+    WmModule* m = func->instance->module;
+    WmCode* code = func->code;
     WmResult result;
     if (code->fast)
         return NULL;

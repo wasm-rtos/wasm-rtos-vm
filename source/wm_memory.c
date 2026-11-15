@@ -416,17 +416,17 @@ static uint8_t* wm_memory_frame(WmMemory* memory, uint32_t index, int write)
 }
 
 /* A frame to read from: an untouched one reads as zeros, without being made. NULL: it could not come back. */
-static const uint8_t* frame_to_read(const WmMemory* memory, uint32_t index)
+static const uint8_t* frame_to_read(WmMemory* memory, uint32_t index)
 {
     static const uint8_t zeros[WM_FRAME];
     if (memory->data)
         return memory->data + ((wm_size)index << WM_FRAME_LOG2);
     if (!memory->frames[index])
         return zeros;
-    return wm_memory_frame((WmMemory*)memory, index, 0);
+    return wm_memory_frame(memory, index, 0);
 }
 
-uint8_t wm_memory_byte(const WmMemory* memory, uint32_t address)
+uint8_t wm_memory_byte(WmMemory* memory, uint32_t address)
 {
     const uint8_t* frame = frame_to_read(memory, address >> WM_FRAME_LOG2);
     return frame ? frame[address & (WM_FRAME - 1u)] : 0;
@@ -1360,7 +1360,7 @@ WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, 
     return NULL;
 }
 
-WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uint32_t length)
+WmResult wm_memory_read(WmMemory* memory, uint32_t address, void* out, uint32_t length)
 {
     uint8_t* to = (uint8_t*)out;
     if (!in_bounds(memory, address, length))

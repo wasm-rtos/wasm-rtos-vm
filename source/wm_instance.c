@@ -305,7 +305,7 @@ static WmResult make_own_funcs(WmInstance* inst)
 }
 
 /* An instance of m; with kept a memory from an earlier instance, which it takes as its own. */
-static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
+static WmResult instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, WmResolver resolver,
                             void* context, WmMemory* kept)
 {
     WmInstance* inst;
@@ -389,7 +389,7 @@ static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runt
 
 #if WM_PREDECODE
     /* Once the instance has its memory, which matters more than speed. */
-    wm_module_predecode((WmModule*)m);
+    wm_module_predecode(m);
 #endif
     /* From here on effects can be seen through shared imports, so a failure keeps the instance. */
     *out = inst;
@@ -401,13 +401,13 @@ static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runt
     return NULL;
 }
 
-WmResult wm_instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
+WmResult wm_instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, WmResolver resolver,
                         void* context)
 {
     return instantiate(out, m, runtime, resolver, context, NULL);
 }
 
-WmResult wm_instantiate_with_memory(WmInstance** out, const WmModule* m, WmMemory* memory, WmResolver resolver,
+WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* m, WmMemory* memory, WmResolver resolver,
                                     void* context)
 {
     WmResult result = instantiate(out, m, NULL, resolver, context, memory);

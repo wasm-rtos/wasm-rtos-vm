@@ -86,7 +86,7 @@ jobs:
         run: |
           fail=0
           while read -r flags; do
-            if cc -std=gnu99 -O2 -Wall -Wextra -Wno-unused-parameter -Werror $flags \
+            if cc -std=gnu99 -O2 -Wall -Wextra -Wno-unused-parameter -Wcast-qual -Werror $flags \
                  source/*.c tools/wm-spec.c -lm -o /tmp/wm-config; then
               echo "ok   [$flags]"
             else

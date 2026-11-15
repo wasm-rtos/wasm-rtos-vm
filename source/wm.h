@@ -123,7 +123,7 @@ int wm_module_import_type(const WmModule* module, const char* name, const uint8_
  * With runtime NULL the start function waits for wm_instance_start, so
  * imports can be linked first.
  */
-WmResult wm_instantiate(WmInstance** out, const WmModule* module, WmRuntime* runtime, WmResolver resolver,
+WmResult wm_instantiate(WmInstance** out, WmModule* module, WmRuntime* runtime, WmResolver resolver,
                         void* context);
 WmResult wm_instance_start(WmInstance* instance, WmRuntime* runtime);
 void wm_instance_free(WmInstance* instance);
@@ -136,7 +136,7 @@ void wm_instance_free(WmInstance* instance);
  * memory stays the caller's.
  */
 WmMemory* wm_instance_detach_memory(WmInstance* instance);
-WmResult wm_instantiate_with_memory(WmInstance** out, const WmModule* module, WmMemory* memory, WmResolver resolver,
+WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* module, WmMemory* memory, WmResolver resolver,
                                     void* context);
 WmResult wm_instance_export(const WmInstance* instance, const char* name, uint32_t length, WmExtern* out);
 WmMemory* wm_instance_memory(const WmInstance* instance);
@@ -175,7 +175,7 @@ uint32_t wm_memory_grow(WmMemory* memory, uint32_t delta);
  */
 uint8_t* wm_memory_data(const WmMemory* memory, uint32_t* size);
 /* Copy bytes out of a memory or into it, one block or paged: a trap error when they are out of bounds. */
-WmResult wm_memory_read(const WmMemory* memory, uint32_t address, void* out, uint32_t length);
+WmResult wm_memory_read(WmMemory* memory, uint32_t address, void* out, uint32_t length);
 WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, uint32_t length);
 /*
  * The length bytes at address as one piece of host memory, for a host that
