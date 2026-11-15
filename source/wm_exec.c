@@ -800,7 +800,9 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         [WM_F_LOCAL_TEE1] = &&f_local_tee1, [WM_F_LOCAL_GET] = &&f_local_get, [WM_F_LOCAL_SET] = &&f_local_set,
         [WM_F_LOCAL_TEE] = &&f_local_tee, [WM_F_GLOBAL_GET] = &&f_global_get, [WM_F_GLOBAL_SET] = &&f_global_set,
         [WM_F_TABLE_GET] = &&f_table_get, [WM_F_TABLE_SET] = &&f_table_set, [WM_F_ACCESS] = &&f_access,
-        [WM_F_I32_LOAD] = &&f_i32_load, [WM_F_I32_STORE] = &&f_i32_store, [WM_F_MEMORY_SIZE] = &&f_memory_size,
+        [WM_F_I32_LOAD] = &&f_i32_load, [WM_F_I32_LOAD8_S] = &&f_i32_load8_s, [WM_F_I32_LOAD8_U] = &&f_i32_load8_u,
+        [WM_F_I32_LOAD16_S] = &&f_i32_load16_s, [WM_F_I32_LOAD16_U] = &&f_i32_load16_u, [WM_F_I32_STORE] = &&f_i32_store,
+        [WM_F_I32_STORE8] = &&f_i32_store8, [WM_F_I32_STORE16] = &&f_i32_store16, [WM_F_MEMORY_SIZE] = &&f_memory_size,
         [WM_F_MEMORY_GROW] = &&f_memory_grow, [WM_F_CONST16] = &&f_const16, [WM_F_CONST32] = &&f_const32,
         [WM_F_CONST64] = &&f_const64,
         [WM_F_NUMERIC] = &&f_numeric, [WM_F_EQZ] = &&f_eqz, [WM_F_EQ] = &&f_eq, [WM_F_NE] = &&f_ne,
@@ -1254,28 +1256,42 @@ f_access:
         tos = (uint32_t)value;
     FAST_NEXT();
 }
-f_i32_load:
-{
-    uint32_t offset = IMM;
-    uint32_t address = tos;
-    uint32_t value;
-    uint8_t* host;
-    FAST_ADDR(address, offset, 4u, host, 0x28u, ip - 1, 1u, e_->tag);
-    __builtin_memcpy(&value, host, 4);
-    tos = value;
-    FAST_NEXT();
-}
-f_i32_store:
-{
-    uint32_t offset = IMM;
-    uint32_t address = sp[-2];
-    uint8_t* host;
-    FAST_ADDR(address, offset, 4u, host, 0x36u, ip - 1, 1u, e_->wtag);
-    __builtin_memcpy(host, &tos, 4);
-    sp -= 2;
-    FAST_RELOAD();
-    FAST_NEXT();
-}
+    /*
+     * The common i32 accesses, the offset as operand. A load's address is
+     * tos and its value goes there; a store's value is tos, its address
+     * below. Memory is little-endian, as WebAssembly's.
+     */
+#define FAST_LOAD(NAME, OP, TYPE)                                                                              \
+    NAME:                                                                                                      \
+    {                                                                                                          \
+        TYPE value;                                                                                            \
+        uint8_t* host;                                                                                         \
+        FAST_ADDR(tos, IMM, sizeof(TYPE), host, OP, ip - 1, 1u, e_->tag);                                      \
+        __builtin_memcpy(&value, host, sizeof(TYPE));                                                          \
+        tos = (uint32_t)(int32_t)value;                                                                        \
+        FAST_NEXT();                                                                                           \
+    }
+#define FAST_STORE(NAME, OP, TYPE)                                                                             \
+    NAME:                                                                                                      \
+    {                                                                                                          \
+        TYPE value = (TYPE)tos;                                                                                \
+        uint8_t* host;                                                                                         \
+        FAST_ADDR(sp[-2], IMM, sizeof(TYPE), host, OP, ip - 1, 1u, e_->wtag);                                  \
+        __builtin_memcpy(host, &value, sizeof(TYPE));                                                          \
+        sp -= 2;                                                                                               \
+        FAST_RELOAD();                                                                                         \
+        FAST_NEXT();                                                                                           \
+    }
+    FAST_LOAD(f_i32_load, 0x28u, uint32_t)
+    FAST_LOAD(f_i32_load8_s, 0x2Cu, int8_t)
+    FAST_LOAD(f_i32_load8_u, 0x2Du, uint8_t)
+    FAST_LOAD(f_i32_load16_s, 0x2Eu, int16_t)
+    FAST_LOAD(f_i32_load16_u, 0x2Fu, uint16_t)
+    FAST_STORE(f_i32_store, 0x36u, uint32_t)
+    FAST_STORE(f_i32_store8, 0x3Au, uint8_t)
+    FAST_STORE(f_i32_store16, 0x3Bu, uint16_t)
+#undef FAST_STORE
+#undef FAST_LOAD
 f_memory_size:
     FAST_PUSH(inst->memory->pages);
     FAST_NEXT();
