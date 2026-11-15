@@ -175,3 +175,47 @@ as frames in a row.
   pieces of 16 KiB at most, too small for a value stack of 16 KiB. A board
   sets its budget by what else it runs (16 to 20 frames there), or gives
   the pool external RAM (`OsPageStore.ram` in wasm-rtos).
+
+## 7. An instance and a module keep only the memory they use
+
+**Decided and built (2026-11-15).**
+
+### Problem
+
+An instance made a function object (`WmFunc`, 40 bytes on ESP32) for every
+function of its module, imports included, though a linked import calls its
+target and never uses its own. The tour program has 23 imports: 920 bytes
+of every process went to nothing. The module's arrays (types, imports,
+exports, the side table and the rest) grow by doubling while it loads and
+stayed that size, a quarter empty on average. On the Uno the test program
+could no longer make its instance: 482 bytes were free, and the C library
+keeps 128 of them for the stack.
+
+### Decision
+
+- **Function objects for what needs one.** `own_funcs` holds the module's
+  own functions, then a stub for each function import nothing was linked
+  to (it traps until `dylink.0` links it). A linked import takes no room.
+  Code that turned a function into its index by its place in `own_funcs`
+  (snapshots, `dylink.0`) goes through `funcs` instead.
+- **Arrays trimmed once loaded.** Loading still grows them by doubling,
+  which keeps moves and holes few while the count is unknown; when the
+  module is loaded each is reallocated to its elements.
+
+### Why
+
+Both are memory every program pays and nothing uses, on every platform.
+The heap after loading is what the device has for programs.
+
+### Instead
+
+Counting each section first and allocating exactly: imports of four kinds
+share one section, so it needs a second pass over it, and the side table's
+size is known only after validation. Trimming once is one place for all.
+
+### Measured
+
+Module after loading (64-bit build): the tour program 42 568 → 31 376
+bytes, the Arduino sketch test 44 636 → 36 220, CoreMark 10 376 → 6 248.
+The Uno test program runs again: 305 bytes free after its instance,
+`fib(10)` in 31 ms as before; flash +570 bytes.

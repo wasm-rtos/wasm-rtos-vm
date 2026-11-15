@@ -142,7 +142,7 @@ static WmResult link_imports(WmInstance* inst, WmResolver resolver, void* contex
             {
                 WmFunc* f = ext.as.func;
                 const WmType* t = &m->types[m->func_types[imp->index]];
-                /* Unresolved: a stub of this instance that traps until linked. */
+                /* Unresolved: it gets a stub of this instance that traps until linked. */
                 if (!f)
                     break;
                 if (!wm_func_has_type(f, t))
@@ -268,6 +268,40 @@ static WmResult initialize(WmInstance* inst, int kept_memory)
     return NULL;
 }
 
+/*
+ * The functions of this instance: the module's own, then a stub for each
+ * function import still unlinked, which traps until something links it
+ * (dylink.0). A linked import uses its target and takes no room here.
+ */
+static WmResult make_own_funcs(WmInstance* inst)
+{
+    const WmModule* m = inst->module;
+    uint32_t own = m->func_count - m->func_imports;
+    uint32_t count = own;
+    for (uint32_t i = 0; i < m->func_imports; ++i)
+        count += inst->funcs[i] == NULL;
+    inst->own_funcs = (WmFunc*)wm_calloc(count + 1u, sizeof(WmFunc));
+    if (!inst->own_funcs)
+        return E_MEMORY;
+    inst->own_func_count = count;
+    count = 0;
+    for (uint32_t k = 0; k < m->func_count; ++k)
+    {
+        /* The own functions are k = 0 .. own - 1, the imports after them. */
+        uint32_t i = k < own ? m->func_imports + k : k - own;
+        WmFunc* f;
+        if (inst->funcs[i])
+            continue;
+        f = &inst->own_funcs[count++];
+        f->instance = inst;
+        set_signature(f, &m->types[m->func_types[i]]);
+        if (i >= m->func_imports)
+            f->code = &m->codes[i - m->func_imports];
+        inst->funcs[i] = f;
+    }
+    return NULL;
+}
+
 /* An instance of m; with kept a memory from an earlier instance, which it takes as its own. */
 static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runtime, WmResolver resolver,
                             void* context, WmMemory* kept)
@@ -283,31 +317,20 @@ static WmResult instantiate(WmInstance** out, const WmModule* m, WmRuntime* runt
         return E_MEMORY;
     inst->module = m;
     inst->funcs = (WmFunc**)wm_calloc(m->func_count + 1u, sizeof(WmFunc*));
-    inst->own_funcs = (WmFunc*)wm_calloc(m->func_count + 1u, sizeof(WmFunc));
     inst->globals = (WmGlobal**)wm_calloc(m->global_count + 1u, sizeof(WmGlobal*));
     inst->own_globals = (WmGlobal*)wm_calloc(own_globals + 1u, sizeof(WmGlobal));
     inst->tables = (WmTable**)wm_calloc(m->table_count + 1u, sizeof(WmTable*));
     inst->own_tables = (WmTable*)wm_calloc(own_tables + 1u, sizeof(WmTable));
     inst->elem_dropped = (uint8_t*)wm_calloc(m->elem_count + 1u, 1);
     inst->data_dropped = (uint8_t*)wm_calloc(m->data_count + 1u, 1);
-    if (!inst->funcs || !inst->own_funcs || !inst->globals || !inst->own_globals || !inst->tables ||
+    if (!inst->funcs || !inst->globals || !inst->own_globals || !inst->tables ||
         !inst->own_tables || !inst->elem_dropped || !inst->data_dropped)
     {
         wm_instance_free(inst);
         return E_MEMORY;
     }
 
-    /* Every function gets an object of this instance; imports use theirs only until linked. */
-    for (uint32_t i = 0; i < m->func_count; ++i)
-    {
-        WmFunc* f = &inst->own_funcs[i];
-        f->instance = inst;
-        set_signature(f, &m->types[m->func_types[i]]);
-        if (i >= m->func_imports)
-            f->code = &m->codes[i - m->func_imports];
-        inst->funcs[i] = f;
-    }
-    if ((result = link_imports(inst, resolver, context)))
+    if ((result = link_imports(inst, resolver, context)) || (result = make_own_funcs(inst)))
     {
         wm_instance_free(inst);
         return result;

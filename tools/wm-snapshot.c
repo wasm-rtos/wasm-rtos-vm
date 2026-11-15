@@ -155,7 +155,7 @@ static void link_stubs(WmInstance* inst, WmFunc** stubs)
     (void)stubs;
     for (uint32_t i = 0; i < inst->module->func_imports; ++i)
     {
-        WmFunc* f = &inst->own_funcs[i];
+        WmFunc* f = inst->funcs[i];
         f->host = stub;
         f->user = f->result_count ? (void*)1 : NULL;
     }
