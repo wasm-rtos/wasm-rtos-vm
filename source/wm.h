@@ -121,7 +121,10 @@ int wm_module_import_type(const WmModule* module, const char* name, const uint8_
 /*
  * Instantiate: imports, segments, then the start function, run on runtime.
  * With runtime NULL the start function waits for wm_instance_start, so
- * imports can be linked first.
+ * imports can be linked first. A failure once the imports are linked (a
+ * segment out of bounds, a trap in the start function) leaves *out set:
+ * the instance's functions may already be in imported tables, so it stays
+ * as long as those do, and is then freed with wm_instance_free.
  */
 WmResult wm_instantiate(WmInstance** out, WmModule* module, WmRuntime* runtime, WmResolver resolver,
                         void* context);

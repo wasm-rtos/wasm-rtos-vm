@@ -189,6 +189,10 @@ static inline WmResult fuzz_instantiate(const uint8_t* data, size_t size, int in
     }
     if ((r = wm_instantiate(out, imports->module, NULL, fuzz_resolve, imports)))
     {
+        /* A segment out of bounds leaves the instance (wm.h): its imports are ours, freed with it. */
+        if (*out)
+            wm_instance_free(*out);
+        *out = NULL;
         fuzz_imports_free(imports);
         wm_module_free(imports->module);
         imports->module = NULL;
