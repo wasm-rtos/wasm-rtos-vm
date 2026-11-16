@@ -629,3 +629,67 @@ clever as it needs and still be learned from the plain one.
 - **One loop only, as fast as it can be**: nothing simple to read or to
   compare against.
 - **A generator of the loops**: see decision 9.
+
+## 14. Operands in records, as overlays on them
+
+**Decided (2026-11-16).**
+
+### Problem
+
+After decision 13's fused records, 39% of what CoreMark runs (as for
+chips) is moving values: `local.get`, `local.set`, `local.tee`,
+constants. A register machine names its operands in its instructions
+(wasm3: slots and `_r0`) and does no moving of its own; but its
+instructions are several WebAssembly instructions each, which breaks
+fuel by the instruction and stopping at any of them (decisions 1 and 2).
+
+### Decision
+
+- **Forms of an i32 instruction**: its operands from the records before
+  it, a local or a constant, and its result into a `local.set` after it.
+  A form is a fused record: the handler of the first record of the
+  sequence, the records after it kept as they are. So fuel stays exact
+  (the form runs only with fuel for the whole sequence, else only the
+  first instruction), and between dispatches the stack is what the stack
+  machine has: snapshots, their format and moving them between builds
+  and chips are as before.
+- **Named by the sequence**: `get_get_add` is `local.get a; local.get b;
+  i32.add`, `get_const_add_set` adds a constant into a local. The forms
+  fused so far (`get_get_add`, `get_const_add`, `const_add`, `add_set`,
+  …) are forms of this one rule.
+- **Shapes**, each one macro: `GET_GET`, `GET_CONST`, `CONST`, `GET`
+  (operand B a local), `SET` (the result into a local), and the
+  three-address `GET_GET_SET` and `GET_CONST_SET`. A form is a line of
+  `wm_ops.def` naming itself, its shape and its instruction; its handler
+  and its pattern for the predecoder come from that line. The predecoder
+  gives a record the longest form that matches.
+- **Only forms the profile asks for**: a form that runs too seldom costs
+  room in the loop, and on ESP32 the loop runs from flash through its
+  cache. Forms with traps (division, memory) are not made; a memory
+  access in a form would leave it to the plain records when not in one
+  block, as `get_load` does.
+
+### Why
+
+The gain of a register machine is in doing the moving inside the
+operation. As overlays, the forms get that gain and keep everything the
+engine is for: exact fuel, stops anywhere, portable snapshots, the loop in
+place as the reference, Uno untouched.
+
+### Instead
+
+- **Register code of its own, with maps back to the stack machine**
+  (as V8's and HotSpot's interpreters deoptimize): fuel and snapshots
+  kept, but two copies of every function's code in RAM and maps for every
+  stop.
+- **Register code as wasm3 has it**: no way back to an instruction;
+  breaks decisions 1 and 2.
+- **Every shape of every instruction** (wasm3 has some 500 operations):
+  the loop too large for a cache of flash.
+
+### Costs
+
+A value cannot stay in a processor register from one form to the next
+(only `tos` does); a deep expression is fused in parts, as forms are
+straight sequences from their first record. Each form is room in the
+loop.

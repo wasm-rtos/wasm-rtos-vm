@@ -43,7 +43,7 @@ OPS = {
 def fused_kinds():
     """The fused records' names, from source/wm_ops.def."""
     text = open(os.path.join(HERE, "..", "source", "wm_ops.def")).read()
-    return set(re.findall(r"^WM_RECORD_FUSED(?:_BRANCH)?\(\w+, (\w+)\)", text, re.M))
+    return set(re.findall(r"^WM_RECORD_(?:FUSED\w*|FORM)\(\w+, (\w+)", text, re.M))
 
 
 def table(title, counts, total, top, name=str):
