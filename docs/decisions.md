@@ -21,6 +21,7 @@ What was tried and not kept, with its numbers, is in
 | [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
 | [12](#12-what-runs-is-counted-and-speed-is-guarded-by-counts) | What runs is counted, and speed is guarded by counts | 2026-11-16 | a profile of records and pairs; CI fails a change 2% slower |
 | [13](#13-hot-code-is-written-for-people-and-checked-by-its-machine-code) | Hot code is written for people, and checked by its machine code | 2026-11-16 | rules for the loops; fast loops as variants |
+| [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them | 2026-11-16 | 18 forms; ESP32 CoreMark +3.7%, exact fuel and snapshots kept |
 
 ## 1. The interpreter counts fuel itself
 
@@ -632,7 +633,7 @@ clever as it needs and still be learned from the plain one.
 
 ## 14. Operands in records, as overlays on them
 
-**Decided (2026-11-16).**
+**Decided and built (2026-11-16).**
 
 ### Problem
 
@@ -693,3 +694,29 @@ A value cannot stay in a processor register from one form to the next
 (only `tos` does); a deep expression is fused in parts, as forms are
 straight sequences from their first record. Each form is room in the
 loop.
+
+### Measured
+
+Of 63 forms tried (nine instructions in seven shapes), 18 run 0.1% or
+more of the records of CoreMark or of the kernel's test programs; the
+others were left out.
+
+| | Before (decision 13) | After |
+|---|---:|---:|
+| CoreMark records run, as for chips | 19.5 million | 18.1 million (−7.2%), 55% fused |
+| CoreMark records run, plain | 23.4 million | 22.0 million (−6.0%) |
+| ESP32 CoreMark, -O2 | 15.86 | 16.44 (+3.7%) |
+| ESP32 CoreMark, -Os | 13.88 | 14.09 (+1.5%) |
+| Mac CoreMark, as for chips | 3091 | 3154 (+2.0%) |
+| Mac CoreMark, plain | 2985 | 2968 (within noise) |
+
+The risk, a loop too large for ESP32's cache of flash, measured with the
+kernel's board checks against main (before decision 13): 19 of 19 pass,
+CoreMark in the system 14.75 → 15.86, 500 round trips through a queue
+97 → 56 ms, `fib(24)` 231 → 233 ms, 19 programs at once in both. The
+queue's gain is more than the forms explain (it runs little of them):
+the layout of code in flash, most likely.
+
+Found on the way: a record that writes a local without touching the stack
+must write `tos` too when the local is the slot under an empty stack
+(`FAST_SET_LOCAL`); the spec suite hung on a loop that showed it.
