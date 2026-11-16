@@ -758,6 +758,8 @@ static uint64_t g_profile_records[WM_F_COUNT];
 /* The previous record's kind first, WM_F_COUNT for none yet. */
 static uint64_t g_profile_pairs[WM_F_COUNT + 1u][WM_F_COUNT];
 static uint64_t g_profile_ops[256];
+/* Opcodes run by the fast loop's shared numeric and access records. */
+static uint64_t g_profile_shared[256];
 #if WM_PREDECODE
 /* Kinds by their handler's offset (wm_exec_fast.c.h). */
 static uint8_t g_profile_kinds[65536];
@@ -785,6 +787,9 @@ static void profile_write(void)
     for (uint32_t op = 0; op < 256; ++op)
         if (g_profile_ops[op])
             fprintf(f, "op 0x%02X %llu\n", op, (unsigned long long)g_profile_ops[op]);
+    for (uint32_t op = 0; op < 256; ++op)
+        if (g_profile_shared[op])
+            fprintf(f, "shared 0x%02X %llu\n", op, (unsigned long long)g_profile_shared[op]);
     fclose(f);
 }
 
@@ -799,6 +804,7 @@ static void profile_start(void)
 }
 
 #define WM_PROFILE_OP(op) (++g_profile_ops[op])
+#define WM_PROFILE_SHARED(op) (++g_profile_shared[op])
 #define WM_PROFILE_RECORD(offset)                                                                              \
     do                                                                                                         \
     {                                                                                                          \
@@ -809,6 +815,7 @@ static void profile_start(void)
     } while (0)
 #else
 #define WM_PROFILE_OP(op) ((void)0)
+#define WM_PROFILE_SHARED(op) ((void)0)
 #define WM_PROFILE_RECORD(offset) ((void)0)
 #endif
 

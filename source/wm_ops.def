@@ -11,7 +11,13 @@
  * WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)     an i32 instruction: EXPR of a and,
  *                                         for two operands, b
  * WM_RECORD_FUSED(NAME, name)                    the first record of a common run
+ * WM_RECORD_FUSED_CONST(OP, op)                  i32.const, then the i32
+ *                                                instruction OP of the list on it
+ * WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) local.get, then the access
+ *                                                LOAD of the list from it
  * WM_RECORD_FUSED_BRANCH(NAME, name)             one ending in a branch (WM_FUSE)
+ *
+ * Which runs are fused follows what runs most (tools/profile.py).
  */
 #ifndef WM_RECORD
 #define WM_RECORD(NAME, name)
@@ -24,6 +30,12 @@
 #endif
 #ifndef WM_RECORD_FUSED
 #define WM_RECORD_FUSED(NAME, name) WM_RECORD(NAME, name)
+#endif
+#ifndef WM_RECORD_FUSED_CONST
+#define WM_RECORD_FUSED_CONST(OP, op) WM_RECORD_FUSED(CONST_##OP, const_##op)
+#endif
+#ifndef WM_RECORD_FUSED_GET_LOAD
+#define WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) WM_RECORD_FUSED(NAME, name)
 #endif
 #ifndef WM_RECORD_FUSED_BRANCH
 #define WM_RECORD_FUSED_BRANCH(NAME, name) WM_RECORD_FUSED(NAME, name)
@@ -104,11 +116,18 @@ WM_RECORD_FUSED(GET_GET_ADD, get_get_add)
 WM_RECORD_FUSED(GET_CONST, get_const)
 WM_RECORD_FUSED(GET_GET, get_get)
 WM_RECORD_FUSED(SET_GET, set_get)
-WM_RECORD_FUSED(CONST_ADD, const_add)
-WM_RECORD_FUSED(CONST_AND, const_and)
-WM_RECORD_FUSED(CONST_SUB, const_sub)
+WM_RECORD_FUSED(TEE_CONST, tee_const)
+WM_RECORD_FUSED_CONST(ADD, add)
+WM_RECORD_FUSED_CONST(AND, and)
+WM_RECORD_FUSED_CONST(SUB, sub)
+WM_RECORD_FUSED_CONST(SHL, shl)
+WM_RECORD_FUSED_CONST(SHR_U, shr_u)
 WM_RECORD_FUSED(ADD_SET, add_set)
-WM_RECORD_FUSED(GET_LOAD, get_load)
+WM_RECORD_FUSED_GET_LOAD(GET_LOAD, get_load, I32_LOAD, uint32_t)
+WM_RECORD_FUSED_GET_LOAD(GET_LOAD8_S, get_load8_s, I32_LOAD8_S, int8_t)
+WM_RECORD_FUSED_GET_LOAD(GET_LOAD8_U, get_load8_u, I32_LOAD8_U, uint8_t)
+WM_RECORD_FUSED_GET_LOAD(GET_LOAD16_S, get_load16_s, I32_LOAD16_S, int16_t)
+WM_RECORD_FUSED_GET_LOAD(GET_LOAD16_U, get_load16_u, I32_LOAD16_U, uint16_t)
 WM_RECORD_FUSED_BRANCH(TEE_BR_IF, tee_br_if)
 WM_RECORD_FUSED_BRANCH(SET_GET_BR_IF, set_get_br_if)
 WM_RECORD_FUSED_BRANCH(EQ_BR_IF, eq_br_if)
@@ -124,4 +143,6 @@ WM_RECORD_FUSED_BRANCH(EQZ_IF, eqz_if)
 #undef WM_RECORD_ACCESS
 #undef WM_RECORD_I32
 #undef WM_RECORD_FUSED
+#undef WM_RECORD_FUSED_CONST
+#undef WM_RECORD_FUSED_GET_LOAD
 #undef WM_RECORD_FUSED_BRANCH

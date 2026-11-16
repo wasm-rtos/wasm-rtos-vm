@@ -20,6 +20,7 @@ What was tried and not kept, with its numbers, is in
 | [10](#10-the-engine-is-fuzzed-and-against-itself) | The engine is fuzzed, and against itself | 2026-11-15 | two loader bugs found and fixed; the two loops agree |
 | [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
 | [12](#12-what-runs-is-counted-and-speed-is-guarded-by-counts) | What runs is counted, and speed is guarded by counts | 2026-11-16 | a profile of records and pairs; CI fails a change 2% slower |
+| [13](#13-hot-code-is-written-for-people-and-checked-by-its-machine-code) | Hot code is written for people, and checked by its machine code | 2026-11-16 | rules for the loops; fast loops as variants |
 
 ## 1. The interpreter counts fuel itself
 
@@ -578,3 +579,57 @@ plain records: `local_tee1 → const16` 2.4%, `const16 → shr_u` 1.8%,
 `i32_store → local_get1` 1.5%. Without the flag the machine code of every
 build is the same as before (Mac clang, Xtensa and ARM GCC).
 
+
+## 13. Hot code is written for people, and checked by its machine code
+
+**Decided (2026-11-16).**
+
+### Problem
+
+The loops are where speed lives, so they collect tricks: the top of the
+stack in a register, fused runs, handlers generated from lists. Each one
+was measured, and each one makes the code harder to read. More are coming:
+fused records chosen by profile, and perhaps a loop with operands inside
+its records, a register machine, as wasm3 is (its operations name their
+operands as slots, the top of the stack in `_r0`). Without rules the loops
+would end up fast and unreadable.
+
+### Decision
+
+- **The loop in place is the reference**: its cases, one per
+  instruction, are the code a person reads to learn what an instruction
+  does. Its short paths (built where labels are values) and the fast
+  loops may be clever; `fuzz_diff` keeps them doing what the cases do.
+- **A change for readability keeps the machine code**: the same bytes on a
+  Mac and on Xtensa (the hash of the objects), or else it is measured on
+  the boards like any change of speed.
+- **Functions where the compiler makes the same code**: `static inline`
+  with `always_inline` is checked by types and reads as C; macros only
+  where C has nothing else (labels, `goto`, handlers made from a list),
+  and one level of them.
+- **Every trick has a name and one place**: a macro or function, a comment
+  saying why, the decision it comes from.
+- **One description, many uses** (decision 9): what can be made from
+  `wm_ops.def` is made from it, fused records included.
+- **Files by what they are**: predecoder, loop, fused runs, profile; each
+  begins with the format of what it works on.
+- **Fast loops as variants**: a loop with operands in its records would
+  be a fast loop of its own, in files of its own, chosen by a macro
+  (`WM_FAST_LOOP`), as WAMR chooses its classic or fast interpreter; both
+  share `wm_ops.def`, the operations, memory access and the code cache,
+  and `fuzz_diff` compares all of them. Whether to build one is a decision
+  of its own: it must still count fuel by instruction and stop at any of
+  them (decisions 1 and 2), and its records then hold several.
+
+### Why
+
+Speed and clarity part ways only where nothing checks the clever code
+against the plain one. With a reference loop, a fuzzer that compares them
+and a hash that proves a rewrite changed nothing, the fast code can be as
+clever as it needs and still be learned from the plain one.
+
+### Instead
+
+- **One loop only, as fast as it can be**: nothing simple to read or to
+  compare against.
+- **A generator of the loops**: see decision 9.

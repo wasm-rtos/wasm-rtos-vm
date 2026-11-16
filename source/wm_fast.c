@@ -308,11 +308,11 @@ static void fuse(const uint16_t* handlers, WmCell* record, uint8_t first, uint8_
         {WM_F_NE, WM_F_IF, WM_F_COUNT, WM_F_NE_IF},
         {WM_F_EQZ, WM_F_IF, WM_F_COUNT, WM_F_EQZ_IF},
 #endif
-        {WM_F_CONST16, WM_F_ADD, WM_F_COUNT, WM_F_CONST_ADD},
-        {WM_F_CONST16, WM_F_AND, WM_F_COUNT, WM_F_CONST_AND},
-        {WM_F_CONST16, WM_F_SUB, WM_F_COUNT, WM_F_CONST_SUB},
+        {WM_F_LOCAL_TEE1, WM_F_CONST16, WM_F_COUNT, WM_F_TEE_CONST},
+#define WM_RECORD_FUSED_CONST(OP, op) {WM_F_CONST16, WM_F_##OP, WM_F_COUNT, WM_F_CONST_##OP},
+#define WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) {WM_F_LOCAL_GET1, WM_F_##LOAD, WM_F_COUNT, WM_F_##NAME},
+#include "wm_ops.def"
         {WM_F_ADD, WM_F_LOCAL_SET1, WM_F_COUNT, WM_F_ADD_SET},
-        {WM_F_LOCAL_GET1, WM_F_I32_LOAD, WM_F_COUNT, WM_F_GET_LOAD},
     };
     if (!record)
         return;

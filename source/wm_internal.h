@@ -181,7 +181,8 @@ void wm_free(void* ptr);
 /*
  * WM_PROFILE: count what runs, for tools/profile.py (a desktop build, off
  * by default): every record by kind and every pair of records in a row in
- * the fast loop, every opcode in the loop in place. At exit the counts go
+ * the fast loop (and the opcodes its shared numeric and access records
+ * run), every opcode in the loop in place. At exit the counts go
  * to the file WM_PROFILE_FILE names, the process id after it, if it is set.
  */
 #ifndef WM_PROFILE

@@ -6,7 +6,8 @@
 
 Several files (processes, programs) add up. Prints the records the fast
 loop ran by kind, the pairs of plain records that ran in a row (candidates
-for fusing), and the opcodes the loop in place ran.
+for fusing), the opcodes that went through its shared numeric and access
+records, and the opcodes the loop in place ran.
 """
 import os
 import re
@@ -60,7 +61,7 @@ def main():
     if "--top" in sys.argv:
         top = int(sys.argv[sys.argv.index("--top") + 1])
         args = [a for a in args if a != str(top)]
-    records, pairs, ops = Counter(), Counter(), Counter()
+    records, pairs, ops, shared = Counter(), Counter(), Counter(), Counter()
     for path in args:
         for line in open(path):
             parts = line.split()
@@ -70,6 +71,8 @@ def main():
                 pairs[(parts[1], parts[2])] += int(parts[3])
             elif parts[0] == "op":
                 ops[int(parts[1], 16)] += int(parts[2])
+            elif parts[0] == "shared":
+                shared[int(parts[1], 16)] += int(parts[2])
     fused = fused_kinds()
     dispatches = sum(records.values())
     in_fused = sum(n for k, n in records.items() if k in fused)
@@ -77,6 +80,8 @@ def main():
     table("Records by kind", records, dispatches, top)
     plain = Counter({p: n for p, n in pairs.items() if p[0] not in fused and p[1] not in fused})
     table("Plain records in a row (candidates for fusing)", plain, dispatches, top, lambda p: f"{p[0]} -> {p[1]}")
+    table("Through the shared numeric and access records", shared, dispatches, top,
+          lambda op: OPS.get(op, f"0x{op:02X}"))
     table("Opcodes in place", ops, sum(ops.values()), top, lambda op: OPS.get(op, f"0x{op:02X}"))
 
 

@@ -22,6 +22,8 @@ the build before the experiment; ±0 is within noise.
 | [Aligning handlers](#aligning-handlers) | rejected | crash / +323 B | | |
 | [The two loops as separate .c files](#the-two-loops-as-separate-c-files) | rejected | 2 copies | no inlining | |
 | [Both loops generated from one description](#both-loops-generated-from-one-description) | rejected on paper | | | |
+| [Fused records chosen by the profile](#fused-records-chosen-by-the-profile) | kept | +2.9% | +4.3% | +3.8% |
+| [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
 | [`misc` taking the stack pointer's address](#misc-taking-the-stack-pointers-address) | fixed | +6.6% | ±0 | |
@@ -140,6 +142,40 @@ instruction's body, as CPython does.
 **Why.** A tool in the build and generated files to keep, for about eighty
 records and two stacks of different shape. A list included with the
 preprocessor does the part worth doing ([decision 9](decisions.md#9-the-instructions-are-described-once)).
+
+### Fused records chosen by the profile
+
+**Kept** · 2026-11-16
+
+**Tried.** The commonest pairs of plain records in CoreMark's profile
+(`tools/profile.py`) as fused records made from `wm_ops.def`: a
+`local.tee` and the `i32.const` after it; `local.get` and an 8- or 16-bit
+load; `i32.const` and `shl` or `shr_u`. With a constant, `or`, `xor` and
+`shr_s` ran too seldom (0.09% at most) and were left out.
+
+| | Before | After |
+|---|---:|---:|
+| CoreMark records run, as for chips | 20.8 million | 19.5 million (−6.0%) |
+| CoreMark records run, plain | 24.7 million | 23.4 million (−5.1%) |
+| ESP32 CoreMark, -O2 | 15.41 | 15.86 (+2.9%) |
+| ESP32 CoreMark, -Os | 13.77 | 13.88 (+0.8%) |
+| Black Pill CoreMark | 7.13 | 7.40 (+3.8%) |
+| Mac CoreMark, plain | 2811 | 2932 (+4.3%) |
+| Mac CoreMark, as for chips | 2946 | 3019 (+2.5%) |
+| ESP32 free heap | 73 556 B | 73 540 B |
+
+**Seen.** In the kernel's test programs the new records barely run
+(`tee_const` 0.03% of records, the narrow loads 0.05%): the gain is code
+like CoreMark's, with `char` and `short`. Where they do not run they cost
+only their place in the loop.
+
+### Records of their own for 64-bit instructions
+
+**Rejected by the profile** · 2026-11-16
+
+**Found.** The fast loop's shared numeric and access records run 0.01%
+of CoreMark's records (`i64.store` most of it): records of their own for
+64-bit instructions would gain nothing there.
 
 ## Stack and registers
 
