@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fused records chosen by the profile**, made from `wm_ops.def`:
+  `local.tee` with a constant, `local.get` with an 8- or 16-bit load, a
+  constant with `shl` or `shr_u`. CoreMark +2.9% on ESP32, +3.8% on a
+  Black Pill, +4.3% on a Mac. The loop in place's short i32 paths come
+  from the list too.
+- **Rules for the hot code** (decision 13), and checkpoints for testing:
+  `tools/quick.sh` after an edit, `check.sh` after a step, the boards
+  and a pull request after a piece of work.
 - **What runs, counted** (decision 12): a `WM_PROFILE` build counts every
   record and pair of records the fast loop runs and every opcode run in
   place; `tools/profile.py` prints them. CI compares the speed (machine
