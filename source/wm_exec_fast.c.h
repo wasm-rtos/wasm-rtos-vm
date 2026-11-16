@@ -54,6 +54,21 @@ static WmResult page_fault(WmRuntime* rt)
 }
 #endif
 
+#if WM_HAS_MMU
+/*
+ * The host address of size bytes at ea of a paged memory, through the TLB:
+ * NULL when the frame is not there, the access crosses it or is not
+ * aligned to its size, or (for a store) the frame is not dirty yet.
+ */
+static WM_ALWAYS_INLINE uint8_t* tlb_host(const WmTlb* tlb, uint32_t ea, uint32_t size, uint32_t space, int store)
+{
+    const WmTlbEntry* e = &tlb->entries[(ea >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];
+    uint32_t want = (ea & (WM_FRAME_MASK | (size - 1u))) | (space << 3);
+    return (store ? e->wtag : e->tag) == want ? (uint8_t*)((uintptr_t)ea + e->addend) : NULL;
+}
+
+#endif
+
 WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 {
     static const void* const labels[WM_F_COUNT] = {
@@ -152,43 +167,56 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         WM_PROFILE_RECORD(cell & 0xFFFFu);                                                                     \
         goto *(void*)(base + (cell & 0xFFFFu));                                                          \
     } while (0)
-/*
- * HOST = the place of SIZE bytes at ADDRESS + OFFSET. A memory in one block
- * directly, as ever; a paged one through the TLB. A TLB miss is an
- * exception: back to the record at REC (CELLS long, an access OP), the
- * loop stops as for fuel and wm_execute makes the frame; the record then
- * runs again. Nothing is called from inside the loop for it: on Xtensa a
- * call anywhere in the handlers costs the whole loop registers.
- */
 #if WM_HAS_MMU
-#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, TAG)                                            \
+/*
+ * HOST = the place of SIZE bytes at ADDRESS + OFFSET, or NULL: a memory in
+ * one block directly, as ever, a paged one through the TLB. NULL is out of
+ * bounds, or not in the TLB: a record that can do without, as a fused one,
+ * leaves the work to the records it stands for.
+ */
+#define FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE)                                                      \
     do                                                                                                         \
     {                                                                                                          \
+        uint32_t ea_ = (ADDRESS) + (OFFSET);                                                                   \
+        HOST = NULL;                                                                                           \
         if (__builtin_expect(!((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size)), \
                              1))                                                                               \
-            HOST = mem + (ADDRESS) + (OFFSET);                                                                 \
-        else if (!mem && inst->memory)                                                                         \
+            HOST = mem + ea_;                                                                                  \
+        else if (!mem && inst->memory && ea_ >= (OFFSET))                                                      \
+            HOST = tlb_host(rt->tlb, ea_, (SIZE), inst->memory->space, (STORE));                               \
+    } while (0)
+/*
+ * The same for a record that must make the access. Not in the TLB is an
+ * exception: back to the record at REC (CELLS long, an access OP), the loop
+ * stops as for fuel and wm_execute makes the frame; the record then runs
+ * again. Nothing is called from inside the loop for it: on Xtensa a call
+ * anywhere in the handlers costs the whole loop registers.
+ */
+#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, STORE)                                          \
+    do                                                                                                         \
+    {                                                                                                          \
+        FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE);                                                     \
+        if (__builtin_expect(!HOST, 0))                                                                        \
         {                                                                                                      \
-            uint32_t ea_ = (ADDRESS) + (OFFSET);                                                               \
-            const WmTlbEntry* e_ = &rt->tlb->entries[(ea_ >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];          \
-            if ((TAG) == ((ea_ & (WM_FRAME_MASK | ((SIZE) - 1u))) | ((uint32_t)inst->memory->space << 3)) &&     \
-                ea_ >= (OFFSET))                                                                               \
-                HOST = e_->frame + (ea_ & (WM_FRAME - 1u));                                                    \
-            else                                                                                               \
-            {                                                                                                  \
-                rt->fault_address = (ADDRESS);                                                                 \
-                rt->fault_offset = (OFFSET);                                                                   \
-                rt->fault_op = (OP);                                                                           \
-                rt->fault_cells = (CELLS);                                                                     \
-                ip = (REC);                                                                                    \
-                goto mmu_fault;                                                                                \
-            }                                                                                                  \
+            if (mem || !inst->memory)                                                                          \
+                TRAP(T_OOB_MEMORY);                                                                            \
+            rt->fault_address = (ADDRESS);                                                                     \
+            rt->fault_offset = (OFFSET);                                                                       \
+            rt->fault_op = (OP);                                                                               \
+            rt->fault_cells = (CELLS);                                                                         \
+            ip = (REC);                                                                                        \
+            goto mmu_fault;                                                                                    \
         }                                                                                                      \
-        else                                                                                                   \
-            TRAP(T_OOB_MEMORY);                                                                                \
     } while (0)
 #else
-#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, TAG)                                            \
+#define FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE)                                                      \
+    do                                                                                                         \
+    {                                                                                                          \
+        HOST = (OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size)                 \
+                   ? NULL                                                                                      \
+                   : mem + (ADDRESS) + (OFFSET);                                                               \
+    } while (0)
+#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, STORE)                                          \
     do                                                                                                         \
     {                                                                                                          \
         if ((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size))                   \
@@ -507,7 +535,7 @@ f_access:
         FAST_SPILL();
     /* Loads by the TLB's load tag, stores by its store tag. */
     FAST_ADDR(above ? sp[-1 - (int32_t)above] : tos, offset, size, host, op, ip - 1, 2u,
-              (above ? e_->wtag : e_->tag));
+              above != 0);
     ++ip;
     if (op >= 0x36u)
     {
@@ -540,7 +568,7 @@ f_access:
     {                                                                                                          \
         TYPE value;                                                                                            \
         uint8_t* host;                                                                                         \
-        FAST_ADDR(tos, IMM, sizeof(TYPE), host, OP, ip - 1, 1u, e_->tag);                                      \
+        FAST_ADDR(tos, IMM, sizeof(TYPE), host, OP, ip - 1, 1u, 0);                                            \
         __builtin_memcpy(&value, host, sizeof(TYPE));                                                          \
         tos = (uint32_t)(int32_t)value;                                                                        \
         FAST_NEXT();                                                                                           \
@@ -550,7 +578,7 @@ f_access:
     {                                                                                                          \
         TYPE value = (TYPE)tos;                                                                                \
         uint8_t* host;                                                                                         \
-        FAST_ADDR(sp[-2], IMM, sizeof(TYPE), host, OP, ip - 1, 1u, e_->wtag);                                  \
+        FAST_ADDR(sp[-2], IMM, sizeof(TYPE), host, OP, ip - 1, 1u, 1);                                         \
         __builtin_memcpy(host, &value, sizeof(TYPE));                                                          \
         FAST_POP(2);                                                                                           \
         FAST_NEXT();                                                                                           \
@@ -750,24 +778,22 @@ f_tee_const:
     FAST_NEXT();
 /*
  * local.get, then a load of wm_ops.def from the local's value, the load's
- * offset its record's operand. Not in one block (a trap, or paged memory):
- * the two records run on their own.
+ * offset its record's operand. Out of bounds or not in the TLB: the two
+ * records run on their own.
  */
 #define FAST_GET_LOAD(name, TYPE)                                                                              \
     f_##name:                                                                                                  \
     {                                                                                                          \
-        uint32_t address;                                                                                      \
-        uint32_t offset;                                                                                       \
+        uint8_t* host;                                                                                         \
         TYPE value;                                                                                            \
         FUSED(1u, f_local_get1);                                                                               \
-        address = fp[IMM];                                                                                     \
-        offset = IMM_OF(ip[0]);                                                                                \
-        if (offset > mem_size || wm_out_of_bounds(address, offset + sizeof(TYPE), mem_size))                   \
+        FAST_ADDR_TRY(fp[IMM], IMM_OF(ip[0]), sizeof(TYPE), host, 0);                                          \
+        if (!host)                                                                                             \
         {                                                                                                      \
             fuel += 1u;                                                                                        \
             goto f_local_get1;                                                                                 \
         }                                                                                                      \
-        __builtin_memcpy(&value, mem + address + offset, sizeof(TYPE));                                        \
+        __builtin_memcpy(&value, host, sizeof(TYPE));                                                          \
         FAST_PUSH((uint32_t)(int32_t)value);                                                                   \
         ++ip;                                                                                                  \
         FAST_NEXT();                                                                                           \
