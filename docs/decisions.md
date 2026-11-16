@@ -15,7 +15,7 @@ What was tried and not kept, with its numbers, is in
 | [5](#5-no-tuning-of-code-layout-per-processor) | No tuning of code layout per processor | 2026-11-12 | — (a rule for changes) |
 | [6](#6-frames-come-from-a-pool-a-block-is-frames-in-a-row) | Frames come from a pool | 2026-11-12 | an ESP32 memory gets its block back (912 ms) |
 | [7](#7-an-instance-and-a-module-keep-only-the-memory-they-use) | An instance and a module keep only what they use | 2026-11-15 | module −26%, −920 bytes a process on ESP32; Uno runs again |
-| [8](#8-the-fast-loop-does-what-other-interpreters-do) | The fast loop does what other interpreters do | 2026-11-15 | CoreMark ESP32 +28.8%, Mac +15.5% |
+| [8](#8-the-fast-loop-does-what-other-interpreters-do) | The fast loop does what other interpreters do | 2026-11-15 | CoreMark ESP32 +28.8%, Black Pill +21.7%, Mac +15.5% |
 | [9](#9-the-instructions-are-described-once) | The instructions are described once | 2026-11-15 | one list for every record; speed unchanged |
 | [10](#10-the-engine-is-fuzzed-and-against-itself) | The engine is fuzzed, and against itself | 2026-11-15 | two loader bugs found and fixed; the two loops agree |
 | [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
@@ -318,6 +318,10 @@ loop before the decision:
 So the register cost the ESP32 0.5%: on Xtensa the compiler keeps `tos`
 in memory, too few registers. The rest of the decision gave the ESP32
 the remaining +21%.
+
+The Black Pill (STM32F411, Cortex-M4, GCC -O2), measured after decisions
+8 to 12 together, against the engine before them: CoreMark 5.86 → 7.13
+(+21.7%), where wasm3 makes 6.20 on it.
 
 ## 9. The instructions are described once
 
