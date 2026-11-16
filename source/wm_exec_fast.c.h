@@ -672,21 +672,22 @@ f_set_get:
     tos = fp[IMM_OF(ip[0])];
     ++ip;
     FAST_NEXT();
-f_const_add:
-    FUSED(1u, f_const16);
-    tos = tos + (uint32_t)SIMM;
+f_tee_const:
+    FUSED(1u, f_local_tee1);
+    fp[IMM] = tos;
+    FAST_PUSH((uint32_t)SIMM_OF(ip[0]));
     ++ip;
     FAST_NEXT();
-f_const_and:
-    FUSED(1u, f_const16);
-    tos = tos & (uint32_t)SIMM;
-    ++ip;
+/* i32.const, then an i32 instruction of wm_ops.def: the constant is its second operand. */
+#define FAST_CONST_I32(op)                                                                                     \
+    f_const_##op:                                                                                              \
+    FUSED(1u, f_const16);                                                                                      \
+    tos = i32_##op(tos, (uint32_t)SIMM);                                                                       \
+    ++ip;                                                                                                      \
     FAST_NEXT();
-f_const_sub:
-    FUSED(1u, f_const16);
-    tos = tos - (uint32_t)SIMM;
-    ++ip;
-    FAST_NEXT();
+#define WM_RECORD_FUSED_CONST(OP, op) FAST_CONST_I32(op)
+#include "wm_ops.def"
+#undef FAST_CONST_I32
 f_add_set:
     /* i32.add has no operand: ip is at the local.set record. */
     FUSED(1u, f_add);
@@ -695,25 +696,33 @@ f_add_set:
     ++ip;
     FAST_RELOAD();
     FAST_NEXT();
-f_get_load:
-{
-    uint32_t address;
-    uint32_t offset;
-    uint32_t value;
-    FUSED(1u, f_local_get1);
-    address = fp[IMM];
-    offset = IMM_OF(ip[0]);
-    if (offset > mem_size || wm_out_of_bounds(address, offset + 4u, mem_size))
-    {
-        /* Not in one block (a trap, or paged memory): the two records run on their own. */
-        fuel += 1u;
-        goto f_local_get1;
+/*
+ * local.get, then a load of wm_ops.def from the local's value, the load's
+ * offset its record's operand. Not in one block (a trap, or paged memory):
+ * the two records run on their own.
+ */
+#define FAST_GET_LOAD(name, TYPE)                                                                              \
+    f_##name:                                                                                                  \
+    {                                                                                                          \
+        uint32_t address;                                                                                      \
+        uint32_t offset;                                                                                       \
+        TYPE value;                                                                                            \
+        FUSED(1u, f_local_get1);                                                                               \
+        address = fp[IMM];                                                                                     \
+        offset = IMM_OF(ip[0]);                                                                                \
+        if (offset > mem_size || wm_out_of_bounds(address, offset + sizeof(TYPE), mem_size))                   \
+        {                                                                                                      \
+            fuel += 1u;                                                                                        \
+            goto f_local_get1;                                                                                 \
+        }                                                                                                      \
+        __builtin_memcpy(&value, mem + address + offset, sizeof(TYPE));                                        \
+        FAST_PUSH((uint32_t)(int32_t)value);                                                                   \
+        ++ip;                                                                                                  \
+        FAST_NEXT();                                                                                           \
     }
-    __builtin_memcpy(&value, mem + address + offset, 4);
-    FAST_PUSH(value);
-    ++ip;
-    FAST_NEXT();
-}
+#define WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) FAST_GET_LOAD(name, TYPE)
+#include "wm_ops.def"
+#undef FAST_GET_LOAD
 #if WM_FUSE
     /* Branches fused with what decides them: the br_if record, at ip + AT, is its head and its slots. */
 #define FAST_TAKE_BR_IF(AT)                                                                                    \

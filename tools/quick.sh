@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The check after an edit, in under a minute (docs/testing.md,
 # Checkpoints): the engine built with warnings as errors, the spec suite
-# predecoded and in place, the inputs the fuzzers once found bugs with.
+# predecoded, as for chips and in place, the inputs the fuzzers once found bugs with.
 # With SHA=1 also whether the loops' machine code differs from the last
 # commit's (Mac -O2, and Xtensa -O2 where its GCC is installed): a change
 # for readability must not change it (decision 13).
@@ -13,7 +13,7 @@ mkdir -p build
 fail=0
 cc -std=gnu99 -O2 -Wall -Wextra -Wno-unused-parameter -Wcast-qual -Werror source/*.c tools/wm-spec.c -lm \
     -o build/quick-werror && echo "build:         ok" || { echo "build:         FAIL"; exit 1; }
-for mode in "" -DWM_PREDECODE=0; do
+for mode in "" "-DWM_FUSE=1 -DWM_NOP_RUNS=1" -DWM_PREDECODE=0; do
     cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 $mode source/*.c tools/wm-spec.c -lm -o build/quick-spec || exit 1
     python3 tools/spec.py build/quick-spec "$SPEC" > /dev/null && echo "spec:          ok ${mode:-(predecoded)}" ||
         { echo "spec:          FAIL $mode"; fail=1; }
