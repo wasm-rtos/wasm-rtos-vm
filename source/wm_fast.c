@@ -278,51 +278,67 @@ static int branch_to(const WmSide* e, const WmTarget* targets, uint32_t count, u
 }
 
 /*
- * The first record of a common run gets a fused handler. The others keep
+ * The first record of a common run gets a fused handler: the one of the
+ * longest pattern that matches the kinds from it on. The others keep
  * theirs, so a branch, a stop or a snapshot that lands inside the run finds
- * ordinary records. Kinds after the end of the function are WM_F_COUNT.
+ * ordinary records. Kinds after the end of the function, and the end of a
+ * pattern shorter than four, are WM_F_COUNT.
  */
-static void fuse(const uint16_t* handlers, WmCell* record, uint8_t first, uint8_t second, uint8_t third)
+#define FUSE_WINDOW 4u
+
+#define RUN2(A, B) {A, B, WM_F_COUNT, WM_F_COUNT}
+#define RUN3(A, B, C) {A, B, C, WM_F_COUNT}
+/* The patterns of each shape of form (decision 14). */
+#define PATTERN_CONST(OP) RUN2(WM_F_CONST16, WM_F_##OP)
+#define PATTERN_GET(OP) RUN2(WM_F_LOCAL_GET1, WM_F_##OP)
+#define PATTERN_SET(OP) RUN2(WM_F_##OP, WM_F_LOCAL_SET1)
+#define PATTERN_GET_GET(OP) RUN3(WM_F_LOCAL_GET1, WM_F_LOCAL_GET1, WM_F_##OP)
+#define PATTERN_GET_CONST(OP) RUN3(WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_##OP)
+#define PATTERN_GET_GET_SET(OP) {WM_F_LOCAL_GET1, WM_F_LOCAL_GET1, WM_F_##OP, WM_F_LOCAL_SET1}
+#define PATTERN_GET_CONST_SET(OP) {WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_##OP, WM_F_LOCAL_SET1}
+
+static void fuse(const uint16_t* handlers, WmCell* record, const uint8_t* kinds)
 {
     static const struct
     {
-        uint8_t first, second, third, fused;
+        uint8_t kinds[FUSE_WINDOW];
+        uint8_t fused;
     } runs[] = {
-        {WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_ADD, WM_F_GET_CONST_ADD},
-        {WM_F_LOCAL_GET1, WM_F_LOCAL_GET1, WM_F_ADD, WM_F_GET_GET_ADD},
-        {WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_COUNT, WM_F_GET_CONST},
-        {WM_F_LOCAL_GET1, WM_F_LOCAL_GET1, WM_F_COUNT, WM_F_GET_GET},
+#define WM_RECORD_FORM(NAME, name, SHAPE, OP, op) {PATTERN_##SHAPE(OP), WM_F_##NAME},
+#define WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) {RUN2(WM_F_LOCAL_GET1, WM_F_##LOAD), WM_F_##NAME},
+#include "wm_ops.def"
+        {RUN2(WM_F_LOCAL_GET1, WM_F_CONST16), WM_F_GET_CONST},
+        {RUN2(WM_F_LOCAL_GET1, WM_F_LOCAL_GET1), WM_F_GET_GET},
+        {RUN2(WM_F_LOCAL_SET1, WM_F_LOCAL_GET1), WM_F_SET_GET},
+        {RUN2(WM_F_LOCAL_TEE1, WM_F_CONST16), WM_F_TEE_CONST},
 #if WM_FUSE
         /* Branches with what decides them: a loss where branch prediction is good. */
-        {WM_F_LOCAL_SET1, WM_F_LOCAL_GET1, WM_F_BR_IF, WM_F_SET_GET_BR_IF},
+        {RUN3(WM_F_LOCAL_SET1, WM_F_LOCAL_GET1, WM_F_BR_IF), WM_F_SET_GET_BR_IF},
+        {RUN2(WM_F_LOCAL_TEE1, WM_F_BR_IF), WM_F_TEE_BR_IF},
+        {RUN2(WM_F_EQ, WM_F_BR_IF), WM_F_EQ_BR_IF},
+        {RUN2(WM_F_NE, WM_F_BR_IF), WM_F_NE_BR_IF},
+        {RUN2(WM_F_EQZ, WM_F_BR_IF), WM_F_EQZ_BR_IF},
+        {RUN2(WM_F_LE_U, WM_F_BR_IF), WM_F_LE_U_BR_IF},
+        {RUN2(WM_F_LT_U, WM_F_BR_IF), WM_F_LT_U_BR_IF},
+        {RUN2(WM_F_EQ, WM_F_IF), WM_F_EQ_IF},
+        {RUN2(WM_F_NE, WM_F_IF), WM_F_NE_IF},
+        {RUN2(WM_F_EQZ, WM_F_IF), WM_F_EQZ_IF},
 #endif
-        {WM_F_LOCAL_SET1, WM_F_LOCAL_GET1, WM_F_COUNT, WM_F_SET_GET},
-#if WM_FUSE
-        {WM_F_LOCAL_TEE1, WM_F_BR_IF, WM_F_COUNT, WM_F_TEE_BR_IF},
-        {WM_F_EQ, WM_F_BR_IF, WM_F_COUNT, WM_F_EQ_BR_IF},
-        {WM_F_NE, WM_F_BR_IF, WM_F_COUNT, WM_F_NE_BR_IF},
-        {WM_F_EQZ, WM_F_BR_IF, WM_F_COUNT, WM_F_EQZ_BR_IF},
-        {WM_F_LE_U, WM_F_BR_IF, WM_F_COUNT, WM_F_LE_U_BR_IF},
-        {WM_F_LT_U, WM_F_BR_IF, WM_F_COUNT, WM_F_LT_U_BR_IF},
-        {WM_F_EQ, WM_F_IF, WM_F_COUNT, WM_F_EQ_IF},
-        {WM_F_NE, WM_F_IF, WM_F_COUNT, WM_F_NE_IF},
-        {WM_F_EQZ, WM_F_IF, WM_F_COUNT, WM_F_EQZ_IF},
-#endif
-        {WM_F_LOCAL_TEE1, WM_F_CONST16, WM_F_COUNT, WM_F_TEE_CONST},
-#define WM_RECORD_FUSED_CONST(OP, op) {WM_F_CONST16, WM_F_##OP, WM_F_COUNT, WM_F_CONST_##OP},
-#define WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) {WM_F_LOCAL_GET1, WM_F_##LOAD, WM_F_COUNT, WM_F_##NAME},
-#include "wm_ops.def"
-        {WM_F_ADD, WM_F_LOCAL_SET1, WM_F_COUNT, WM_F_ADD_SET},
     };
+    uint32_t best = 0;
+    size_t found = 0;
     if (!record)
         return;
     for (size_t r = 0; r < sizeof(runs) / sizeof(runs[0]); ++r)
-        if (runs[r].first == first && runs[r].second == second &&
-            (runs[r].third == WM_F_COUNT || runs[r].third == third))
-        {
-            record->u32 = (record->u32 & 0xFFFF0000u) | handlers[runs[r].fused];
-            return;
-        }
+    {
+        uint32_t length = 0;
+        while (length < FUSE_WINDOW && runs[r].kinds[length] != WM_F_COUNT && runs[r].kinds[length] == kinds[length])
+            ++length;
+        if ((length == FUSE_WINDOW || runs[r].kinds[length] == WM_F_COUNT) && length > best)
+            best = length, found = r;
+    }
+    if (best)
+        record->u32 = (record->u32 & 0xFFFF0000u) | handlers[runs[found].fused];
 }
 
 #define E_DOES_NOT_FIT WM_ERR_UNSUPPORTED("unsupported: an operand too large for predecoding")
@@ -339,9 +355,9 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
     const WmSide* st = side;
     WmTarget* targets = NULL;
     WmCell* out;
-    /* The last two records, waiting for the kinds after them to see whether they start a run. */
-    WmCell* last[2] = {NULL, NULL};
-    uint8_t last_kind[2] = {WM_F_COUNT, WM_F_COUNT};
+    /* The last records, waiting for the kinds after them to see whether they start a run. */
+    WmCell* last[FUSE_WINDOW - 1u] = {NULL, NULL, NULL};
+    uint8_t kinds[FUSE_WINDOW] = {WM_F_COUNT, WM_F_COUNT, WM_F_COUNT, WM_F_COUNT};
     if (!handlers)
         return WM_ERR_UNSUPPORTED("unsupported: handlers too far apart for predecoding");
     for (p = code->body; p <= code->end;)
@@ -586,14 +602,24 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
             return E_DOES_NOT_FIT;
         }
         out[0] = head(handlers, kind, operand);
-        fuse(handlers, last[0], last_kind[0], last_kind[1], kind);
-        last[0] = last[1], last_kind[0] = last_kind[1];
-        last[1] = out, last_kind[1] = kind;
+        kinds[FUSE_WINDOW - 1u] = kind;
+        fuse(handlers, last[0], kinds);
+        for (uint32_t i = 0; i + 1u < FUSE_WINDOW; ++i)
+            kinds[i] = kinds[i + 1u];
+        last[0] = last[1], last[1] = last[2], last[2] = out;
         st += sides;
         out += n;
         p = step(code, start, &n, &sides);
     }
-    fuse(handlers, last[0], last_kind[0], last_kind[1], WM_F_COUNT);
+    /* The last records, with nothing after them. */
+    for (uint32_t i = 0; i + 1u < FUSE_WINDOW; ++i)
+    {
+        kinds[FUSE_WINDOW - 1u] = WM_F_COUNT;
+        fuse(handlers, last[0], kinds);
+        for (uint32_t k = 0; k + 1u < FUSE_WINDOW; ++k)
+            kinds[k] = kinds[k + 1u];
+        last[0] = last[1], last[1] = last[2], last[2] = NULL;
+    }
     wm_free(targets);
     return NULL;
 }

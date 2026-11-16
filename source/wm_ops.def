@@ -11,8 +11,10 @@
  * WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)     an i32 instruction: EXPR of a and,
  *                                         for two operands, b
  * WM_RECORD_FUSED(NAME, name)                    the first record of a common run
- * WM_RECORD_FUSED_CONST(OP, op)                  i32.const, then the i32
- *                                                instruction OP of the list on it
+ * WM_RECORD_FORM(NAME, name, SHAPE, OP, op)      the i32 instruction OP of the
+ *                                                list with its operands in the
+ *                                                records before it or its result
+ *                                                in a local.set after (decision 14)
  * WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) local.get, then the access
  *                                                LOAD of the list from it
  * WM_RECORD_FUSED_BRANCH(NAME, name)             one ending in a branch (WM_FUSE)
@@ -31,8 +33,8 @@
 #ifndef WM_RECORD_FUSED
 #define WM_RECORD_FUSED(NAME, name) WM_RECORD(NAME, name)
 #endif
-#ifndef WM_RECORD_FUSED_CONST
-#define WM_RECORD_FUSED_CONST(OP, op) WM_RECORD_FUSED(CONST_##OP, const_##op)
+#ifndef WM_RECORD_FORM
+#define WM_RECORD_FORM(NAME, name, SHAPE, OP, op) WM_RECORD_FUSED(NAME, name)
 #endif
 #ifndef WM_RECORD_FUSED_GET_LOAD
 #define WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) WM_RECORD_FUSED(NAME, name)
@@ -111,18 +113,34 @@ WM_RECORD(MISC, misc)
  * Fused: the first record of a common run gets one of these; it runs the
  * whole run when there is fuel for it, else only its own instruction.
  */
-WM_RECORD_FUSED(GET_CONST_ADD, get_const_add)
-WM_RECORD_FUSED(GET_GET_ADD, get_get_add)
+/*
+ * Forms (decision 14), named by the sequence they run: get_get_add is
+ * local.get, local.get, i32.add; add_set is i32.add, local.set. Only those
+ * that run 0.1% or more of the records of CoreMark or of the kernel's test
+ * programs (tools/profile.py): the rest would only take room in the loop.
+ */
+WM_RECORD_FORM(GET_GET_ADD, get_get_add, GET_GET, ADD, add)
+WM_RECORD_FORM(GET_CONST_ADD, get_const_add, GET_CONST, ADD, add)
+WM_RECORD_FORM(CONST_ADD, const_add, CONST, ADD, add)
+WM_RECORD_FORM(GET_ADD, get_add, GET, ADD, add)
+WM_RECORD_FORM(ADD_SET, add_set, SET, ADD, add)
+WM_RECORD_FORM(GET_GET_ADD_SET, get_get_add_set, GET_GET_SET, ADD, add)
+WM_RECORD_FORM(GET_CONST_ADD_SET, get_const_add_set, GET_CONST_SET, ADD, add)
+WM_RECORD_FORM(CONST_SUB, const_sub, CONST, SUB, sub)
+WM_RECORD_FORM(CONST_MUL, const_mul, CONST, MUL, mul)
+WM_RECORD_FORM(GET_CONST_AND, get_const_and, GET_CONST, AND, and)
+WM_RECORD_FORM(CONST_AND, const_and, CONST, AND, and)
+WM_RECORD_FORM(GET_CONST_OR, get_const_or, GET_CONST, OR, or)
+WM_RECORD_FORM(GET_CONST_XOR, get_const_xor, GET_CONST, XOR, xor)
+WM_RECORD_FORM(GET_XOR, get_xor, GET, XOR, xor)
+WM_RECORD_FORM(GET_CONST_SHL, get_const_shl, GET_CONST, SHL, shl)
+WM_RECORD_FORM(CONST_SHL, const_shl, CONST, SHL, shl)
+WM_RECORD_FORM(GET_CONST_SHR_U, get_const_shr_u, GET_CONST, SHR_U, shr_u)
+WM_RECORD_FORM(CONST_SHR_U, const_shr_u, CONST, SHR_U, shr_u)
 WM_RECORD_FUSED(GET_CONST, get_const)
 WM_RECORD_FUSED(GET_GET, get_get)
 WM_RECORD_FUSED(SET_GET, set_get)
 WM_RECORD_FUSED(TEE_CONST, tee_const)
-WM_RECORD_FUSED_CONST(ADD, add)
-WM_RECORD_FUSED_CONST(AND, and)
-WM_RECORD_FUSED_CONST(SUB, sub)
-WM_RECORD_FUSED_CONST(SHL, shl)
-WM_RECORD_FUSED_CONST(SHR_U, shr_u)
-WM_RECORD_FUSED(ADD_SET, add_set)
 WM_RECORD_FUSED_GET_LOAD(GET_LOAD, get_load, I32_LOAD, uint32_t)
 WM_RECORD_FUSED_GET_LOAD(GET_LOAD8_S, get_load8_s, I32_LOAD8_S, int8_t)
 WM_RECORD_FUSED_GET_LOAD(GET_LOAD8_U, get_load8_u, I32_LOAD8_U, uint8_t)
@@ -143,6 +161,6 @@ WM_RECORD_FUSED_BRANCH(EQZ_IF, eqz_if)
 #undef WM_RECORD_ACCESS
 #undef WM_RECORD_I32
 #undef WM_RECORD_FUSED
-#undef WM_RECORD_FUSED_CONST
+#undef WM_RECORD_FORM
 #undef WM_RECORD_FUSED_GET_LOAD
 #undef WM_RECORD_FUSED_BRANCH

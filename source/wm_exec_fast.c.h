@@ -203,6 +203,21 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 #define SIMM_OF(C) ((C).s32 >> 16)
 /* After code that changed the stack in memory only. */
 #define FAST_RELOAD() (tos = sp[-1])
+/*
+ * A local written by a record that leaves the stack as it is. With
+ * nothing on the stack tos holds the slot below it, the last local: that
+ * one is written in tos too, or the next push would write the old value
+ * back.
+ */
+#define FAST_SET_LOCAL(INDEX, VALUE)                                                                           \
+    do                                                                                                         \
+    {                                                                                                          \
+        uint32_t* slot_ = &fp[(INDEX)];                                                                        \
+        *slot_ = (VALUE);                                                                                      \
+        if (slot_ == sp - 1)                                                                                   \
+            tos = *slot_;                                                                                      \
+    } while (0)
+/* N values off the top: the one below them is the top now. */
 #define FAST_POP(N)                                                                                            \
     do                                                                                                         \
     {                                                                                                          \
@@ -640,16 +655,71 @@ f_sat:
     if (fuel < (EXTRA))                                                                                        \
         goto FIRST;                                                                                            \
     fuel -= (EXTRA)
-f_get_const_add:
-    FUSED(2u, f_local_get1);
-    FAST_PUSH(fp[IMM] + (uint32_t)SIMM_OF(ip[0]));
-    ip += 2;
+    /*
+     * Forms (decision 14): an i32 instruction of wm_ops.def with its
+     * operands in the records before it, a or b a local's (fp[...]) or a
+     * constant, and its result on the stack or into the local of a
+     * local.set after it. Each record is one cell; ip is at the second.
+     */
+    /* i32.const c; op: tos op c */
+#define FORM_CONST(name, op)                                                                                   \
+    f_##name:                                                                                                  \
+    FUSED(1u, f_const16);                                                                                      \
+    tos = i32_##op(tos, (uint32_t)SIMM);                                                                       \
+    ++ip;                                                                                                      \
     FAST_NEXT();
-f_get_get_add:
-    FUSED(2u, f_local_get1);
-    FAST_PUSH(fp[IMM] + fp[IMM_OF(ip[0])]);
-    ip += 2;
+    /* local.get b; op: tos op b */
+#define FORM_GET(name, op)                                                                                     \
+    f_##name:                                                                                                  \
+    FUSED(1u, f_local_get1);                                                                                   \
+    tos = i32_##op(tos, fp[IMM]);                                                                              \
+    ++ip;                                                                                                      \
     FAST_NEXT();
+    /* op; local.set d: d = below op tos */
+#define FORM_SET(name, op)                                                                                     \
+    f_##name:                                                                                                  \
+    FUSED(1u, f_##op);                                                                                         \
+    fp[IMM_OF(ip[0])] = i32_##op(sp[-2], tos);                                                                 \
+    FAST_POP(2);                                                                                               \
+    ++ip;                                                                                                      \
+    FAST_NEXT();
+    /* local.get a; local.get b; op: push a op b */
+#define FORM_GET_GET(name, op)                                                                                 \
+    f_##name:                                                                                                  \
+    FUSED(2u, f_local_get1);                                                                                   \
+    FAST_PUSH(i32_##op(fp[IMM], fp[IMM_OF(ip[0])]));                                                           \
+    ip += 2;                                                                                                   \
+    FAST_NEXT();
+    /* local.get a; i32.const c; op: push a op c */
+#define FORM_GET_CONST(name, op)                                                                               \
+    f_##name:                                                                                                  \
+    FUSED(2u, f_local_get1);                                                                                   \
+    FAST_PUSH(i32_##op(fp[IMM], (uint32_t)SIMM_OF(ip[0])));                                                    \
+    ip += 2;                                                                                                   \
+    FAST_NEXT();
+    /* local.get a; local.get b; op; local.set d: d = a op b */
+#define FORM_GET_GET_SET(name, op)                                                                             \
+    f_##name:                                                                                                  \
+    FUSED(3u, f_local_get1);                                                                                   \
+    FAST_SET_LOCAL(IMM_OF(ip[2]), i32_##op(fp[IMM], fp[IMM_OF(ip[0])]));                                      \
+    ip += 3;                                                                                                   \
+    FAST_NEXT();
+    /* local.get a; i32.const c; op; local.set d: d = a op c */
+#define FORM_GET_CONST_SET(name, op)                                                                           \
+    f_##name:                                                                                                  \
+    FUSED(3u, f_local_get1);                                                                                   \
+    FAST_SET_LOCAL(IMM_OF(ip[2]), i32_##op(fp[IMM], (uint32_t)SIMM_OF(ip[0])));                               \
+    ip += 3;                                                                                                   \
+    FAST_NEXT();
+#define WM_RECORD_FORM(NAME, name, SHAPE, OP, op) FORM_##SHAPE(name, op)
+#include "wm_ops.def"
+#undef FORM_CONST
+#undef FORM_GET
+#undef FORM_SET
+#undef FORM_GET_GET
+#undef FORM_GET_CONST
+#undef FORM_GET_GET_SET
+#undef FORM_GET_CONST_SET
 f_get_const:
     FUSED(1u, f_local_get1);
     sp[-1] = tos;
@@ -677,24 +747,6 @@ f_tee_const:
     fp[IMM] = tos;
     FAST_PUSH((uint32_t)SIMM_OF(ip[0]));
     ++ip;
-    FAST_NEXT();
-/* i32.const, then an i32 instruction of wm_ops.def: the constant is its second operand. */
-#define FAST_CONST_I32(op)                                                                                     \
-    f_const_##op:                                                                                              \
-    FUSED(1u, f_const16);                                                                                      \
-    tos = i32_##op(tos, (uint32_t)SIMM);                                                                       \
-    ++ip;                                                                                                      \
-    FAST_NEXT();
-#define WM_RECORD_FUSED_CONST(OP, op) FAST_CONST_I32(op)
-#include "wm_ops.def"
-#undef FAST_CONST_I32
-f_add_set:
-    /* i32.add has no operand: ip is at the local.set record. */
-    FUSED(1u, f_add);
-    fp[IMM_OF(ip[0])] = sp[-2] + tos;
-    sp -= 2;
-    ++ip;
-    FAST_RELOAD();
     FAST_NEXT();
 /*
  * local.get, then a load of wm_ops.def from the local's value, the load's

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Forms** (decision 14): an i32 instruction with its operands in the
+  records before it, a local or a constant, and its result into a local,
+  in one dispatch, fuel and snapshots exact as before. 18 forms chosen by
+  the profile. CoreMark on ESP32 +3.7%, on a Black Pill +8.8%, in the
+  system on ESP32 +7.5% with the
+  previous change; the kernel's queue round trips 97 → 56 ms.
 - **Fused records chosen by the profile**, made from `wm_ops.def`:
   `local.tee` with a constant, `local.get` with an 8- or 16-bit load, a
   constant with `shl` or `shr_u`. CoreMark +2.9% on ESP32, +3.8% on a

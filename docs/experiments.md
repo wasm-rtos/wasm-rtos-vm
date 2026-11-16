@@ -23,6 +23,7 @@ the build before the experiment; ±0 is within noise.
 | [The two loops as separate .c files](#the-two-loops-as-separate-c-files) | rejected | 2 copies | no inlining | |
 | [Both loops generated from one description](#both-loops-generated-from-one-description) | rejected on paper | | | |
 | [Fused records chosen by the profile](#fused-records-chosen-by-the-profile) | kept | +2.9% | +4.3% | +3.8% |
+| [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | +8.8% |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
@@ -168,6 +169,23 @@ load; `i32.const` and `shl` or `shr_u`. With a constant, `or`, `xor` and
 (`tee_const` 0.03% of records, the narrow loads 0.05%): the gain is code
 like CoreMark's, with `char` and `short`. Where they do not run they cost
 only their place in the loop.
+
+### Forms: operands in the records before an instruction
+
+**Kept, 18 of 63** · 2026-11-16
+
+**Tried.** Nine i32 instructions (add, sub, mul, and, or, xor, shl,
+shr_s, shr_u) in seven shapes each, operands from locals and constants,
+results into a local. Kept the 18 that run 0.1% or more of the records of
+CoreMark or of the kernel's test programs. See
+[decision 14](decisions.md#14-operands-in-records-as-overlays-on-them) for
+the numbers.
+
+**Left out**, as they ran under 0.1% in both: every shape of `or` and
+`xor` but two, `sub` but its constant, `mul` but its constant, every
+shape of `shr_s`, and most of the three-address ones (`get_get_mul_set`,
+`get_const_shl_set`, …). The most used were `const_and`, `const_add`,
+`get_const_add_set` (`i = i + c`), `get_const_add`, `get_add`.
 
 ### Records of their own for 64-bit instructions
 
