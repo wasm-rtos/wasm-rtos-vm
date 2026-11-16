@@ -169,52 +169,53 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     } while (0)
 #if WM_HAS_MMU
 /*
- * HOST = the place of SIZE bytes at ADDRESS + OFFSET, or NULL: a memory in
- * one block directly, as ever, a paged one through the TLB. NULL is out of
- * bounds, or not in the TLB: a record that can do without, as a fused one,
- * leaves the work to the records it stands for.
+ * HOST = the place of SIZE bytes at ADDRESS + OFFSET: a memory in one block
+ * directly, as ever, and first, so its path is the short one; a paged one
+ * through the TLB. Not there, a record that can do without, as a fused
+ * one, runs MISSING: it leaves the work to the records it stands for.
  */
-#define FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE)                                                      \
+#define FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE, MISSING)                                             \
     do                                                                                                         \
     {                                                                                                          \
-        uint32_t ea_ = (ADDRESS) + (OFFSET);                                                                   \
-        HOST = NULL;                                                                                           \
         if (__builtin_expect(!((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size)), \
                              1))                                                                               \
-            HOST = mem + ea_;                                                                                  \
-        else if (!mem && inst->memory && ea_ >= (OFFSET))                                                      \
-            HOST = tlb_host(rt->tlb, ea_, (SIZE), inst->memory->space, (STORE));                               \
-    } while (0)
-/*
- * The same for a record that must make the access. Not in the TLB is an
- * exception: back to the record at REC (CELLS long, an access OP), the loop
- * stops as for fuel and wm_execute makes the frame; the record then runs
- * again. Nothing is called from inside the loop for it: on Xtensa a call
- * anywhere in the handlers costs the whole loop registers.
- */
-#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, STORE)                                          \
-    do                                                                                                         \
-    {                                                                                                          \
-        FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE);                                                     \
-        if (__builtin_expect(!HOST, 0))                                                                        \
+            HOST = mem + (ADDRESS) + (OFFSET);                                                                 \
+        else                                                                                                   \
         {                                                                                                      \
-            if (mem || !inst->memory)                                                                          \
-                TRAP(T_OOB_MEMORY);                                                                            \
-            rt->fault_address = (ADDRESS);                                                                     \
-            rt->fault_offset = (OFFSET);                                                                       \
-            rt->fault_op = (OP);                                                                               \
-            rt->fault_cells = (CELLS);                                                                         \
-            ip = (REC);                                                                                        \
-            goto mmu_fault;                                                                                    \
+            uint32_t ea_ = (ADDRESS) + (OFFSET);                                                               \
+            HOST = !mem && inst->memory && ea_ >= (OFFSET)                                                     \
+                       ? tlb_host(rt->tlb, ea_, (SIZE), inst->memory->space, (STORE))                          \
+                       : NULL;                                                                                 \
+            if (!HOST)                                                                                         \
+                MISSING;                                                                                       \
         }                                                                                                      \
     } while (0)
+/*
+ * The same for a record that must make the access. Out of bounds traps;
+ * not in the TLB is an exception: back to the record at REC (CELLS long, an
+ * access OP), the loop stops as for fuel and wm_execute makes the frame;
+ * the record then runs again. Nothing is called from inside the loop for
+ * it: on Xtensa a call anywhere in the handlers costs the whole loop
+ * registers.
+ */
+#define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, STORE)                                          \
+    FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE, {                                                        \
+        if (mem || !inst->memory)                                                                              \
+            TRAP(T_OOB_MEMORY);                                                                                \
+        rt->fault_address = (ADDRESS);                                                                         \
+        rt->fault_offset = (OFFSET);                                                                           \
+        rt->fault_op = (OP);                                                                                   \
+        rt->fault_cells = (CELLS);                                                                             \
+        ip = (REC);                                                                                            \
+        goto mmu_fault;                                                                                        \
+    })
 #else
-#define FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE)                                                      \
+#define FAST_ADDR_TRY(ADDRESS, OFFSET, SIZE, HOST, STORE, MISSING)                                             \
     do                                                                                                         \
     {                                                                                                          \
-        HOST = (OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size)                 \
-                   ? NULL                                                                                      \
-                   : mem + (ADDRESS) + (OFFSET);                                                               \
+        if ((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size))                   \
+            MISSING;                                                                                           \
+        HOST = mem + (ADDRESS) + (OFFSET);                                                                     \
     } while (0)
 #define FAST_ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, REC, CELLS, STORE)                                          \
     do                                                                                                         \
@@ -787,12 +788,10 @@ f_tee_const:
         uint8_t* host;                                                                                         \
         TYPE value;                                                                                            \
         FUSED(1u, f_local_get1);                                                                               \
-        FAST_ADDR_TRY(fp[IMM], IMM_OF(ip[0]), sizeof(TYPE), host, 0);                                          \
-        if (!host)                                                                                             \
-        {                                                                                                      \
+        FAST_ADDR_TRY(fp[IMM], IMM_OF(ip[0]), sizeof(TYPE), host, 0, {                                        \
             fuel += 1u;                                                                                        \
             goto f_local_get1;                                                                                 \
-        }                                                                                                      \
+        });                                                                                                    \
         __builtin_memcpy(&value, host, sizeof(TYPE));                                                          \
         FAST_PUSH((uint32_t)(int32_t)value);                                                                   \
         ++ip;                                                                                                  \
