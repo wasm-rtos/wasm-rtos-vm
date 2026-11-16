@@ -23,7 +23,7 @@ the build before the experiment; ±0 is within noise.
 | [The two loops as separate .c files](#the-two-loops-as-separate-c-files) | rejected | 2 copies | no inlining | |
 | [Both loops generated from one description](#both-loops-generated-from-one-description) | rejected on paper | | | |
 | [Fused records chosen by the profile](#fused-records-chosen-by-the-profile) | kept | +2.9% | +4.3% | +3.8% |
-| [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | |
+| [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | +8.8% |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |

@@ -21,7 +21,7 @@ What was tried and not kept, with its numbers, is in
 | [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
 | [12](#12-what-runs-is-counted-and-speed-is-guarded-by-counts) | What runs is counted, and speed is guarded by counts | 2026-11-16 | a profile of records and pairs; CI fails a change 2% slower |
 | [13](#13-hot-code-is-written-for-people-and-checked-by-its-machine-code) | Hot code is written for people, and checked by its machine code | 2026-11-16 | rules for the loops; fast loops as variants |
-| [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them | 2026-11-16 | 18 forms; ESP32 CoreMark +3.7%, exact fuel and snapshots kept |
+| [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them | 2026-11-16 | 18 forms; CoreMark ESP32 +3.7%, Black Pill +8.8%; exact fuel and snapshots kept |
 
 ## 1. The interpreter counts fuel itself
 
@@ -707,6 +707,7 @@ others were left out.
 | CoreMark records run, plain | 23.4 million | 22.0 million (−6.0%) |
 | ESP32 CoreMark, -O2 | 15.86 | 16.44 (+3.7%) |
 | ESP32 CoreMark, -Os | 13.88 | 14.09 (+1.5%) |
+| Black Pill CoreMark | 7.40 | 8.05 (+8.8%) |
 | Mac CoreMark, as for chips | 3091 | 3154 (+2.0%) |
 | Mac CoreMark, plain | 2985 | 2968 (within noise) |
 
