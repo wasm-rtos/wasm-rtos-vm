@@ -181,6 +181,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         NEXT();                                                                                                \
     } while (0)
 #define IMM (cell >> 16)
+#define SIMM ((int32_t)cell >> 16)
 #define LO(C) ((C) & 0xFFFFu)
 #define HI(C) ((C) >> 16)
 #if WM_HAS_MMU
@@ -266,7 +267,17 @@ r_mov:
 r_movc:
     fp[IMM] = (ip++)->u32;
     NEXT();
+r_movc64:
+    fp[IMM] = ip[0].u32;
+    fp[IMM + 1u] = ip[1].u32;
+    ip += 2;
+    NEXT();
 r_jump:
+r_br0:
+    ENTER(ip - 1 + SIMM);
+r_br_if0:
+    if (!fp[IMM])
+        ENTER(ip + 1);
     ENTER(ip - 1 + ip[0].s32);
 r_br_unless:
     ENTER(fp[IMM] ? ip + 1 : ip - 1 + ip[0].s32);
@@ -412,18 +423,25 @@ table:
 #else
     TRAP(WM_ERR_TRAP("trap: illegal opcode"));
 #endif
+r_access_far:
+    keep = ip[1].u32;
+    sp = fp + ip[0].u32;
+    ip += 2;
+    goto access;
 r_access:
+    keep = HI(ip[0].u32);
+    sp = fp + LO(ip[0].u32);
+    ++ip;
+access:
 {
-    /* Any other access, on the slots below its top: in one block here, a paged memory through its functions. */
+    /* Any other access, on the slots below its top (sp), the offset in keep: in one block here, a paged memory through its functions. */
     uint8_t op = (uint8_t)IMM;
     uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
     uint8_t size = (uint8_t)(1u << (d & 3u));
-    uint32_t offset = ip[1].u32;
+    uint32_t offset = keep;
     uint32_t above = op >= 0x36u ? ((d & 8u) ? 2u : 1u) : 0u;
     uint8_t* host;
     WM_PROFILE_SHARED(op);
-    sp = fp + ip[0].u32;
-    ip += 2;
 #if WM_HAS_MMU
     if (!mem && inst->memory)
     {
@@ -555,29 +573,23 @@ r_ref_func:
     }
 #define WM_REC(NAME, name)
 #include "wm_records.def"
-#define WM_REC_CMP(NAME, name)                                                                                    \
+#define WM_REC_CMP(NAME, name)                                                                                 \
     r_brif_ss_##name:                                                                                          \
     {                                                                                                          \
         uint32_t c1 = ip[0].u32;                                                                               \
         if (!i32_##name(fp[LO(c1)], fp[HI(c1)]))                                                               \
-            ENTER(ip + 3);                                                                                     \
-        goto brif_take;                                                                                        \
+            ENTER(ip + 1);                                                                                     \
+        ENTER(ip - 1 + SIMM);                                                                                  \
     }                                                                                                          \
     r_brif_sc_##name:                                                                                          \
     {                                                                                                          \
         uint32_t c1 = ip[0].u32;                                                                               \
         if (!i32_##name(fp[LO(c1)], (uint32_t)((int32_t)c1 >> 16)))                                            \
-            ENTER(ip + 3);                                                                                     \
-        goto brif_take;                                                                                        \
+            ENTER(ip + 1);                                                                                     \
+        ENTER(ip - 1 + SIMM);                                                                                  \
     }
 #define WM_REC(NAME, name)
 #include "wm_records.def"
-brif_take:
-    target = ip - 1 + ip[1].s32;
-    keep = LO(ip[2].u32);
-    drop = HI(ip[2].u32);
-    top = IMM;
-    goto take;
 
 call:
     if (callee->code)
@@ -650,6 +662,7 @@ suspend:
     rt->suspended = 1;
     return stop;
 #undef IMM
+#undef SIMM
 #undef ENTER
 #undef LO
 #undef HI

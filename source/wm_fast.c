@@ -274,6 +274,8 @@ typedef struct
     uint32_t cell;
     uint32_t head;
     uint32_t pc;
+    /* The distance goes into the head's operand (it fits: a function has at most 0x7FFF cells). */
+    uint8_t in_head;
 } RegFixup;
 
 static void reg_put(RegOut* o, uint32_t value)
@@ -592,7 +594,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         o.error = wm_code_heights(m, index, heights);
     if (!o.error && B + code->max_stack > 0xFFF0u)
         o.error = WM_ERR_UNSUPPORTED("unsupported: a frame too large for the register loop");
-#define FIXUP(PC)                                                                                              \
+#define FIXUP_AT(PC, IN_HEAD)                                                                                  \
     do                                                                                                         \
     {                                                                                                          \
         if (fixup_count == fixup_capacity)                                                                     \
@@ -606,11 +608,15 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             }                                                                                                  \
             fixups = g_, fixup_capacity = c_;                                                                  \
         }                                                                                                      \
-        fixups[fixup_count].cell = o.count;                                                                    \
+        fixups[fixup_count].cell = (IN_HEAD) ? head_cell : o.count;                                            \
         fixups[fixup_count].head = head_cell;                                                                  \
+        fixups[fixup_count].in_head = (IN_HEAD);                                                               \
         fixups[fixup_count++].pc = (PC);                                                                       \
-        reg_put(&o, 0);                                                                                        \
+        if (!(IN_HEAD))                                                                                        \
+            reg_put(&o, 0);                                                                                    \
     } while (0)
+#define FIXUP(PC) FIXUP_AT(PC, 0)
+#define FIXUP_HEAD(PC) FIXUP_AT(PC, 1)
     for (p = code->body; !o.error && p <= code->end;)
     {
         const uint8_t* start = p;
@@ -671,7 +677,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             {
                 head_cell = o.count;
                 reg_head(&o, WM_R_JUMP, 0);
-                FIXUP(mine[0].pc);
+                FIXUP_HEAD(mine[0].pc);
             }
             if (start == code->end)
             {
@@ -706,10 +712,9 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 {
                     reg_flush(&o);
                     head_cell = o.count;
-                    reg_head(&o, kind, top - 1u);
+                    reg_head(&o, kind, 0);
                     reg_put(&o, operands);
-                    FIXUP(mine[0].pc);
-                    reg_put(&o, 0);
+                    FIXUP_HEAD(mine[0].pc);
                     break;
                 }
                 c = reg_peek(&o, h, 0);
@@ -724,6 +729,12 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             case 0x0C:
                 reg_flush(&o);
                 head_cell = o.count;
+                if (!mine[0].keep || !mine[0].drop)
+                {
+                    reg_head(&o, WM_R_BR0, 0);
+                    FIXUP_HEAD(mine[0].pc);
+                    break;
+                }
                 reg_head(&o, WM_R_BR, top);
                 FIXUP(mine[0].pc);
                 reg_put(&o, mine[0].keep | (mine[0].drop << 16));
@@ -733,14 +744,15 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 RegValue c;
                 uint32_t cs, operands;
                 uint8_t kind;
-                if (reg_fused_compare(&o, 0, &kind, &operands))
+                /* Values move only when some are kept and some dropped: else the short records. */
+                int moves = mine[0].keep && mine[0].drop;
+                if (!moves && reg_fused_compare(&o, 0, &kind, &operands))
                 {
                     reg_flush(&o);
                     head_cell = o.count;
-                    reg_head(&o, kind, top - 1u);
+                    reg_head(&o, kind, 0);
                     reg_put(&o, operands);
-                    FIXUP(mine[0].pc);
-                    reg_put(&o, mine[0].keep | (mine[0].drop << 16));
+                    FIXUP_HEAD(mine[0].pc);
                     break;
                 }
                 c = reg_peek(&o, h, 0);
@@ -748,10 +760,13 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 cs = reg_slot(&o, c);
                 reg_flush(&o);
                 head_cell = o.count;
-                reg_head(&o, WM_R_BR_IF, cs);
+                reg_head(&o, moves ? WM_R_BR_IF : WM_R_BR_IF0, cs);
                 FIXUP(mine[0].pc);
-                reg_put(&o, mine[0].keep | (mine[0].drop << 16));
-                reg_put(&o, top - 1u);
+                if (moves)
+                {
+                    reg_put(&o, mine[0].keep | (mine[0].drop << 16));
+                    reg_put(&o, top - 1u);
+                }
                 break;
             }
             case 0x0E:
@@ -939,17 +954,15 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             case 0x44:
             {
                 uint64_t bits = 0;
-                RegValue lo, hi;
                 if (op == 0x42u)
                     bits = leb_s64(&p);
                 else
                     for (uint32_t i = 0; i < 8u; ++i)
                         bits |= (uint64_t)WM_RD8(p + i) << (8u * i);
                 reg_flush(&o);
-                lo.kind = hi.kind = P_CONST;
-                lo.value = (uint32_t)bits, hi.value = (uint32_t)(bits >> 32);
-                reg_mov(&o, top, &lo);
-                reg_mov(&o, top + 1u, &hi);
+                reg_head(&o, WM_R_MOVC64, top);
+                reg_put(&o, (uint32_t)bits);
+                reg_put(&o, (uint32_t)(bits >> 32));
                 break;
             }
             case 0xD0:
@@ -1027,9 +1040,14 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     else
                     {
                         reg_flush(&o);
-                        reg_head(&o, WM_R_ACCESS, op);
-                        reg_put(&o, top);
-                        reg_put(&o, offset);
+                        reg_head(&o, offset <= 0xFFFFu ? WM_R_ACCESS : WM_R_ACCESS_FAR, op);
+                        if (offset <= 0xFFFFu)
+                            reg_put(&o, top | (offset << 16));
+                        else
+                        {
+                            reg_put(&o, top);
+                            reg_put(&o, offset);
+                        }
                     }
                     if (find && !find->found && (load || store) && offset <= 0xFFFFu && head_cell == find->cell)
                     {
@@ -1081,6 +1099,8 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         p = next;
     }
 #undef FIXUP
+#undef FIXUP_HEAD
+#undef FIXUP_AT
     if (seg_cell != UINT32_MAX && !o.error)
         o.cells[seg_cell].u32 = (o.cells[seg_cell].u32 & 0xFFFFu) | ((seg_count > 0xFFFFu ? 0xFFFFu : seg_count) << 16);
     for (uint32_t i = 0; !o.error && i < fixup_count; ++i)
@@ -1088,6 +1108,9 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         const RegLabel* l = reg_label(labels, label_count, fixups[i].pc);
         if (!l || l->cell == UINT32_MAX)
             o.error = WM_ERR_UNSUPPORTED("unsupported: a branch the register loop cannot place");
+        else if (fixups[i].in_head)
+            o.cells[fixups[i].cell].u32 = (o.cells[fixups[i].cell].u32 & 0xFFFFu) |
+                                          ((uint32_t)(uint16_t)(int16_t)((int32_t)l->cell - (int32_t)fixups[i].head) << 16);
         else
             o.cells[fixups[i].cell].s32 = (int32_t)l->cell - (int32_t)fixups[i].head;
     }
