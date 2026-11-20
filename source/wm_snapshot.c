@@ -54,17 +54,18 @@ static const uint32_t WM_ROM crc_nibbles[16] = {
     0xEDB88320u, 0xF00F9344u, 0xD6D6A3E8u, 0xCB61B38Cu, 0x9B64C2B0u, 0x86D3D2D4u, 0xA00AE278u, 0xBDBDF21Cu,
 };
 
-static void crc_add(Stream* s, const void* data, uint32_t size)
+uint32_t wm_crc32(uint32_t crc, const void* data, uint32_t size)
 {
     const uint8_t* p = (const uint8_t*)data;
-    uint32_t crc = s->crc;
     for (uint32_t i = 0; i < size; ++i)
     {
         crc = WM_ROM32(&crc_nibbles[(crc ^ p[i]) & 15u]) ^ (crc >> 4);
         crc = WM_ROM32(&crc_nibbles[(crc ^ (p[i] >> 4)) & 15u]) ^ (crc >> 4);
     }
-    s->crc = crc;
+    return crc;
 }
+
+static void crc_add(Stream* s, const void* data, uint32_t size) { s->crc = wm_crc32(s->crc, data, size); }
 
 static void put(Stream* s, const void* data, uint32_t size)
 {

@@ -36,6 +36,50 @@ static WmInstance* g_current;
 static WmModule* g_modules[MAX_INSTANCES];
 static int g_module_count;
 static uint8_t* g_bytes[MAX_INSTANCES];
+#ifdef WM_SPEC_IMAGE
+/*
+ * -DWM_SPEC_IMAGE: every module's code image written and mapped before its
+ * instance; 1 runs every function from the image (the cache gets no
+ * memory), 2 copies them in through a cache of one byte.
+ */
+static uint32_t* g_images[MAX_INSTANCES];
+static uint32_t g_image_size;
+static int g_code_refused;
+
+static void* code_allocator(void* ptr, size_t size)
+{
+    if (!size)
+    {
+        free(ptr);
+        return NULL;
+    }
+    return g_code_refused ? NULL : realloc(ptr, size);
+}
+
+static WmResult image_put(void* context, const void* data, uint32_t size)
+{
+    uint32_t** image = (uint32_t**)context;
+    uint32_t* grown = (uint32_t*)realloc(*image, g_image_size + size);
+    if (!grown)
+        return "spec: out of memory for an image";
+    memcpy((uint8_t*)grown + g_image_size, data, size);
+    *image = grown;
+    g_image_size += size;
+    return NULL;
+}
+
+/* The module's image, written and mapped; a module that cannot be predecoded goes on without. */
+static void map_image(WmModule* module, uint32_t at)
+{
+    WmResult result;
+    g_code_refused = 0;
+    g_image_size = 0;
+    result = wm_code_image_write(module, image_put, &g_images[at]);
+    if (!result && (result = wm_code_image_map(module, g_images[at], g_image_size)))
+        printf("error image: %s\n", result);
+    g_code_refused = WM_SPEC_IMAGE == 1;
+}
+#endif
 
 static WmFunc* g_print[8];
 static WmGlobal* g_globals[4];
@@ -236,6 +280,9 @@ static void command(char* line)
             return;
         }
         g_modules[g_module_count] = module;
+#ifdef WM_SPEC_IMAGE
+        map_image(module, g_module_count);
+#endif
         g_bytes[g_module_count++] = bytes;
         result = wm_instantiate(&instance, module, g_runtime, resolve, NULL);
         if (result)
@@ -434,6 +481,11 @@ int main(void)
 #ifdef WM_SPEC_CODE_LIMIT
     /* -DWM_SPEC_CODE_LIMIT=bytes: a code cache that small; 1 keeps only the records of functions on the stack. */
     wm_code_cache_limit(WM_SPEC_CODE_LIMIT);
+#endif
+#ifdef WM_SPEC_IMAGE
+    wm_set_code_allocator(code_allocator);
+    if (WM_SPEC_IMAGE == 2)
+        wm_code_cache_limit(1);
 #endif
     g_runtime = wm_runtime_new(64u * 1024u, 1000u);
     make_spectest();

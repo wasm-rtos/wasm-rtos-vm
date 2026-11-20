@@ -19,8 +19,10 @@ for mode in "" "-DWM_FUSE=1 -DWM_NOP_RUNS=1" -DWM_PREDECODE=0 -DWM_MEMORY_ALWAYS
     python3 tools/spec.py build/quick-spec "$SPEC" > /dev/null && echo "spec:          ok ${mode:-(predecoded)}" ||
         { echo "spec:          FAIL $mode"; fail=1; }
 done
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c test/image.c -lm -o build/quick-image || exit 1
+build/quick-image > /dev/null && echo "code images:   ok" || { echo "code images:   FAIL"; fail=1; }
 xxd -i test/fuzz/snapshot.wasm > build/snapshot_wasm.h
-for t in load run diff snapshot; do
+for t in load run diff snapshot image; do
     ls test/fuzz/regress/$t/* > /dev/null 2>&1 || continue
     cc -std=gnu99 -O1 -g -fsanitize=address -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -Ibuild source/*.c \
         test/fuzz/fuzz_$t.c test/fuzz/replay.c -lm -o build/quick-$t || exit 1

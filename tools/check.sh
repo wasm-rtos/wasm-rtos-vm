@@ -24,6 +24,16 @@ cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_CODE_LIMIT=1 source/*.c tools/
 python3 tools/spec.py build/wm-spec-code "$SPEC" >/dev/null && echo "spec (code cache of 1 byte): ok" || { echo "spec (code cache of 1 byte): FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/code.c -lm -o build/code || exit 1
 build/code >/dev/null && echo "code cache:    ok" || { echo "code cache:    FAIL"; build/code | grep FAIL; fail=1; }
+# Code images (decision 15): the spec suite from images only, and copied in through a cache of one byte.
+for mode in 1 2; do
+    cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 -DWM_SPEC_IMAGE=$mode source/*.c tools/wm-spec.c -lm -o build/wm-spec-image || exit 1
+    python3 tools/spec.py build/wm-spec-image "$SPEC" >/dev/null && echo "spec (code image $mode): ok" || { echo "spec (code image $mode): FAIL"; fail=1; }
+done
+for mode in "" -DWM_HAS_VALIDATION=0 "-DWM_FUSE=1 -DWM_NOP_RUNS=1" -DWM_PREDECODE=0; do
+    # shellcheck disable=SC2086
+    cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 $mode source/*.c test/image.c -lm -o build/image || exit 1
+    build/image >/dev/null && echo "code images:   ok $mode" || { echo "code images:   FAIL $mode"; build/image | grep FAIL; fail=1; }
+done
 for mode in "" -DWM_PREDECODE=0; do
     cc -std=gnu99 -O1 -g -fsanitize=address $mode source/*.c test/refs.c -lm -o build/refs || exit 1
     build/refs >/dev/null && echo "snapshot refs and checks: ok $mode" || { echo "snapshot refs and checks: FAIL $mode"; build/refs | grep FAIL; fail=1; }

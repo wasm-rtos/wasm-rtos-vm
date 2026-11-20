@@ -403,14 +403,15 @@ WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
         }
         st = side;
     }
-    code->fast = (WmCell*)wm_code_malloc((size_t)cells * sizeof(WmCell));
-    if (!code->fast)
+    code->own = (WmCell*)wm_code_malloc((size_t)cells * sizeof(WmCell));
+    if (!code->own)
     {
         wm_free(targets);
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
     }
     code->fast_cells = (uint16_t)cells;
-    out = code->fast;
+    code->mapped = 0;
+    out = code->own;
     for (p = code->body; p <= code->end;)
     {
         const uint8_t* start = p;
