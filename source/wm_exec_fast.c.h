@@ -777,6 +777,86 @@ f_tee_const:
     FAST_PUSH((uint32_t)SIMM_OF(ip[0]));
     ++ip;
     FAST_NEXT();
+/* local.set a; local.get b; i32.const c; i32.add: a = tos, b + c on top. */
+f_set_get_const_add:
+    FUSED(3u, f_local_set1);
+    fp[IMM] = tos;
+    tos = i32_add(fp[IMM_OF(ip[0])], (uint32_t)SIMM_OF(ip[1]));
+    ip += 3;
+    FAST_NEXT();
+f_set_get_get:
+    FUSED(2u, f_local_set1);
+    fp[IMM] = tos;
+    tos = fp[IMM_OF(ip[0])];
+    FAST_PUSH(fp[IMM_OF(ip[1])]);
+    ip += 2;
+    FAST_NEXT();
+/* local.tee a; i32.const c; op: a = tos, tos op c on top. */
+#define FAST_TEE_CONST(name, op)                                                                               \
+    f_##name:                                                                                                  \
+    FUSED(2u, f_local_tee1);                                                                                   \
+    fp[IMM] = tos;                                                                                             \
+    tos = i32_##op(tos, (uint32_t)SIMM_OF(ip[0]));                                                             \
+    ip += 2;                                                                                                   \
+    FAST_NEXT();
+    FAST_TEE_CONST(tee_const_shr_u, shr_u)
+    FAST_TEE_CONST(tee_const_xor, xor)
+#undef FAST_TEE_CONST
+/* local.tee a; i32.load: a = tos, the load from it on top. */
+f_tee_load:
+{
+    uint8_t* host;
+    uint32_t value;
+    FUSED(1u, f_local_tee1);
+    FAST_ADDR_TRY(tos, IMM_OF(ip[0]), 4u, host, 0, {
+        fuel += 1u;
+        goto f_local_tee1;
+    });
+    __builtin_memcpy(&value, host, 4u);
+    fp[IMM] = tos;
+    tos = value;
+    ++ip;
+    FAST_NEXT();
+}
+/* local.get a; local.tee b: b = a, a on top. */
+f_get_tee:
+{
+    uint32_t value = fp[IMM];
+    FUSED(1u, f_local_get1);
+    FAST_SET_LOCAL(IMM_OF(ip[0]), value);
+    FAST_PUSH(value);
+    ++ip;
+    FAST_NEXT();
+}
+/* local.get v; i32.store: v to the address on top. */
+f_get_store:
+{
+    uint8_t* host;
+    uint32_t value;
+    FUSED(1u, f_local_get1);
+    FAST_ADDR_TRY(tos, IMM_OF(ip[0]), 4u, host, 1, {
+        fuel += 1u;
+        goto f_local_get1;
+    });
+    value = fp[IMM];
+    __builtin_memcpy(host, &value, 4u);
+    FAST_POP(1);
+    ++ip;
+    FAST_NEXT();
+}
+/* local.get i; br_table: by i; the br_table record, at ip, is its head. */
+f_get_br_table:
+{
+    uint32_t count = IMM_OF(ip[0]);
+    uint32_t index = fp[IMM];
+    const WmCell* e;
+    FUSED(1u, f_local_get1);
+    e = ip + 1 + 2u * (index < count ? index : count);
+    target = ip + e[0].s32;
+    keep = e[1].u32 & 0xFFFFu;
+    drop = e[1].u32 >> 16;
+    goto take;
+}
 /*
  * local.get, then a load of wm_ops.def from the local's value, the load's
  * offset its record's operand. Out of bounds or not in the TLB: the two
@@ -864,6 +944,30 @@ f_set_get_br_if:
     FAST_CMP_IF(eq, 2)
     FAST_CMP_IF(ne, 2)
     FAST_CMP_IF(eqz, 1)
+/* local.get x; local.set a; local.get b; br_if: a = x, branch on b. */
+f_get_set_get_br_if:
+    FUSED(3u, f_local_get1);
+    FAST_SET_LOCAL(IMM_OF(ip[0]), fp[IMM]);
+    if (!fp[IMM_OF(ip[1])])
+    {
+        ip += 4;
+        FAST_NEXT();
+    }
+    FAST_TAKE_BR_IF(2);
+/* local.get a; i32.const c; i32.eq; br_if: branch when a is c. */
+f_get_const_eq_br_if:
+    FUSED(3u, f_local_get1);
+    if (fp[IMM] != (uint32_t)SIMM_OF(ip[0]))
+    {
+        ip += 4;
+        FAST_NEXT();
+    }
+    FAST_TAKE_BR_IF(2);
+/* local.get a; i32.const c; i32.ne; if: on into it when a is not c, else to its target. */
+f_get_const_ne_if:
+    FUSED(3u, f_local_get1);
+    ip = fp[IMM] != (uint32_t)SIMM_OF(ip[0]) ? ip + 3 : ip + 2 + SIMM_OF(ip[2]);
+    FAST_NEXT();
 #undef FAST_CMP_IF
 #undef FAST_CMP_BR_IF
 #undef FAST_TAKE_BR_IF

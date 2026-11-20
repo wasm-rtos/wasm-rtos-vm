@@ -727,6 +727,10 @@ Found on the way: a record that writes a local without touching the stack
 must write `tos` too when the local is the slot under an empty stack
 (`FAST_SET_LOCAL`); the spec suite hung on a loop that showed it.
 
+**Later (2026-11-20).** Eleven more fused records by the same rule, for
+moves and what takes them next (experiments.md): records run −12.4%,
+ESP32 +7.7%, Black Pill +11.0%, Mac +7.5%; board checks 19 of 19.
+
 ## 15. Records in storage the processor reads, RAM for the hot ones
 
 **Decided and built (2026-11-20).**

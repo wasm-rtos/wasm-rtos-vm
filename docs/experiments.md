@@ -24,6 +24,7 @@ the build before the experiment; ±0 is within noise.
 | [Both loops generated from one description](#both-loops-generated-from-one-description) | rejected on paper | | | |
 | [Fused records chosen by the profile](#fused-records-chosen-by-the-profile) | kept | +2.9% | +4.3% | +3.8% |
 | [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | +8.8% |
+| [Moves fused with what takes them next](#moves-fused-with-what-takes-them-next) | kept, 11 records | +7.7% | +7.5% chips | +11.0% |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
@@ -190,6 +191,33 @@ the numbers.
 shape of `shr_s`, and most of the three-address ones (`get_get_mul_set`,
 `get_const_shl_set`, …). The most used were `const_and`, `const_add`,
 `get_const_add_set` (`i = i + c`), `get_const_add`, `get_add`.
+
+### Moves fused with what takes them next
+
+**Kept** · 2026-11-20
+
+**Tried.** After the forms, 38% of CoreMark's records only moved values or
+marked blocks. Counted among pairs whose first record is a move, fused
+ones included (the profile's list showed plain pairs only, which made the
+rest look spread thin): the ten commonest were 14% of all records. Eleven
+records for them, each one line of `wm_ops.def` and one pattern:
+`set_get_const_add`, `set_get_get`, `tee_const_shr_u`, `tee_const_xor`,
+`tee_load`, `get_tee`, `get_store`, `get_br_table`, and with `WM_FUSE`
+`get_set_get_br_if`, `get_const_eq_br_if`, `get_const_ne_if`.
+
+| CoreMark | Before | After |
+|---|---:|---:|
+| Records run, as for chips | 18.17 million | 15.93 million (−12.4%) |
+| ESP32 -O2 | 16.55 | 17.83 (+7.7%) |
+| ESP32 -Os | 14.23 | 15.40 (+8.2%) |
+| Black Pill | 8.07 | 8.96 (+11.0%) |
+| Mac, as for chips | 3109 | 3342 (+7.5%) |
+| Mac, plain | 2985 | 3188 (+6.8%) |
+
+**Found.** The kernel's board checks on the ESP32, the guard against a loop
+too large for its cache of flash: 19 of 19 pass, CoreMark in the system
+15.87 → 17.51, 500 round trips through a queue 110 → 50 ms, `fib(24)` 229
+→ 225 ms, 19 programs at once in both. The Uno does not change.
 
 ### Records of their own for 64-bit instructions
 

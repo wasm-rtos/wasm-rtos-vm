@@ -5,8 +5,8 @@
     tools/profile.py build/prof/coremark.*  [--top N]
 
 Several files (processes, programs) add up. Prints the records the fast
-loop ran by kind, the pairs of plain records that ran in a row (candidates
-for fusing), the opcodes that went through its shared numeric and access
+loop ran by kind, the pairs of plain records that ran in a row and of a
+fused record then a plain one (candidates for fusing), the opcodes that went through its shared numeric and access
 records, and the opcodes the loop in place ran.
 """
 import os
@@ -80,6 +80,10 @@ def main():
     table("Records by kind", records, dispatches, top)
     plain = Counter({p: n for p, n in pairs.items() if p[0] not in fused and p[1] not in fused})
     table("Plain records in a row (candidates for fusing)", plain, dispatches, top, lambda p: f"{p[0]} -> {p[1]}")
+    # A fused record before a plain one: the run can grow by the second (decision 14).
+    after = Counter({p: n for p, n in pairs.items() if p[0] in fused and p[1] not in fused})
+    table("Fused records, then a plain one (candidates for longer runs)", after, dispatches, top,
+          lambda p: f"{p[0]} -> {p[1]}")
     table("Through the shared numeric and access records", shared, dispatches, top,
           lambda op: OPS.get(op, f"0x{op:02X}"))
     table("Opcodes in place", ops, sum(ops.values()), top, lambda op: OPS.get(op, f"0x{op:02X}"))
