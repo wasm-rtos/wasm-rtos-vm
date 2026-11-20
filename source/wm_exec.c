@@ -819,5 +819,9 @@ static void profile_start(void)
 #define WM_PROFILE_RECORD(offset) ((void)0)
 #endif
 
+#if WM_REGISTER
+#include "wm_exec_reg.c.h"
+#else
 #include "wm_exec_fast.c.h"
+#endif
 #include "wm_exec_inplace.c.h"

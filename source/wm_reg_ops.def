@@ -1,0 +1,80 @@
+/*
+ * Experiment (decision 16): the register loop's records. Operands are slots
+ * of the frame (fp-relative: parameters, locals, then the stack by depth),
+ * so a record names where its values are instead of taking them from a
+ * stack pointer. REG(NAME, name): a record, its handler r_name.
+ */
+#ifndef REG
+#define REG(NAME, name)
+#endif
+#ifndef REG_LOAD
+#define REG_LOAD(NAME, name, TYPE) REG(NAME, name)
+#endif
+#ifndef REG_STORE
+#define REG_STORE(NAME, name, TYPE) REG(NAME, name)
+#endif
+#ifndef REG_I32
+#define REG_I32(NAME, name) REG(SS_##NAME, ss_##name) REG(SC_##NAME, sc_##name)
+#endif
+
+REG(UNREACHABLE, unreachable)
+REG(MOV, mov)
+REG(MOVC, movc)
+REG(JUMP, jump)
+REG(BR, br)
+REG(BR_IF, br_if)
+REG(BR_UNLESS, br_unless)
+REG(BR_TABLE, br_table)
+REG(RETURN, return)
+REG(CALL, call)
+REG(CALL_INDIRECT, call_indirect)
+REG(SELECT1, select1)
+REG(SELECT, select)
+REG(LOCAL_GET_W, local_get_w)
+REG(LOCAL_SET_W, local_set_w)
+REG(GLOBAL_GET1, global_get1)
+REG(GLOBAL_SET1, global_set1)
+REG(GLOBAL_GET, global_get)
+REG(GLOBAL_SET, global_set)
+REG(TABLE_GET, table_get)
+REG(TABLE_SET, table_set)
+REG(ACCESS, access)
+REG_LOAD(LOAD32, load32, uint32_t)
+REG_LOAD(LOAD8_S, load8_s, int8_t)
+REG_LOAD(LOAD8_U, load8_u, uint8_t)
+REG_LOAD(LOAD16_S, load16_s, int16_t)
+REG_LOAD(LOAD16_U, load16_u, uint16_t)
+REG_STORE(STORE32, store32, uint32_t)
+REG_STORE(STORE8, store8, uint8_t)
+REG_STORE(STORE16, store16, uint16_t)
+REG(MEMORY_SIZE, memory_size)
+REG(MEMORY_GROW, memory_grow)
+REG(NUMERIC, numeric)
+REG(SAT, sat)
+REG(MISC, misc)
+REG(REF_NULL, ref_null)
+REG(REF_IS_NULL, ref_is_null)
+REG(REF_FUNC, ref_func)
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) REG_I32(NAME, name)
+#include "wm_ops.def"
+/* An i32 compare and a branch taken when it holds: slots, or a slot and a constant. */
+#ifndef REG_CMP
+#define REG_CMP(NAME, name) REG(BRIF_SS_##NAME, brif_ss_##name) REG(BRIF_SC_##NAME, brif_sc_##name)
+#endif
+REG_CMP(EQZ, eqz)
+REG_CMP(EQ, eq)
+REG_CMP(NE, ne)
+REG_CMP(LT_S, lt_s)
+REG_CMP(LT_U, lt_u)
+REG_CMP(GT_S, gt_s)
+REG_CMP(GT_U, gt_u)
+REG_CMP(LE_S, le_s)
+REG_CMP(LE_U, le_u)
+REG_CMP(GE_S, ge_s)
+REG_CMP(GE_U, ge_u)
+
+#undef REG
+#undef REG_LOAD
+#undef REG_STORE
+#undef REG_I32
+#undef REG_CMP

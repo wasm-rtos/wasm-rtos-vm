@@ -805,6 +805,22 @@ void wm_module_predecode(WmModule* module);
 WmResult wm_code_load(WmFunc* func);
 WmResult wm_code_make(WmModule* module, WmCode* code, const WmSide* side);
 WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
+#ifndef WM_REGISTER
+#define WM_REGISTER 0
+#endif
+#if WM_REGISTER
+#if !WM_HAS_MMU
+#error "the register loop experiment runs the rare accesses through the memory functions: it needs WM_HAS_MMU"
+#endif
+enum
+{
+#define REG(NAME, name) WM_R_##NAME,
+#include "wm_reg_ops.def"
+    WM_R_COUNT
+};
+/* Experiment (decision 16): the register loop; the stack's height in slots before each instruction. */
+WmResult wm_code_heights(const WmModule* module, uint32_t index, uint16_t* heights);
+#endif
 /* What a function's operand stack and locals hold at one of its instructions (wm_code_stack). */
 typedef struct WmCodeStack
 {

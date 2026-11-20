@@ -25,6 +25,7 @@ the build before the experiment; ±0 is within noise.
 | [Fused records chosen by the profile](#fused-records-chosen-by-the-profile) | kept | +2.9% | +4.3% | +3.8% |
 | [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | +8.8% |
 | [Moves fused with what takes them next](#moves-fused-with-what-takes-them-next) | kept, 11 records | +7.7% | +7.5% chips | +11.0% |
+| [A register loop, as a prototype](#a-register-loop-as-a-prototype) | upper bound, above the bar | +17.3% (-Os +35.8%) | +16.2% | +12.4% |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
@@ -218,6 +219,34 @@ records for them, each one line of `wm_ops.def` and one pattern:
 too large for its cache of flash: 19 of 19 pass, CoreMark in the system
 15.87 → 17.51, 500 round trips through a queue 110 → 50 ms, `fib(24)` 229
 → 225 ms, 19 programs at once in both. The Uno does not change.
+
+### A register loop, as a prototype
+
+**Measured, an upper bound** · 2026-11-21
+
+**Tried.** Decision 16 as a prototype (`WM_REGISTER=1`, branch
+`agent/register-experiment`): records name frame slots, the stack at
+slots fixed by its depth, no stack pointer or `tos` while it runs;
+`local.get`, `local.set`, `local.tee` and constants taken into the
+operands of the records next to them within a block; no records for
+`block`, `loop`, `end` and `nop`; an i32 compare and the branch on it in
+one record; everything else on the slots below the record's top, through
+the helpers the loops share. The spec suite passes in full. It is an
+upper bound of what such a loop gives: fuel is one a record, not one an
+instruction, snapshots are not made, and memory must be in one block.
+
+| CoreMark | The fused moves | Prototype, first | Prototype, compares with branches |
+|---|---:|---:|---:|
+| Mac | 3307 | 3631 | 3844 (+16.2%) |
+| ESP32 -O2 | 17.83 | 19.67 | 20.91 (+17.3%) |
+| ESP32 -Os | 15.40 | 19.97 | 20.92 (+35.8%) |
+| Black Pill | 8.96 | 9.35 | 10.07 (+12.4%) |
+| Records and side table in RAM | 16 292 B | | 15 280 B |
+
+**Found.** Above the bar of decision 16 on every machine. With -Os the
+ESP32 gains most: the register loop's handlers are short, and the
+compiler builds them as well at -Os as at -O2. What an exact version
+costs is in decision 16.
 
 ### Records of their own for 64-bit instructions
 
