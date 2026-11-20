@@ -25,9 +25,11 @@ the build before the experiment; ±0 is within noise.
 | [Fused records chosen by the profile](#fused-records-chosen-by-the-profile) | kept | +2.9% | +4.3% | +3.8% |
 | [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | +8.8% |
 | [Moves fused with what takes them next](#moves-fused-with-what-takes-them-next) | kept, 11 records | +7.7% | +7.5% chips | +11.0% |
-| [A register loop, as a prototype](#a-register-loop-as-a-prototype) | upper bound, above the bar | +17.3% (-Os +35.8%) | +16.2% | +12.4% |
+| [A register loop, as a prototype](#a-register-loop-as-a-prototype) | kept, as decision 16 | +17.3% (-Os +35.8%) | +16.2% | +12.4% |
 | [Fuel by segment: a record of its own, or in the branches](#fuel-by-segment-a-record-of-its-own-or-in-the-branches) | kept in the branches | +13.6% | −2.6% | |
 | [The loop in place finding its place by walking the function](#the-loop-in-place-finding-its-place-by-walking-the-function) | rejected | | −12% in slices | |
+| [A segment's offset and top in its record](#a-segments-offset-and-top-in-its-record) | moved to the tail | queue 66 → 50 ms | | |
+| [The translator's memory by the byte](#the-translators-memory-by-the-byte) | rejected | | peak 34.8 → 19.1 KB | |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
@@ -224,7 +226,7 @@ too large for its cache of flash: 19 of 19 pass, CoreMark in the system
 
 ### A register loop, as a prototype
 
-**Measured, an upper bound** · 2026-11-21
+**Kept, as decision 16** · 2026-11-21
 
 **Tried.** Decision 16 as a prototype (`WM_REGISTER=1`, branch
 `agent/register-experiment`): records name frame slots, the stack at
@@ -283,6 +285,36 @@ loop in place counted by walking the function from its start each time.
 
 **Found.** A slice of the kernel is a few microseconds on a Mac; walking a
 function at each one cost a tenth of it.
+
+### A segment's offset and top in its record
+
+**Moved to the tail** · 2026-11-21
+
+**Tried.** The register loop's `SEG` holding the segment's offset in the
+module and its stack top beside its fuel, three cells.
+
+| Records | Three cells | One cell, the rest in the tail |
+|---|---:|---:|
+| CoreMark | 20 668 B | 17 028 B |
+| the kernel's board check program | 8 424 B | 7 448 B |
+| ESP32 board checks: queue of 500 round trips | 66 ms | 50 ms |
+
+**Found.** Only a stop and the loop in place need the offset and the top;
+the tail the loop in place makes has them already.
+
+### The translator's memory by the byte
+
+**Rejected** · 2026-11-21
+
+**Tried.** The translator's arrays by byte of the function: stack heights,
+the record of every instruction, a flag for every label; the cells grown in
+a buffer of their own and copied.
+
+| CoreMark, heap at its peak while instantiating, above what stays | |
+|---|---:|
+| the stack loop's predecoder | 12.2 KB |
+| arrays by the byte | 34.8 KB |
+| heights by the instruction, labels only, cells in place | 19.1 KB |
 
 ### Records of their own for 64-bit instructions
 

@@ -23,7 +23,7 @@ What was tried and not kept, with its numbers, is in
 | [13](#13-hot-code-is-written-for-people-and-checked-by-its-machine-code) | Hot code is written for people, and checked by its machine code | 2026-11-16 | rules for the loops; fast loops as variants |
 | [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them (replaced by 16) | 2026-11-16 | 18 forms; CoreMark ESP32 +3.7%, Black Pill +8.8%; exact fuel and snapshots kept |
 | [15](#15-records-in-storage-the-processor-reads-ram-for-the-hot-ones) | Records in storage the processor reads, RAM for the hot ones | 2026-11-20 | code from flash with no RAM: ESP32 −3.2%, Black Pill −5.8%; short of RAM −1.6% instead of −48% |
-| [16](#16-operands-in-slots-fixed-by-depth-in-records-that-overlay-the-stacks) | Operands in slots fixed by depth, in records that overlay the stack's | proposed | |
+| [16](#16-operands-in-slots-fixed-by-depth-in-records-that-overlay-the-stacks) | Operands in slots fixed by depth, in records that overlay the stack's | 2026-11-21 | the register loop: CoreMark ESP32 +33%, Black Pill +28%; fuel and snapshots exact as before |
 
 ## 1. The interpreter counts fuel itself
 
@@ -867,7 +867,7 @@ Black Pill (a byte at a time). The Uno's flash is the same
 
 ## 16. Operands in slots fixed by depth, in records that overlay the stack's
 
-**Proposed (2026-11-20).**
+**Decided and built (2026-11-21).** It replaces the stack loop and its forms (decision 14).
 
 ### Problem
 
@@ -995,6 +995,34 @@ memory in one block only.
   dropped when a memory leaves its block.
 - **Positions of traps** for traces: the translator run again for the
   function that trapped, to find the instruction of the record.
+
+### Measured: built
+
+Against the stack loop with the fused moves (main before it), the same
+CoreMark:
+
+| | Stack loop | Register loop |
+|---|---:|---:|
+| ESP32 -O2 | 17.83 | 23.72 (+33%) |
+| ESP32 -Os | 15.40 | 20.22 (+31%) |
+| Black Pill | 8.96 | 11.49 (+28%) |
+| Mac, no fuel | 3390 | 3882 (+14.5%) |
+| Mac, slices of 10 000 (the kernel's) | 3337 | 3638 (+9.0%) |
+| CoreMark's records | 16 220 B | 17 028 B |
+| The loop's machine code, Xtensa -O2 | 11 772 B | 6 608 B |
+| Uno flash | 35 512 B | 35 512 B |
+
+The kernel's board checks on the ESP32, 19 of 19: CoreMark in the system
+17.51 → 22.10, `fib(24)` 225 → 158 ms, 500 round trips through a queue
+50 → 50 ms, programs at once 19 → 18. The one program fewer: about 600
+bytes more a program, of records (a call and a branch hold their top and
+targets) and of tails; the next step is records of branches without the
+cells they do not need.
+
+Fuel: CoreMark counts the same 32 876 269 instructions as the stack loop in
+slices of 7, 1000 and 10 000. The spec suite in every build (paged and
+swapped too), the wasm-rtos kernel's 86 tests (paged too), snapshots
+between builds and `test/fuel.c` pass.
 
 ### Checks
 
