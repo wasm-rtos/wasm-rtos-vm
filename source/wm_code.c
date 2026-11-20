@@ -57,7 +57,7 @@ static void wm_code_drop(WmCode* code)
     code->fast_cells = 0;
     code->used = 0;
     code->mapped = 0;
-#if WM_REGISTER
+#if WM_PREDECODE
     wm_reg_tail_free(code->tail);
     code->tail = NULL;
 #endif
@@ -151,6 +151,24 @@ static int evict_one(void)
     return 0;
 }
 
+/*
+ * Room for an allocation the heap refused: first a tail the loop in place
+ * kept (made again in a moment when needed), then records by CLOCK. With
+ * the stacks pinned; 0 when nothing can go.
+ */
+static int make_room(void)
+{
+    for (WmModule* m = g_modules; m; m = m->cached_next)
+        for (uint32_t i = 0; i < defined(m); ++i)
+            if (m->codes[i].tail && !m->codes[i].pinned)
+            {
+                wm_reg_tail_free(m->codes[i].tail);
+                m->codes[i].tail = NULL;
+                return 1;
+            }
+    return evict_one();
+}
+
 static int is_exhaustion(WmResult result) { return result && !strncmp(result, "exhaustion", 10); }
 
 /* A function's records copied from the image, dropping others for the room; with none, it runs from the image. */
@@ -162,7 +180,7 @@ static void from_image(WmModule* m, WmCode* code)
     WmCell* copy;
     pin_stacks(1);
     code->pinned = 1;
-    while (!(copy = (WmCell*)wm_code_malloc((size_t)count * sizeof(WmCell))) && evict_one())
+    while (!(copy = (WmCell*)wm_code_malloc((size_t)count * sizeof(WmCell))) && make_room())
         ;
     code->pinned = 0;
     pin_stacks(0);
@@ -198,7 +216,7 @@ WmResult wm_code_make(WmModule* m, WmCode* code, const WmSide* side)
         if (side || !(result = wm_code_side(m, (uint32_t)(code - m->codes), &made)))
             result = wm_predecode(m, code, side ? side : made);
         wm_free(made);
-    } while (is_exhaustion(result) && evict_one());
+    } while (is_exhaustion(result) && make_room());
     code->pinned = 0;
     pin_stacks(0);
     return result;
@@ -235,7 +253,7 @@ int wm_code_drop_one(void)
 {
     int dropped;
     pin_stacks(1);
-    dropped = evict_one();
+    dropped = make_room();
     pin_stacks(0);
     return dropped;
 }
@@ -245,11 +263,19 @@ size_t wm_code_cache_trim(size_t keep)
     pin_stacks(1);
     while (g_bytes > keep && evict_one())
         ;
-    /* Functions that found no room run from the image until here: their next call copies them in if there is room. */
+    /*
+     * Functions that found no room run from the image until here: their next
+     * call copies them in if there is room. Tails the loop in place kept go.
+     */
     for (WmModule* m = g_modules; m; m = m->cached_next)
         for (uint32_t i = 0; i < defined(m); ++i)
-            if (m->codes[i].mapped && !m->codes[i].pinned)
-                wm_code_drop(&m->codes[i]);
+            if (!m->codes[i].pinned)
+            {
+                if (m->codes[i].mapped)
+                    wm_code_drop(&m->codes[i]);
+                wm_reg_tail_free(m->codes[i].tail);
+                m->codes[i].tail = NULL;
+            }
     pin_stacks(0);
     return g_bytes;
 }
@@ -263,7 +289,7 @@ size_t wm_code_cache_trim(size_t keep)
 enum
 {
     IMAGE_MAGIC = 0x49434D57u, /* "WMCI" */
-    IMAGE_VERSION = 1u,
+    IMAGE_VERSION = 2u,
     IMAGE_TRAILER = 8u
 };
 
@@ -271,11 +297,10 @@ enum
 static uint32_t build_tag(void)
 {
     const uint16_t* handlers = wm_fast_handlers();
-    const uint32_t flags[] = {IMAGE_VERSION, (uint32_t)sizeof(void*), WM_F_COUNT, WM_FUSE, WM_NOP_RUNS,
-                              WM_REF_SLOTS, WM_FRAME_SIZE, WM_HAS_FLOAT, WM_HAS_I64, WM_HAS_REF_TYPES,
-                              WM_PROFILE, WM_MAX_PAGES};
+    const uint32_t flags[] = {IMAGE_VERSION,  (uint32_t)sizeof(void*), WM_R_COUNT, WM_REF_SLOTS, WM_FRAME_SIZE,
+                              WM_HAS_FLOAT,   WM_HAS_I64,              WM_HAS_REF_TYPES, WM_PROFILE, WM_MAX_PAGES};
     uint32_t crc = wm_crc32(0xFFFFFFFFu, flags, sizeof(flags));
-    return ~wm_crc32(crc, handlers, WM_F_COUNT * (uint32_t)sizeof(uint16_t));
+    return ~wm_crc32(crc, handlers, WM_R_COUNT * (uint32_t)sizeof(uint16_t));
 }
 
 /* Predecoding is never built where program bytes need WM_RD8 (AVR): they are read as memory. */

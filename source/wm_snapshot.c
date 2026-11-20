@@ -158,7 +158,7 @@ static WmResult place_of(const WmInstance* inst, const WmRuntime* rt, WmFunc* fu
 {
     out->func = func;
     out->fp = (uint32_t)(fp - rt->stack);
-#if WM_REGISTER
+#if WM_PREDECODE
     /* Stopped in the loop in place inside a function of the register loop: its own side table, from 0. */
     if (inplace)
     {
@@ -351,13 +351,12 @@ static void set_place(const WmInstance* inst, WmRuntime* rt, const Place* p, WmF
 static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, uint8_t* inplace)
 {
     const WmModule* m = func->instance->module;
-    const WmCell* ip;
     WmResult result;
     if (!WM_RUNS_FAST(m))
         return NULL;
     if ((result = wm_code_load(func)))
         return result;
-#if WM_REGISTER
+#if WM_PREDECODE
     {
         /* A segment's start is its SEG; anywhere else (the top frame only) the loop in place goes on. */
         WmTail* tail;
@@ -378,14 +377,7 @@ static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, u
         *inplace = 1;
         return NULL;
     }
-#else
-    (void)inplace;
 #endif
-    if (!(ip = wm_fast_ip(m, func->code, (uint32_t)(*pc - m->bytes))))
-        return wm_snapshot_invalid;
-    *pc = (const uint8_t*)(const void*)ip;
-    *st = NULL;
-    return NULL;
 }
 #endif
 

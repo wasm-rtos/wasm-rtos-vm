@@ -61,18 +61,18 @@ static uint8_t* put_section(uint8_t* p, uint8_t id, const uint8_t* body, uint32_
     return p + size;
 }
 
-/* pairs of i32.const 1, drop: two cells each once predecoded. */
+/* pairs of memory.size, drop: a record of one cell each once predecoded. */
 static uint8_t* put_padding(uint8_t* p, uint32_t pairs)
 {
     for (uint32_t i = 0; i < pairs; ++i)
-        *p++ = 0x41, *p++ = 0x01, *p++ = 0x1A;
+        *p++ = 0x3F, *p++ = 0x00, *p++ = 0x1A;
     return p;
 }
 
 /*
- * func 0 "big" () -> (): 10000 pairs of padding, 80 KB of records.
+ * func 0 "big" () -> (): 20000 pairs of padding, 80 KB of records.
  * func 1 "grow" (i32) -> i32: memory.grow.
- * func 2 "padded" (i32) -> i32: 5000 pairs of padding, then memory.grow.
+ * func 2 "padded" (i32) -> i32: 10000 pairs of padding, then memory.grow.
  * One memory of one page.
  */
 static uint32_t make_module(uint8_t* out)
@@ -84,7 +84,7 @@ static uint32_t make_module(uint8_t* out)
     static const uint8_t exports[] = {3, 3, 'b', 'i', 'g', 0, 0, 4, 'g', 'r', 'o', 'w', 0, 1,
                                       6, 'p', 'a', 'd', 'd', 'e', 'd', 0, 2};
     static const uint8_t magic[] = {0, 'a', 's', 'm', 1, 0, 0, 0};
-    uint8_t body[60000];
+    uint8_t body[70000];
     uint8_t* c = code;
     uint8_t* b;
     uint8_t* p = out;
@@ -92,7 +92,7 @@ static uint32_t make_module(uint8_t* out)
     /* big */
     b = body;
     *b++ = 0;
-    b = put_padding(b, 10000);
+    b = put_padding(b, 20000);
     *b++ = 0x0B;
     c = put_leb(c, (uint32_t)(b - body));
     memcpy(c, body, (size_t)(b - body)), c += b - body;
@@ -104,7 +104,7 @@ static uint32_t make_module(uint8_t* out)
     /* padded */
     b = body;
     *b++ = 0;
-    b = put_padding(b, 5000);
+    b = put_padding(b, 10000);
     *b++ = 0x20, *b++ = 0, *b++ = 0x40, *b++ = 0, *b++ = 0x0B;
     c = put_leb(c, (uint32_t)(b - body));
     memcpy(c, body, (size_t)(b - body)), c += b - body;

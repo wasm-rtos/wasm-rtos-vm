@@ -1,0 +1,82 @@
+/*
+ * Experiment (decision 16): the register loop's records. Operands are slots
+ * of the frame (fp-relative: parameters, locals, then the stack by depth),
+ * so a record names where its values are instead of taking them from a
+ * stack pointer. WM_REC(NAME, name): a record, its handler r_name.
+ */
+#ifndef WM_REC
+#define WM_REC(NAME, name)
+#endif
+#ifndef WM_REC_LOAD
+#define WM_REC_LOAD(NAME, name, TYPE, OP) WM_REC(NAME, name)
+#endif
+#ifndef WM_REC_STORE
+#define WM_REC_STORE(NAME, name, TYPE, OP) WM_REC(NAME, name)
+#endif
+#ifndef WM_REC_I32
+#define WM_REC_I32(NAME, name) WM_REC(SS_##NAME, ss_##name) WM_REC(SC_##NAME, sc_##name)
+#endif
+
+WM_REC(UNREACHABLE, unreachable)
+/* A segment's start: the fuel of all its instructions, its offset in the module and its top. */
+WM_REC(SEG, seg)
+WM_REC(MOV, mov)
+WM_REC(MOVC, movc)
+WM_REC(JUMP, jump)
+WM_REC(BR, br)
+WM_REC(BR_IF, br_if)
+WM_REC(BR_UNLESS, br_unless)
+WM_REC(BR_TABLE, br_table)
+WM_REC(RETURN, return)
+WM_REC(CALL, call)
+WM_REC(CALL_INDIRECT, call_indirect)
+WM_REC(SELECT1, select1)
+WM_REC(SELECT, select)
+WM_REC(LOCAL_GET_W, local_get_w)
+WM_REC(LOCAL_SET_W, local_set_w)
+WM_REC(GLOBAL_GET1, global_get1)
+WM_REC(GLOBAL_SET1, global_set1)
+WM_REC(GLOBAL_GET, global_get)
+WM_REC(GLOBAL_SET, global_set)
+WM_REC(TABLE_GET, table_get)
+WM_REC(TABLE_SET, table_set)
+WM_REC(ACCESS, access)
+WM_REC_LOAD(LOAD32, load32, uint32_t, 0x28u)
+WM_REC_LOAD(LOAD8_S, load8_s, int8_t, 0x2Cu)
+WM_REC_LOAD(LOAD8_U, load8_u, uint8_t, 0x2Du)
+WM_REC_LOAD(LOAD16_S, load16_s, int16_t, 0x2Eu)
+WM_REC_LOAD(LOAD16_U, load16_u, uint16_t, 0x2Fu)
+WM_REC_STORE(STORE32, store32, uint32_t, 0x36u)
+WM_REC_STORE(STORE8, store8, uint8_t, 0x3Au)
+WM_REC_STORE(STORE16, store16, uint16_t, 0x3Bu)
+WM_REC(MEMORY_SIZE, memory_size)
+WM_REC(MEMORY_GROW, memory_grow)
+WM_REC(NUMERIC, numeric)
+WM_REC(SAT, sat)
+WM_REC(MISC, misc)
+WM_REC(REF_NULL, ref_null)
+WM_REC(REF_IS_NULL, ref_is_null)
+WM_REC(REF_FUNC, ref_func)
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) WM_REC_I32(NAME, name)
+#include "wm_ops.def"
+/* An i32 compare and a branch taken when it holds: slots, or a slot and a constant. */
+#ifndef WM_REC_CMP
+#define WM_REC_CMP(NAME, name) WM_REC(BRIF_SS_##NAME, brif_ss_##name) WM_REC(BRIF_SC_##NAME, brif_sc_##name)
+#endif
+WM_REC_CMP(EQZ, eqz)
+WM_REC_CMP(EQ, eq)
+WM_REC_CMP(NE, ne)
+WM_REC_CMP(LT_S, lt_s)
+WM_REC_CMP(LT_U, lt_u)
+WM_REC_CMP(GT_S, gt_s)
+WM_REC_CMP(GT_U, gt_u)
+WM_REC_CMP(LE_S, le_s)
+WM_REC_CMP(LE_U, le_u)
+WM_REC_CMP(GE_S, ge_s)
+WM_REC_CMP(GE_U, ge_u)
+
+#undef WM_REC
+#undef WM_REC_LOAD
+#undef WM_REC_STORE
+#undef WM_REC_I32
+#undef WM_REC_CMP

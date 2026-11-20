@@ -28,7 +28,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
 #if WM_PROFILE
     profile_start();
 #endif
-#if WM_REGISTER
+#if WM_PREDECODE
     /*
      * The loop in place runs part of a function of the register loop: where
      * fuel ends inside a segment, or a snapshot stopped. It keeps to that
@@ -43,10 +43,10 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
 #if WM_PREDECODE
     if (WM_RUNS_FAST((resume ? rt->saved.func : func)->instance->module))
     {
-#if !WM_REGISTER
+#if !WM_PREDECODE
         WmResult result = NULL;
 #endif
-#if WM_REGISTER
+#if WM_PREDECODE
         if (resume && rt->saved.inplace)
         {
             if ((result = wm_reg_tail(rt->saved.func->instance->module, rt->saved.func->code, &tail)))
@@ -59,7 +59,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         if (result)
             return result;
         result = run_fast(rt, func, resume);
-#if WM_REGISTER
+#if WM_PREDECODE
     fast_checked:
 #endif
         for (;;)
@@ -90,7 +90,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 }
                 rt->saved.pc = (const uint8_t*)(const void*)rt->saved.func->code->fast;
             }
-#if WM_REGISTER
+#if WM_PREDECODE
             else if (result == wm_fuel_short)
             {
                 /* Stopped at a segment's SEG, its frame the stack machine's: the loop in place counts what fuel is left. */
@@ -120,7 +120,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         }
     }
 #endif
-#if WM_REGISTER
+#if WM_PREDECODE
 in_place:;
 #endif
     uint32_t entry_depth = rt->depth;
@@ -146,7 +146,7 @@ in_place:;
     uint8_t fuel_on = rt->fuel_on && rt->nesting == 1u;
     uint32_t fuel = fuel_on ? rt->fuel : WM_NONE;
 
-#if WM_REGISTER
+#if WM_PREDECODE
 #define INPLACE_SIDE (mixed ? tail->side : inst->module->side)
 #else
 #define INPLACE_SIDE (inst->module->side)
@@ -190,7 +190,7 @@ in_place:;
     for (;;)
     {
         uint8_t op;
-#if WM_REGISTER
+#if WM_PREDECODE
         if (mixed)
         {
             const WmTailEntry* e = wm_reg_entry(tail, (uint32_t)(pc - bytes));
@@ -753,7 +753,7 @@ in_place:;
         rt->saved.st = st;
         rt->saved.fp = fp;
         rt->saved.sp = sp;
-#if WM_REGISTER
+#if WM_PREDECODE
         rt->saved.inplace = (uint8_t)mixed;
 #endif
         if (fuel_on)

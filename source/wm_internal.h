@@ -391,13 +391,6 @@ typedef union WmCell
     int32_t s32;
 } WmCell;
 
-/* The predecoded records' kinds, each the code of one handler (wm_ops.def). */
-enum
-{
-#define WM_RECORD(NAME, name) WM_F_##NAME,
-#include "wm_ops.def"
-    WM_F_COUNT
-};
 
 /*
  * Experiment (decision 16): what the loop in place needs to run part of a
@@ -831,17 +824,11 @@ void wm_module_predecode(WmModule* module);
 WmResult wm_code_load(WmFunc* func);
 WmResult wm_code_make(WmModule* module, WmCode* code, const WmSide* side);
 WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
-#ifndef WM_REGISTER
-#define WM_REGISTER 0
-#endif
-#if WM_REGISTER
-#if !WM_HAS_MMU
-#error "the register loop experiment runs the rare accesses through the memory functions: it needs WM_HAS_MMU"
-#endif
+#if WM_PREDECODE
 enum
 {
-#define REG(NAME, name) WM_R_##NAME,
-#include "wm_reg_ops.def"
+#define WM_REC(NAME, name) WM_R_##NAME,
+#include "wm_records.def"
     WM_R_COUNT
 };
 /* Experiment (decision 16): the register loop; the stack's height in slots before each instruction. */
@@ -881,7 +868,6 @@ void wm_code_remove_module(WmModule* module);
 /* The fast loop stopped at a call into a function without records: the frame is made, the records are not. */
 extern const char wm_code_stop[];
 int wm_fast_position(const WmModule* module, const WmCode* code, const WmCell* ip, uint32_t* offset, uint32_t* side);
-const WmCell* wm_fast_ip(const WmModule* module, const WmCode* code, uint32_t offset);
 
 /* Shared helpers. */
 /* CRC-32 (the polynomial of zlib and Ethernet) of data added to crc; start from 0xFFFFFFFF and invert at the end. */

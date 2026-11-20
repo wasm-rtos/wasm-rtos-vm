@@ -126,6 +126,8 @@ int main(int argc, char** argv)
     for (uint32_t i = 0; i < sizeof(limits) / sizeof(limits[0]); ++i)
     {
         wm_code_cache_limit(limits[i]);
+        /* The limit holds from the next records made: every function's are made again under it. */
+        wm_code_cache_trim(0);
         arg = 15;
         snprintf(what, sizeof(what), "cache %zu: fib(15) = 610", limits[i]);
         check(!wm_call(rt, export_func(g_inst, "fib"), &arg, &result) && result == 610, what);
