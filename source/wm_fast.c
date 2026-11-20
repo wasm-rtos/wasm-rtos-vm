@@ -938,6 +938,9 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
     const WmSide* st = side;
     const uint8_t* p;
     int dead = 0;
+    /* Segments: from a label, a call's return or a branch's way on to the next; fuel is charged by them. */
+    uint32_t seg_cell = UINT32_MAX, seg_count = 0;
+    int need_seg = 1;
     memset(&o, 0, sizeof(o));
     o.handlers = wm_fast_handlers();
     o.last = UINT32_MAX;
@@ -1004,6 +1007,23 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
         cell_at[at] = o.count;
         hn = next <= code->end ? heights[next - code->body] : 0u;
         top = B + h;
+        if (target[at] || need_seg)
+        {
+            if (seg_cell != UINT32_MAX)
+            {
+                if (seg_count > 0xFFFFu)
+                    o.error = WM_ERR_UNSUPPORTED("unsupported: a segment too long for the register loop");
+                o.cells[seg_cell].u32 = (o.cells[seg_cell].u32 & 0xFFFFu) | (seg_count << 16);
+            }
+            reg_flush(&o);
+            seg_cell = o.count;
+            seg_count = 0;
+            need_seg = 0;
+            reg_head(&o, WM_R_SEG, 0);
+            reg_put(&o, (uint32_t)(start - m->bytes));
+            reg_put(&o, top);
+        }
+        ++seg_count;
         head_cell = o.count;
         if (op == 0x05u || op == 0x0Bu)
         {
@@ -1025,6 +1045,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
             dead = 0;
             o.pending = 0;
             o.last = UINT32_MAX;
+            need_seg |= op == 0x05u;
             p = next;
             continue;
         }
@@ -1408,9 +1429,13 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
                     o.error = WM_ERR_UNSUPPORTED("unsupported: an instruction the register loop does not know");
             }
         }
+        /* What ends a segment: the next instruction starts one. */
+        need_seg |= op == 0x00u || op == 0x04u || (op >= 0x0Cu && op <= 0x11u);
         p = next;
     }
 #undef FIXUP
+    if (seg_cell != UINT32_MAX && !o.error)
+        o.cells[seg_cell].u32 = (o.cells[seg_cell].u32 & 0xFFFFu) | ((seg_count > 0xFFFFu ? 0xFFFFu : seg_count) << 16);
     for (uint32_t i = 0; !o.error && i < fixup_count; ++i)
     {
         uint32_t at = fixups[i].pc - (uint32_t)(code->body - m->bytes);

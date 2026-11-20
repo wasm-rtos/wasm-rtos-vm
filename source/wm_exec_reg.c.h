@@ -76,21 +76,36 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
         mem = inst->memory ? inst->memory->data : NULL;                                                        \
         mem_size = mem ? WM_MEMORY_SIZE(inst->memory) : 0;                                                     \
     } while (0)
+/* On to the next record; fuel is charged by segments (r_seg). */
 #define NEXT()                                                                                                 \
     do                                                                                                         \
     {                                                                                                          \
-        if (fuel-- == 0)                                                                                       \
+        cell = (ip++)->u32;                                                                                    \
+        goto *(void*)(base + (cell & 0xFFFFu));                                                                \
+    } while (0)
+/*
+ * On into the segment whose SEG record is at T, charging its fuel there
+ * instead of dispatching the SEG: what branches do. Short of fuel, stop at
+ * the SEG, where the frame is the stack machine's.
+ */
+#define ENTER(T)                                                                                               \
+    do                                                                                                         \
+    {                                                                                                          \
+        const WmCell* t_ = (T);                                                                                \
+        uint32_t n_ = t_->u32 >> 16;                                                                           \
+        if (__builtin_expect(fuel < n_, 0))                                                                    \
         {                                                                                                      \
             if (fuel_on)                                                                                       \
             {                                                                                                  \
-                fuel = 0;                                                                                      \
+                ip = t_;                                                                                       \
                 stop = wm_fuel_exhausted;                                                                      \
                 goto suspend;                                                                                  \
             }                                                                                                  \
-            fuel = WM_NONE - 1u;                                                                               \
+            fuel = WM_NONE;                                                                                    \
         }                                                                                                      \
-        cell = (ip++)->u32;                                                                                    \
-        goto *(void*)(base + (cell & 0xFFFFu));                                                                \
+        fuel -= n_;                                                                                            \
+        ip = t_ + 3;                                                                                           \
+        NEXT();                                                                                                \
     } while (0)
 #define IMM (cell >> 16)
 #define LO(C) ((C) & 0xFFFFu)
@@ -126,6 +141,20 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 
 r_unreachable:
     TRAP(WM_ERR_TRAP("trap: unreachable"));
+r_seg:
+    if (__builtin_expect(fuel < IMM, 0))
+    {
+        if (fuel_on)
+        {
+            --ip;
+            stop = wm_fuel_exhausted;
+            goto suspend;
+        }
+        fuel = WM_NONE;
+    }
+    fuel -= IMM;
+    ip += 2;
+    NEXT();
 r_mov:
     fp[IMM] = fp[(ip++)->u32];
     NEXT();
@@ -133,17 +162,12 @@ r_movc:
     fp[IMM] = (ip++)->u32;
     NEXT();
 r_jump:
-    ip = ip - 1 + ip[0].s32;
-    NEXT();
+    ENTER(ip - 1 + ip[0].s32);
 r_br_unless:
-    ip = fp[IMM] ? ip + 1 : ip - 1 + ip[0].s32;
-    NEXT();
+    ENTER(fp[IMM] ? ip + 1 : ip - 1 + ip[0].s32);
 r_br_if:
     if (!fp[IMM])
-    {
-        ip += 3;
-        NEXT();
-    }
+        ENTER(ip + 3);
     target = ip - 1 + ip[0].s32;
     keep = LO(ip[1].u32);
     drop = HI(ip[1].u32);
@@ -157,8 +181,7 @@ r_br:
 take:
     if (drop && keep)
         copy_slots(fp + top - keep - drop, fp + top - keep, keep);
-    ip = target;
-    NEXT();
+    ENTER(target);
 r_br_table:
 {
     uint32_t count = ip[0].u32;
@@ -182,11 +205,11 @@ r_return:
         return NULL;
     }
     frame = &rt->frames[--rt->depth];
-    ip = (const WmCell*)(const void*)frame->pc;
     fp = frame->fp;
     func = frame->func;
     REFRESH();
-    NEXT();
+    /* The caller's segment after the call. */
+    ENTER((const WmCell*)(const void*)frame->pc);
 }
 r_call:
     callee = inst->funcs[IMM];
@@ -403,20 +426,14 @@ r_ref_func:
     {                                                                                                          \
         uint32_t c1 = ip[0].u32;                                                                               \
         if (!i32_##name(fp[LO(c1)], fp[HI(c1)]))                                                               \
-        {                                                                                                      \
-            ip += 3;                                                                                           \
-            NEXT();                                                                                            \
-        }                                                                                                      \
+            ENTER(ip + 3);                                                                                     \
         goto brif_take;                                                                                        \
     }                                                                                                          \
     r_brif_sc_##name:                                                                                          \
     {                                                                                                          \
         uint32_t c1 = ip[0].u32;                                                                               \
         if (!i32_##name(fp[LO(c1)], (uint32_t)((int32_t)c1 >> 16)))                                            \
-        {                                                                                                      \
-            ip += 3;                                                                                           \
-            NEXT();                                                                                            \
-        }                                                                                                      \
+            ENTER(ip + 3);                                                                                     \
         goto brif_take;                                                                                        \
     }
 #define REG(NAME, name)
@@ -452,8 +469,7 @@ call:
             goto suspend;
         }
         code->used = 1;
-        ip = code->fast;
-        NEXT();
+        ENTER(code->fast);
     }
     if (callee->host)
     {
@@ -494,6 +510,7 @@ suspend:
     rt->suspended = 1;
     return stop;
 #undef IMM
+#undef ENTER
 #undef LO
 #undef HI
 #undef ADDR

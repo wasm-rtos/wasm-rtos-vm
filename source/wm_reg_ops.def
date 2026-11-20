@@ -18,6 +18,8 @@
 #endif
 
 REG(UNREACHABLE, unreachable)
+/* A segment's start: the fuel of all its instructions, its offset in the module and its top. */
+REG(SEG, seg)
 REG(MOV, mov)
 REG(MOVC, movc)
 REG(JUMP, jump)
