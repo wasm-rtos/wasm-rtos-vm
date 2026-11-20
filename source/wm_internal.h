@@ -399,6 +399,28 @@ enum
     WM_F_COUNT
 };
 
+/*
+ * Experiment (decision 16): what the loop in place needs to run part of a
+ * function that runs in the register loop, where fuel ends inside a
+ * segment or a snapshot stopped: the function's side table entries (its
+ * own, from 0), and the places the register loop can take over again.
+ */
+typedef struct WmTailEntry
+{
+    uint32_t offset;
+    uint32_t cell;
+    /* A call or return: the loop in place has charged its fuel. */
+    uint16_t charge;
+    /* Side table entries of the instructions before it. */
+    uint16_t sides;
+} WmTailEntry;
+typedef struct WmTail
+{
+    WmSide* side;
+    WmTailEntry* entries;
+    uint32_t count, capacity;
+} WmTail;
+
 typedef struct WmCode
 {
     const uint8_t* body;
@@ -427,6 +449,8 @@ typedef struct WmCode
     uint8_t pinned;
     /* fast points into the code image: nothing to free, not counted in the cache. */
     uint8_t mapped;
+    /* Register loop experiment: what the loop in place needs to run part of it (wm_reg_tail), or NULL. */
+    WmTail* tail;
 } WmCode;
 
 typedef struct WmLimits
@@ -727,6 +751,8 @@ typedef struct WmSuspended
     const WmSide* st;
     uint32_t* fp;
     uint32_t* sp;
+    /* Register loop experiment: stopped in the loop in place, inside a function of the register loop. */
+    uint8_t inplace;
 } WmSuspended;
 
 struct WmRuntime
@@ -820,6 +846,14 @@ enum
 };
 /* Experiment (decision 16): the register loop; the stack's height in slots before each instruction. */
 WmResult wm_code_heights(const WmModule* module, uint32_t index, uint16_t* heights);
+/* Side table entries of the instructions of code before offset (in the module). */
+uint32_t wm_reg_sides_before(const WmModule* module, const WmCode* code, uint32_t offset);
+/* The function's tail (WmCode.tail), made if it has none. */
+WmResult wm_reg_tail(WmModule* module, WmCode* code, WmTail** out);
+void wm_reg_tail_free(WmTail* tail);
+const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset);
+/* The register loop stopped at a segment it has not the fuel for: the loop in place goes on. */
+extern const char wm_fuel_short[];
 #endif
 /* What a function's operand stack and locals hold at one of its instructions (wm_code_stack). */
 typedef struct WmCodeStack

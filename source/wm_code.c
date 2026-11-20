@@ -57,6 +57,10 @@ static void wm_code_drop(WmCode* code)
     code->fast_cells = 0;
     code->used = 0;
     code->mapped = 0;
+#if WM_REGISTER
+    wm_reg_tail_free(code->tail);
+    code->tail = NULL;
+#endif
 }
 
 void wm_code_add_module(WmModule* m)

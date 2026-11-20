@@ -11,6 +11,7 @@ static uint16_t g_fast_offsets[WM_F_COUNT + WM_R_COUNT];
 static ptrdiff_t g_fast_shift;
 
 static const char wm_page_stop[] = "page fault";
+const char wm_fuel_short[] = "fuel short of a segment";
 
 static WmResult page_fault(WmRuntime* rt)
 {
@@ -98,7 +99,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
             if (fuel_on)                                                                                       \
             {                                                                                                  \
                 ip = t_;                                                                                       \
-                stop = wm_fuel_exhausted;                                                                      \
+                stop = wm_fuel_short;                                                                          \
                 goto suspend;                                                                                  \
             }                                                                                                  \
             fuel = WM_NONE;                                                                                    \
@@ -147,7 +148,7 @@ r_seg:
         if (fuel_on)
         {
             --ip;
-            stop = wm_fuel_exhausted;
+            stop = wm_fuel_short;
             goto suspend;
         }
         fuel = WM_NONE;
@@ -505,6 +506,7 @@ suspend:
     rt->saved.st = NULL;
     rt->saved.fp = fp;
     rt->saved.sp = fp + func->param_slots + func->code->local_slots + func->code->max_stack;
+    rt->saved.inplace = 0;
     if (fuel_on)
         rt->fuel = fuel;
     rt->suspended = 1;

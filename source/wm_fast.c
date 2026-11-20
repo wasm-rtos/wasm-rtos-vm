@@ -359,14 +359,14 @@ static void fuse(const uint16_t* handlers, WmCell* record, const uint8_t* kinds)
  * 8 bytes each, sorted by offset so the records can be matched in one walk.
  */
 #if WM_REGISTER
-static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side);
+static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail);
 #endif
 
 WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
 {
 #if WM_REGISTER
     if (1)
-        return reg_translate(m, code, side);
+        return reg_translate(m, code, side, NULL);
 #endif
     {
     const uint16_t* handlers = wm_fast_handlers();
@@ -923,7 +923,40 @@ static int reg_commutes(uint8_t op)
     return op == 0x46u || op == 0x47u || op == 0x6Au || op == 0x6Cu || op == 0x71u || op == 0x72u || op == 0x73u;
 }
 
-static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
+/* A place the register loop can be entered from the stack machine's frame: its offset in the module and its record. */
+static void reg_entry(WmTail* tail, uint32_t offset, uint32_t cell, uint32_t charge, uint32_t sides, WmResult* error)
+{
+    if (!tail || *error)
+        return;
+    if (sides > 0xFFFFu)
+    {
+        *error = WM_ERR_UNSUPPORTED("unsupported: a function too large for the register loop");
+        return;
+    }
+    if (tail->count == tail->capacity)
+    {
+        uint32_t capacity = tail->capacity ? tail->capacity * 2u : 32u;
+        WmTailEntry* grown = (WmTailEntry*)wm_realloc(tail->entries, capacity * sizeof(WmTailEntry));
+        if (!grown)
+        {
+            *error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
+            return;
+        }
+        tail->entries = grown;
+        tail->capacity = capacity;
+    }
+    tail->entries[tail->count].offset = offset;
+    tail->entries[tail->count].cell = cell;
+    tail->entries[tail->count].sides = (uint16_t)sides;
+    tail->entries[tail->count++].charge = (uint16_t)charge;
+}
+
+/*
+ * With tail, the function is translated again only for the places the
+ * register loop can be entered at (in order of offset): segment starts,
+ * and calls and returns, which flush first. Its records stay as they are.
+ */
+static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail)
 {
     uint32_t index = (uint32_t)(code - m->codes);
     const WmType* type = &m->types[m->func_types[m->func_imports + index]];
@@ -1006,6 +1039,9 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
             reg_flush(&o);
         cell_at[at] = o.count;
         hn = next <= code->end ? heights[next - code->body] : 0u;
+        /* An else or end after code that cannot be reached: branches arrive with the height after it. */
+        if (h == 0xFFFFu)
+            h = start == code->end ? type->result_slots : hn;
         top = B + h;
         if (target[at] || need_seg)
         {
@@ -1019,6 +1055,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
             seg_cell = o.count;
             seg_count = 0;
             need_seg = 0;
+            reg_entry(tail, (uint32_t)(start - m->bytes), seg_cell, 0, (uint32_t)(mine - side), &o.error);
             reg_head(&o, WM_R_SEG, 0);
             reg_put(&o, (uint32_t)(start - m->bytes));
             reg_put(&o, top);
@@ -1038,6 +1075,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
             if (start == code->end)
             {
                 head_cell = o.count;
+                reg_entry(tail, (uint32_t)(start - m->bytes), cell_at[at], 1, (uint32_t)(mine - side), &o.error);
                 reg_head(&o, WM_R_RETURN, B + type->result_slots);
             }
             else if (op == 0x05u)
@@ -1135,10 +1173,12 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
                 break;
             }
             case 0x0F:
+                reg_entry(tail, (uint32_t)(start - m->bytes), cell_at[at], 1, (uint32_t)(mine - side), &o.error);
                 reg_flush(&o);
                 reg_head(&o, WM_R_RETURN, top);
                 break;
             case 0x10:
+                reg_entry(tail, (uint32_t)(start - m->bytes), cell_at[at], 1, (uint32_t)(mine - side), &o.error);
                 reg_flush(&o);
                 reg_head(&o, WM_R_CALL, leb_u32(&p));
                 reg_put(&o, top);
@@ -1146,6 +1186,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
             case 0x11:
             {
                 uint32_t t = leb_u32(&p);
+                reg_entry(tail, (uint32_t)(start - m->bytes), cell_at[at], 1, (uint32_t)(mine - side), &o.error);
                 reg_flush(&o);
                 reg_head(&o, WM_R_CALL_INDIRECT, m->types[t].canon);
                 reg_put(&o, leb_u32(&p));
@@ -1446,7 +1487,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
     }
     if (!o.error && o.count > 0x7FFFu)
         o.error = E_DOES_NOT_FIT;
-    if (!o.error)
+    if (!o.error && !tail)
     {
         code->own = (WmCell*)wm_code_malloc((size_t)o.count * sizeof(WmCell));
         if (!code->own)
@@ -1464,5 +1505,68 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side)
     wm_free(cell_at);
     wm_free(target);
     return o.error;
+}
+
+/* Side table entries owned by the instructions of code before offset (in the module). */
+uint32_t wm_reg_sides_before(const WmModule* m, const WmCode* code, uint32_t offset)
+{
+    uint32_t count = 0;
+    for (const uint8_t* p = code->body; p <= code->end && (uint32_t)(p - m->bytes) < offset;)
+    {
+        uint32_t cells, sides;
+        p = step(code, p, &cells, &sides);
+        count += sides;
+    }
+    return count;
+}
+
+/* What the loop in place needs to run part of a function that runs predecoded: made once, kept with its records. */
+WmResult wm_reg_tail(WmModule* m, WmCode* code, WmTail** out)
+{
+    uint32_t index = (uint32_t)(code - m->codes);
+    WmTail* tail;
+    WmResult result;
+    if (code->tail)
+    {
+        *out = code->tail;
+        return NULL;
+    }
+    tail = (WmTail*)wm_calloc(1, sizeof(WmTail));
+    if (!tail)
+        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    if (!(result = wm_code_side(m, index, &tail->side)))
+        result = reg_translate(m, code, tail->side, tail);
+    if (result)
+    {
+        wm_reg_tail_free(tail);
+        return result;
+    }
+    code->tail = tail;
+    *out = tail;
+    return NULL;
+}
+
+void wm_reg_tail_free(WmTail* tail)
+{
+    if (!tail)
+        return;
+    wm_free(tail->side);
+    wm_free(tail->entries);
+    wm_free(tail);
+}
+
+/* The entry at offset, or NULL. */
+const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset)
+{
+    uint32_t low = 0, high = tail->count;
+    while (low < high)
+    {
+        uint32_t mid = low + (high - low) / 2u;
+        if (tail->entries[mid].offset < offset)
+            low = mid + 1u;
+        else
+            high = mid;
+    }
+    return low < tail->count && tail->entries[low].offset == offset ? &tail->entries[low] : NULL;
 }
 #endif
