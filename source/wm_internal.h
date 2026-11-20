@@ -410,13 +410,23 @@ typedef struct WmCode
     uint32_t max_stack;
     /* Slot offset of each local, then the total; NULL when every local takes one slot. */
     uint32_t* local_offsets;
-    /* Predecoded records, or NULL: made at the first call, dropped when the code cache needs room (wm_code.c). */
-    WmCell* fast;
+    /*
+     * Predecoded records, or NULL: made at the first call, dropped when the
+     * code cache needs room (wm_code.c). They are the cache's own (own, the
+     * same records) unless mapped: then they are in the module's code image.
+     */
+    union
+    {
+        const WmCell* fast;
+        WmCell* own;
+    };
     /* At most 0x7FFF: a longer function is not predecoded. */
     uint16_t fast_cells;
     /* For the code cache's CLOCK: called since the hand last passed; on a call stack right now. */
     uint8_t used;
     uint8_t pinned;
+    /* fast points into the code image: nothing to free, not counted in the cache. */
+    uint8_t mapped;
 } WmCode;
 
 typedef struct WmLimits
@@ -536,6 +546,9 @@ struct WmModule
 #if WM_PREDECODE
     /* The next module in the code cache, when this one runs predecoded. */
     struct WmModule* cached_next;
+    /* The code image the host mapped (wm_code_image_map), or NULL: its records, and where each function's start, then the end. */
+    const WmCell* image;
+    const uint32_t* image_index;
 #endif
 };
 
@@ -819,6 +832,8 @@ int wm_fast_position(const WmModule* module, const WmCode* code, const WmCell* i
 const WmCell* wm_fast_ip(const WmModule* module, const WmCode* code, uint32_t offset);
 
 /* Shared helpers. */
+/* CRC-32 (the polynomial of zlib and Ethernet) of data added to crc; start from 0xFFFFFFFF and invert at the end. */
+uint32_t wm_crc32(uint32_t crc, const void* data, uint32_t size);
 int wm_types_equal(const uint8_t* a, uint32_t a_count, const uint8_t* b, uint32_t b_count);
 /* Program bytes (read with WM_RD8) against bytes in RAM. */
 int wm_bytes_equal(const uint8_t* program, uint32_t program_count, const uint8_t* ram, uint32_t ram_count);

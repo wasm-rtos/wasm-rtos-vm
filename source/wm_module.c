@@ -1702,7 +1702,7 @@ uint32_t wm_module_code_bytes(const WmModule* m)
             const WmCode* c = &m->codes[i];
             if (c->local_offsets)
                 bytes += ((size_t)c->local_count + 1u) * sizeof(uint32_t);
-            if (c->fast)
+            if (c->fast && !c->mapped)
                 bytes += (size_t)c->fast_cells * sizeof(WmCell);
         }
     return (uint32_t)bytes;
@@ -1726,10 +1726,11 @@ void wm_module_predecode(WmModule* m)
     if (m->predecode_tried)
         return;
     m->predecode_tried = 1;
-    for (uint32_t i = 0; !predecoded && i < defined; ++i)
+    /* A code image was made from these functions: they can be (wm_code_image_map checked it). */
+    for (uint32_t i = 0; !predecoded && !m->image && i < defined; ++i)
     {
         predecoded = wm_code_make(m, &m->codes[i], m->side + m->codes[i].side);
-        wm_code_free(m->codes[i].fast);
+        wm_code_free(m->codes[i].own);
         m->codes[i].fast = NULL;
         m->codes[i].fast_cells = 0;
     }

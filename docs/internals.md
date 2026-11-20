@@ -80,6 +80,19 @@ store comes first). `memory.grow`, `memory.init`, `memory.copy` and
 `memory.fill` note the running function in `rt->caller` too, as they may
 make frames from inside the fast loop.
 
+With a code image mapped (decision 15, `wm_code_image_map`), a function
+without records copies them from the image instead of being validated and
+predecoded again; when no RAM can be had, even after dropping others, its
+records stay where they are in the image (`WmCode.mapped`: nothing to free,
+not counted). The hand passes such functions by, as they hold no RAM;
+`wm_code_cache_trim` lets them go, so their next call copies them in if
+there is room by then. The image is the records of every function, then
+the cell each one starts at, then a trailer of eight words: magic,
+version, the build's tag, the module's CRC-32 and size, the count of
+functions, the image's size and its CRC-32. The tag is a CRC-32 of the
+handlers' offsets and the flags predecoding follows; with validation,
+mapping makes each function's records again and compares them.
+
 Only called functions take RAM:
 
 | Program | All records | Records made |

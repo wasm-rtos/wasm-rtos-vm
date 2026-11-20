@@ -22,7 +22,7 @@ What was tried and not kept, with its numbers, is in
 | [12](#12-what-runs-is-counted-and-speed-is-guarded-by-counts) | What runs is counted, and speed is guarded by counts | 2026-11-16 | a profile of records and pairs; CI fails a change 2% slower |
 | [13](#13-hot-code-is-written-for-people-and-checked-by-its-machine-code) | Hot code is written for people, and checked by its machine code | 2026-11-16 | rules for the loops; fast loops as variants |
 | [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them | 2026-11-16 | 18 forms; CoreMark ESP32 +3.7%, Black Pill +8.8%; exact fuel and snapshots kept |
-| [15](#15-records-in-storage-the-processor-reads-ram-for-the-hot-ones) | Records in storage the processor reads, RAM for the hot ones | proposed | |
+| [15](#15-records-in-storage-the-processor-reads-ram-for-the-hot-ones) | Records in storage the processor reads, RAM for the hot ones | 2026-11-20 | code from flash with no RAM: ESP32 −3.2%, Black Pill −5.8%; short of RAM −1.6% instead of −48% |
 
 ## 1. The interpreter counts fuel itself
 
@@ -729,7 +729,7 @@ must write `tos` too when the local is the slot under an empty stack
 
 ## 15. Records in storage the processor reads, RAM for the hot ones
 
-**Proposed (2026-11-20).**
+**Decided and built (2026-11-20).**
 
 ### Problem
 
@@ -756,7 +756,10 @@ PSRAM: both are read by the processor as memory.
   CRC-32 of the handlers' offsets, the predecoding flags and the format;
   an image of another build is refused, and the module goes on as today
   (the host writes a new image), as Android remakes its `.oat` files
-  after an update of the runtime.
+  after an update of the runtime. The image is the records, then where
+  each function starts, then a trailer with the header's fields and the
+  CRC, so it is written in one pass, as a ZIP file's directory comes
+  last.
 - **Mapped** (`wm_code_image_map`): the host gives the image where the
   processor reads it, internal flash or PSRAM. A function without records
   in RAM runs from the image: no stop, no allocation, nothing made
@@ -764,7 +767,12 @@ PSRAM: both are read by the processor as memory.
   RAM (the hot ones, as ESP-IDF puts hot code in IRAM and AXFS copies hot
   pages); CLOCK drops the copy back to the image, never to nothing. The
   fast loop is the same: it reads records through `code->fast`, wherever
-  that points.
+  that points (its machine code is unchanged, by sha, on a Mac and on
+  Xtensa). A function that found no RAM even after CLOCK dropped others
+  stays in the image until the host trims the cache
+  (`wm_code_cache_trim`): letting the hand send such functions back to be
+  copied in made them stop the loop again and again when RAM was short
+  (ESP32 15.88 against 16.02).
 - **Checked as a snapshot is** (decision 11): the tag and the CRC always;
   with `WM_HAS_VALIDATION` each function's records are made once more at
   `wm_code_image_map` and compared, one function in RAM at a time, so a
@@ -802,10 +810,40 @@ PSRAM: both are read by the processor as memory.
 
 ### Checks
 
-- `test/`: an image written, mapped from a buffer, CoreMark and the spec
-  suite run from it, in slices of fuel and with the cache limited to
-  nothing; an image of another tag, a flipped byte, a cut image, all
-  refused; snapshots taken running from an image read back in place.
-- Fuzzing: `fuzz_image`, mapping images as the fuzzer makes them.
-- Boards: CoreMark from RAM, from the image only, and with the cache
-  limited; programs at once on the Black Pill.
+- `test/image.c`: calls from the image and copied in, through a host
+  function that empties the cache, in slices of fuel through snapshots,
+  and a snapshot taken running from the image gone on in an instance
+  without it; an image misaligned, cut, of another module or build, and
+  every word changed with its CRC made again, all refused (with
+  validation). Built plain, as for chips, without validation and without
+  predecoding.
+- The spec suite with every module's image mapped (`WM_SPEC_IMAGE`):
+  every function from the image, and copied in through a cache of one
+  byte. 1243 modules, all mapped.
+- Fuzzing: `fuzz_image` maps the fuzzer's bytes as the image of the
+  snapshot program and runs it (CRC not checked there): plain, as for
+  chips and paged, 16 million runs, nothing found.
+- `test/image.c` also found that the CLOCK hand, moving to the next
+  module, kept its place in the last one: modules after the first with no
+  more functions were never visited, their records never dropped. Fixed.
+
+### Measured
+
+CoreMark, 16 220 bytes of records; on the ESP32 (-O2) the image is in an
+app partition mapped as data, on the Black Pill in its last flash sector:
+
+| | ESP32 | Black Pill | Records in RAM |
+|---|---:|---:|---:|
+| In RAM, no image | 16.55 | 8.08 | 16 220 B |
+| From the image, no RAM for records | 16.02 (−3.2%) | 7.61 (−5.8%) | 0 |
+| The image, copied into RAM | 16.55 | 8.07 | 16 220 B |
+| A code cache of one byte, no image | 8.55 (−48%) | 4.46 (−45%) | 4 456 B |
+| A code cache of one byte, the image | 16.28 (−1.6%) | 7.94 (−1.7%) | 4 456 B |
+
+Starting the program (map and instantiate) on the ESP32: 32 ms without an
+image (instantiating predecodes every function once); with an image 36 ms
+with validation (every function made again and compared, and the CRCs),
+4 ms without. On the Black Pill 68 ms without an image, 75 ms with one,
+validated. Writing the image to flash: 128 ms on the ESP32, 401 ms on the
+Black Pill (a byte at a time). The Uno's flash is the same
+(35 512 bytes): predecoding is not built there.

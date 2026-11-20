@@ -5,7 +5,7 @@
 # grows in build/fuzz/corpus-<target>; crashes land in build/fuzz/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-target="${1:?usage: tools/fuzz.sh load|run|diff|snapshot [seconds] [plain|chips|paged]}"
+target="${1:?usage: tools/fuzz.sh load|run|diff|snapshot|image [seconds] [plain|chips|paged]}"
 seconds="${2:-60}"
 build="${3:-plain}"
 SPEC="${SPEC:-$HOME/wasm-rtos/third-party/spec-2.0/json}"
@@ -25,7 +25,7 @@ case "$target" in
 esac
 out=build/fuzz
 mkdir -p "$out/corpus-$target"
-if [ "$target" = snapshot ]; then
+if [ "$target" = snapshot ] || [ "$target" = image ]; then
     xxd -i test/fuzz/snapshot.wasm > "$out/snapshot_wasm.h"
 fi
 # shellcheck disable=SC2086
@@ -33,7 +33,12 @@ fi
     -I"$out" $flags \
     source/*.c "test/fuzz/fuzz_$target.c" -lm -o "$out/fuzz_$target-$build"
 max_len=65536
-if [ "$target" != snapshot ]; then
+if [ "$target" = image ]; then
+    # The real image of the program to start from.
+    mkdir -p "$out/seeds-image"
+    FUZZ_SEEDS="$out/seeds-image" "$out/fuzz_$target-$build" -runs=0 "$out/seeds-image" >/dev/null 2>&1
+    seeds=("$out/seeds-image")
+elif [ "$target" != snapshot ]; then
     seeds=(test)
     [ -d "$SPEC" ] && seeds+=("$SPEC")
 else

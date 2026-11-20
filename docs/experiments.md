@@ -46,6 +46,7 @@ the build before the experiment; ±0 is within noise.
 | [All records at load, or none](#all-records-at-load-or-none) | replaced by a cache | 12 → 18 programs | | 6 → 9 programs |
 | [A compact loop on the ESP32](#a-compact-loop-on-the-esp32) | kept | queue 89 → 53 ms | | |
 | [Records read from flash](#records-read-from-flash) | kept, as decision 15 | −3.1% | | −5.7% |
+| [Functions without room sent back to be copied in](#functions-without-room-sent-back-to-be-copied-in) | rejected | −0.9% | | |
 | **Checks** | | | | |
 | [Writing the fuel back at every trap](#writing-the-fuel-back-at-every-trap) | rejected on paper | | | |
 | [Trusting snapshots, with a CRC only](#trusting-snapshots-with-a-crc-only) | rejected | | | |
@@ -465,6 +466,23 @@ flash accelerator (STM32): a few percent, against a factor of two or three
 for a function that runs in place. Making CoreMark's records again
 (instantiating, which predecodes every function once) takes 277 µs on a
 Mac.
+
+### Functions without room sent back to be copied in
+
+**Rejected** · 2026-11-20
+
+**Tried.** The CLOCK hand letting go of functions that ran from the code
+image because there was no RAM for them, so that their next call copies
+them in if there is room by then.
+
+| ESP32, CoreMark from the image, no RAM for records | CoreMark |
+|---|---:|
+| sent back by the hand | 15.88 |
+| kept in the image until the host trims the cache | 16.02 |
+
+**Found.** With RAM short, every allocation for records sends the hand
+round, and it sent those functions back to stop the loop at their next
+call, again and again. `wm_code_cache_trim` lets them go instead.
 
 ## Checks
 

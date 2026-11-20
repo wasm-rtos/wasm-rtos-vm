@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Code images** (decision 15): a module's decoded code written once to
+  flash or PSRAM (`wm_code_image_write`) and mapped from there
+  (`wm_code_image_map`). The code cache copies the hot functions into RAM
+  and drops them back to the image; a function without room runs from the
+  image. CoreMark from the image with no RAM for code: ESP32 16.02 (16.55
+  in RAM), Black Pill 7.61 (8.08); with a code cache of one byte 16.28 and
+  7.94, against 8.55 and 4.46 without an image. Checked like a snapshot: the build's tag and a CRC, and with
+  validation every function's records made again and compared.
+- **Fixed**: the code cache's CLOCK hand skipped every module after the
+  first that had no more functions than it, so their records were never
+  dropped.
 - **The paged path faster**: an addend in each TLB entry, as QEMU has,
   and the fused loads working on paged memories too. CoreMark with every
   memory paged +6.1% on ESP32, +4.6% on a Mac; memory in one block +0.7%

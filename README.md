@@ -36,7 +36,9 @@ while (r == wm_fuel_exhausted)          /* stopped between two instructions */
 - **Code as a cache.** A function is decoded for the fast loop at its first
   call, and the decoded form is dropped again when memory runs short, so
   only the code that runs takes RAM, and a board too small for all of it
-  still runs fast.
+  still runs fast. Written once to flash or PSRAM as a code image, the
+  decoded code runs from there with no RAM at all (CoreMark 3% slower on
+  an ESP32), and RAM holds copies of the hot functions only.
 - **Small.** On an ATmega328P (Uno): 34.7 KB of flash and 172 B of static
   RAM for the whole standard; less without the parts a program does not
   need. Values live in 32-bit slots, so stacks stay small on 8- and 32-bit
@@ -301,6 +303,11 @@ void   wm_set_code_allocator(WmAllocator allocator);    /* for decoded code, sha
 void   wm_code_cache_limit(size_t bytes);               /* 0: as much as memory allows */
 size_t wm_code_cache_bytes(void);
 size_t wm_code_cache_trim(size_t keep);
+
+/* Code images: decoded code in storage the processor reads (flash, PSRAM), for this build only. */
+WmResult wm_code_image_write(WmModule* module, WmSnapshotWrite write, void* context);
+WmResult wm_code_image_map(WmModule* module, const void* image, uint32_t size);   /* 4-byte aligned */
+extern const char wm_code_image_invalid[];   /* another module or build, or damaged: write a new one */
 ```
 
 ### dylink.0 (`wm_dylink.h`)

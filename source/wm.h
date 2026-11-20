@@ -416,6 +416,29 @@ WmResult wm_snapshot_write_state(const WmRuntime* runtime, const WmInstance* ins
 WmResult wm_snapshot_read(WmRuntime* runtime, WmInstance* instance, WmSnapshotRead read, void* context);
 extern const char wm_snapshot_invalid[];
 
+/*
+ * Code images (decision 15): a module's predecoded records, written once to
+ * storage the processor reads as memory (internal flash, PSRAM) and mapped
+ * from there. A function whose records are not in RAM then runs from the
+ * image instead of being validated and predecoded again: the code cache
+ * copies records in from it while there is room and drops them back to it.
+ * A function that found no room runs from the image until the cache is
+ * trimmed (wm_code_cache_trim), when RAM may have room again.
+ * An image fits only the module and the build that wrote it; anything
+ * else is refused with wm_code_image_invalid and the module goes on
+ * without it (write a new one).
+ *
+ * wm_code_image_write: through write as a snapshot is, one function in RAM
+ * at a time; refused for a module that cannot be predecoded.
+ * wm_code_image_map: image 4-byte aligned, valid until wm_module_free;
+ * before the first instance it also saves predecoding every function to
+ * start. With validation each function's records are made again and
+ * compared, so an image is never trusted unchecked.
+ */
+WmResult wm_code_image_write(WmModule* module, WmSnapshotWrite write, void* context);
+WmResult wm_code_image_map(WmModule* module, const void* image, uint32_t size);
+extern const char wm_code_image_invalid[];
+
 #ifdef __cplusplus
 }
 #endif
