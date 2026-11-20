@@ -5,7 +5,7 @@
 - **The paged path faster**: an addend in each TLB entry, as QEMU has,
   and the fused loads working on paged memories too. CoreMark with every
   memory paged +6.1% on ESP32, +4.6% on a Mac; memory in one block +0.7%
-  on ESP32.
+  on ESP32, +0.4% on a Black Pill.
 - **Forms** (decision 14): an i32 instruction with its operands in the
   records before it, a local or a constant, and its result into a local,
   in one dispatch, fuel and snapshots exact as before. 18 forms chosen by

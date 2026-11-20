@@ -320,12 +320,15 @@ paged memories to the plain records.
 | ESP32 -O2, every memory paged | 13.39 | 14.11 | 14.21 (+6.1%) |
 | Mac plain, one block / paged | 3144 / 2760 | | 3138 / 2886 (+4.6%) |
 | Mac as for chips, one block | 3195 | | 3160 (−1.1%) |
+| Black Pill, memory in one block | 8.05 | | 8.08 |
 
 **Found.** The first version set the address to NULL and tested it after
 the lookup: a test more on every access of a memory in one block, −3% on
 ESP32. Kept: the bounds check first and alone, the TLB only in its else.
 The Mac as for chips loses 1.1% with the fused loads put back as they were
 too, so it is the layout of the loop there; the chips themselves gain.
+The x86 runner in CI counts 2.2% more machine instructions each as for
+chips (11.83 to 12.09) and 3.3% fewer plain: the same layout.
 
 ### The TLB and its space in the loop's state
 
