@@ -640,7 +640,8 @@ typedef struct WmTlbEntry
 {
     uint32_t tag;
     uint32_t wtag;
-    uint8_t* frame;
+    /* The host address of an address ea in the frame is ea + addend, as in QEMU's TLB: no masking on a hit. */
+    uintptr_t addend;
 } WmTlbEntry;
 
 typedef struct WmTlb

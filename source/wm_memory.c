@@ -884,7 +884,7 @@ WmResult wm_page_fault(WmTlb* tlb, WmMemory* memory, uint32_t address, uint32_t 
     e->tag = (ea & WM_FRAME_MASK) | ((uint32_t)memory->space << 3);
     /* Stores go through once the frame is dirty (or nothing stores it). */
     e->wtag = !memory->marks || (memory->marks[ea >> WM_FRAME_LOG2] & WM_MARK_DIRTY) ? e->tag : WM_TLB_EMPTY;
-    e->frame = frame;
+    e->addend = (uintptr_t)frame - (uintptr_t)(ea & WM_FRAME_MASK);
     return NULL;
 }
 

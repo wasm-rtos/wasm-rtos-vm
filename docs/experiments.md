@@ -35,6 +35,8 @@ the build before the experiment; ±0 is within noise.
 | [A call from a handler](#a-call-from-a-handler) | rejected | −15% | | |
 | **Memory and paging** | | | | |
 | [A window of memory in registers](#a-window-of-memory-in-registers) | rejected | −7.7% | −1% | +2.4% |
+| [The paged path: an addend and fused loads](#the-paged-path-an-addend-and-fused-loads) | kept | paged +6.1% | paged +4.6% | |
+| [The TLB and its space in the loop's state](#the-tlb-and-its-space-in-the-loops-state) | rejected | block −0.7% | | |
 | [A TLB of 16 entries, not 64](#a-tlb-of-16-entries-not-64) | kept | | ±0 | |
 | [Every memory paged once there is a pager](#every-memory-paged-once-there-is-a-pager) | replaced | | −10% | |
 | [A block gathered from the heap](#a-block-gathered-from-the-heap) | replaced by a pool | no block | | |
@@ -301,6 +303,50 @@ registers before the TLB.
 
 **Why.** It loses on the ESP32: too few registers, the window goes to the
 stack.
+
+### The paged path: an addend and fused loads
+
+**Kept** · 2026-11-16
+
+**Tried.** A TLB entry holding an addend, as QEMU's does (the host
+address is `ea + addend`, no masking on a hit), and the fused
+`local.get`-and-load records going through the TLB too instead of leaving
+paged memories to the plain records.
+
+| CoreMark | main | First version | Kept |
+|---|---:|---:|---:|
+| ESP32 -O2, memory in one block | 16.44 | 15.95 | 16.55 |
+| ESP32 -Os, memory in one block | 14.09 | | 14.23 |
+| ESP32 -O2, every memory paged | 13.39 | 14.11 | 14.21 (+6.1%) |
+| Mac plain, one block / paged | 3144 / 2760 | | 3138 / 2886 (+4.6%) |
+| Mac as for chips, one block | 3195 | | 3160 (−1.1%) |
+| Black Pill, memory in one block | 8.05 | | 8.08 |
+
+**Found.** The first version set the address to NULL and tested it after
+the lookup: a test more on every access of a memory in one block, −3% on
+ESP32. Kept: the bounds check first and alone, the TLB only in its else.
+The Mac as for chips loses 1.1% with the fused loads put back as they were
+too, so it is the layout of the loop there; the chips themselves gain.
+The x86 runner in CI counts 2.2% more machine instructions each as for
+chips (11.83 to 12.09) and 3.3% fewer plain: the same layout.
+
+### The TLB and its space in the loop's state
+
+**Rejected** · 2026-11-16
+
+**Tried.** The TLB pointer and the memory's space in variables of the
+fast loop, set where `mem` and `mem_size` are, so an access needs neither
+`rt->tlb` nor `inst->memory->space`.
+
+| ESP32 CoreMark | Without | With |
+|---|---:|---:|
+| -O2, memory in one block | 16.55 | 16.33 (−1.3%) |
+| -Os, memory in one block | 14.23 | 14.22 |
+| -O2, every memory paged | 14.21 | 14.76 (+3.9%) |
+
+**Why not.** Memory in one block is the common case and loses: two more
+values in the loop's state on Xtensa, where its registers are few, as the
+window of memory in registers before.
 
 ### A TLB of 16 entries, not 64
 
