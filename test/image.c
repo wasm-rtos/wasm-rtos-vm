@@ -185,6 +185,9 @@ int main(int argc, char** argv)
     {
         /* As with UBSan, which makes the interpreter too large: nothing to test. */
         printf("SKIP the module runs in place: %s\n", wm_module_predecoded(module));
+        wm_module_free(module);
+        wm_runtime_free(rt);
+        wm_host_function_free(g_back);
         return 0;
     }
     check(!r && g_code_size > 32u && g_code_size % 4u == 0, "an image written before the first instance");
