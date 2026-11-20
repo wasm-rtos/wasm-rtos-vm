@@ -311,6 +311,14 @@ static void fuse(const uint16_t* handlers, WmCell* record, const uint8_t* kinds)
         {RUN2(WM_F_LOCAL_GET1, WM_F_LOCAL_GET1), WM_F_GET_GET},
         {RUN2(WM_F_LOCAL_SET1, WM_F_LOCAL_GET1), WM_F_SET_GET},
         {RUN2(WM_F_LOCAL_TEE1, WM_F_CONST16), WM_F_TEE_CONST},
+        {{WM_F_LOCAL_SET1, WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_ADD}, WM_F_SET_GET_CONST_ADD},
+        {RUN3(WM_F_LOCAL_SET1, WM_F_LOCAL_GET1, WM_F_LOCAL_GET1), WM_F_SET_GET_GET},
+        {RUN3(WM_F_LOCAL_TEE1, WM_F_CONST16, WM_F_SHR_U), WM_F_TEE_CONST_SHR_U},
+        {RUN3(WM_F_LOCAL_TEE1, WM_F_CONST16, WM_F_XOR), WM_F_TEE_CONST_XOR},
+        {RUN2(WM_F_LOCAL_TEE1, WM_F_I32_LOAD), WM_F_TEE_LOAD},
+        {RUN2(WM_F_LOCAL_GET1, WM_F_LOCAL_TEE1), WM_F_GET_TEE},
+        {RUN2(WM_F_LOCAL_GET1, WM_F_I32_STORE), WM_F_GET_STORE},
+        {RUN2(WM_F_LOCAL_GET1, WM_F_BR_TABLE), WM_F_GET_BR_TABLE},
 #if WM_FUSE
         /* Branches with what decides them: a loss where branch prediction is good. */
         {RUN3(WM_F_LOCAL_SET1, WM_F_LOCAL_GET1, WM_F_BR_IF), WM_F_SET_GET_BR_IF},
@@ -323,6 +331,9 @@ static void fuse(const uint16_t* handlers, WmCell* record, const uint8_t* kinds)
         {RUN2(WM_F_EQ, WM_F_IF), WM_F_EQ_IF},
         {RUN2(WM_F_NE, WM_F_IF), WM_F_NE_IF},
         {RUN2(WM_F_EQZ, WM_F_IF), WM_F_EQZ_IF},
+        {{WM_F_LOCAL_GET1, WM_F_LOCAL_SET1, WM_F_LOCAL_GET1, WM_F_BR_IF}, WM_F_GET_SET_GET_BR_IF},
+        {{WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_EQ, WM_F_BR_IF}, WM_F_GET_CONST_EQ_BR_IF},
+        {{WM_F_LOCAL_GET1, WM_F_CONST16, WM_F_NE, WM_F_IF}, WM_F_GET_CONST_NE_IF},
 #endif
     };
     uint32_t best = 0;

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Moves fused with what takes them next**: eleven records chosen by the
+  profile (a local set, got or teed together with the add, shift, load,
+  store, compare or branch after it). CoreMark records run −12.4%; ESP32
+  +7.7% (-Os +8.2%), Black Pill +11.0%, Mac +7.5%.
 - **Code images** (decision 15): a module's decoded code written once to
   flash or PSRAM (`wm_code_image_write`) and mapped from there
   (`wm_code_image_map`). The code cache copies the hot functions into RAM
