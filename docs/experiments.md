@@ -45,6 +45,7 @@ the build before the experiment; ±0 is within noise.
 | [Records in 32-bit cells](#records-in-32-bit-cells) | kept, a trade | −6% | −11% | −8%, in the OS ×2.06 |
 | [All records at load, or none](#all-records-at-load-or-none) | replaced by a cache | 12 → 18 programs | | 6 → 9 programs |
 | [A compact loop on the ESP32](#a-compact-loop-on-the-esp32) | kept | queue 89 → 53 ms | | |
+| [Records read from flash](#records-read-from-flash) | kept, as decision 15 | −3.1% | | −5.7% |
 | **Checks** | | | | |
 | [Writing the fuel back at every trap](#writing-the-fuel-back-at-every-trap) | rejected on paper | | | |
 | [Trusting snapshots, with a CRC only](#trusting-snapshots-with-a-crc-only) | rejected | | | |
@@ -443,6 +444,27 @@ pushed the kernel's code out of it.
 | before | 45 ms |
 | larger loop | 89 ms |
 | compact loop | 53 ms |
+
+### Records read from flash
+
+**Kept, as decision 15** · 2026-11-20
+
+**Tried.** CoreMark's records made in RAM, written to flash, and every
+function pointed at its copy there (memory-mapped: an ESP32 app partition,
+the Black Pill's last sector), against the same records in RAM, on one
+instance in the same run. The loop only reads records, so nothing else
+changed.
+
+| CoreMark, 16 220 B of records | RAM | Flash | RAM again |
+|---|---:|---:|---:|
+| ESP32 -O2 | 16.55 | 16.03 (−3.1%) | 16.55 |
+| Black Pill | 8.07 | 7.61 (−5.7%) | 8.07 |
+
+**Found.** Reading records goes through the flash cache (ESP32) or the
+flash accelerator (STM32): a few percent, against a factor of two or three
+for a function that runs in place. Making CoreMark's records again
+(instantiating, which predecodes every function once) takes 277 µs on a
+Mac.
 
 ## Checks
 
