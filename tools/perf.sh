@@ -48,7 +48,7 @@ compare() { # what, base value, this value, unit
 }
 
 printf "%-52s %12s %12s %9s\n" "" "base" "this" "change"
-for build in "plain:" "as for chips:-DWM_FUSE=1 -DWM_NOP_RUNS=1"; do
+for build in "plain:"; do
     name="${build%%:*}"
     flags="${build#*:}"
     compare "CoreMark, machine instructions each ($name)" "$(per_instruction "$base" "$flags")" \

@@ -420,6 +420,15 @@ static WmResult snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSn
     if (!rt->suspended || saved->entry_depth != 0 || func_index(inst, saved->entry) == WM_NONE)
         return WM_ERR_UNSUPPORTED("unsupported: snapshots are of a suspended call of one instance");
     stack_slots = (uint32_t)(saved->sp - rt->stack);
+#if WM_PREDECODE
+    /* Stopped at a segment of the register loop: where its stack's top is, the function's tail says. */
+    if (!saved->inplace && saved->pc && WM_RUNS_FAST(saved->func->instance->module))
+    {
+        const WmTailEntry* e = wm_reg_segment(saved->func, (const WmCell*)(const void*)saved->pc);
+        if (e)
+            stack_slots = (uint32_t)(saved->fp + e->top - rt->stack);
+    }
+#endif
     places = (Place*)wm_malloc(((size_t)rt->depth + 1u) * sizeof(Place));
     if (!places)
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");

@@ -26,6 +26,8 @@ the build before the experiment; ±0 is within noise.
 | [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | +8.8% |
 | [Moves fused with what takes them next](#moves-fused-with-what-takes-them-next) | kept, 11 records | +7.7% | +7.5% chips | +11.0% |
 | [A register loop, as a prototype](#a-register-loop-as-a-prototype) | upper bound, above the bar | +17.3% (-Os +35.8%) | +16.2% | +12.4% |
+| [Fuel by segment: a record of its own, or in the branches](#fuel-by-segment-a-record-of-its-own-or-in-the-branches) | kept in the branches | +13.6% | −2.6% | |
+| [The loop in place finding its place by walking the function](#the-loop-in-place-finding-its-place-by-walking-the-function) | rejected | | −12% in slices | |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
@@ -247,6 +249,40 @@ instruction, snapshots are not made, and memory must be in one block.
 ESP32 gains most: the register loop's handlers are short, and the
 compiler builds them as well at -Os as at -O2. What an exact version
 costs is in decision 16.
+
+### Fuel by segment: a record of its own, or in the branches
+
+**Kept in the branches** · 2026-11-21
+
+**Tried.** The register loop charging fuel by segments instead of a test
+before every record: first with a `SEG` record at each segment's start,
+then with branches, calls and returns charging the segment they go to and
+stepping past its `SEG`.
+
+| CoreMark | Fuel by the record | A `SEG` record | In branches, calls, returns |
+|---|---:|---:|---:|
+| Mac | 3933 | 3668 (−6.7%) | 3832 (−2.6%, near noise) |
+| ESP32 -O2 | 20.91 | 22.43 (+7.3%) | 23.76 (+13.6%) |
+
+**Found.** CoreMark's segments are one or two records long: a dispatch of
+its own for the fuel costs more than the test it saves where branch
+prediction makes that test free. Charged by the branch that is taken
+anyway, it costs nearly nothing.
+
+### The loop in place finding its place by walking the function
+
+**Rejected** · 2026-11-21
+
+**Tried.** Where a segment is short of fuel, the side table position for the
+loop in place counted by walking the function from its start each time.
+
+| Mac CoreMark, slices of 10 000 (the kernel's) | CoreMark |
+|---|---:|
+| walking the function each time | 3176 |
+| the position kept with each place (`WmTailEntry.sides`) | 3600 |
+
+**Found.** A slice of the kernel is a few microseconds on a Mac; walking a
+function at each one cost a tenth of it.
 
 ### Records of their own for 64-bit instructions
 

@@ -109,7 +109,7 @@ jobs:
           -DWM_HAS_FLOAT=0
           -DWM_HAS_TRACE=0
           -DWM_HAS_ALLOCATOR=0
-          -DWM_FUSE=1 -DWM_NOP_RUNS=1
+          -DWM_FUSE=1
           -DWM_INLINE_OPS=0
           -DWM_PROFILE=1
           -DWM_FRAME_SIZE=0 -DWM_PREDECODE=0 -DWM_HAS_TRACE=0 -DWM_TERSE_ERRORS=1

@@ -21,7 +21,7 @@ What was tried and not kept, with its numbers, is in
 | [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
 | [12](#12-what-runs-is-counted-and-speed-is-guarded-by-counts) | What runs is counted, and speed is guarded by counts | 2026-11-16 | a profile of records and pairs; CI fails a change 2% slower |
 | [13](#13-hot-code-is-written-for-people-and-checked-by-its-machine-code) | Hot code is written for people, and checked by its machine code | 2026-11-16 | rules for the loops; fast loops as variants |
-| [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them | 2026-11-16 | 18 forms; CoreMark ESP32 +3.7%, Black Pill +8.8%; exact fuel and snapshots kept |
+| [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them (replaced by 16) | 2026-11-16 | 18 forms; CoreMark ESP32 +3.7%, Black Pill +8.8%; exact fuel and snapshots kept |
 | [15](#15-records-in-storage-the-processor-reads-ram-for-the-hot-ones) | Records in storage the processor reads, RAM for the hot ones | 2026-11-20 | code from flash with no RAM: ESP32 −3.2%, Black Pill −5.8%; short of RAM −1.6% instead of −48% |
 | [16](#16-operands-in-slots-fixed-by-depth-in-records-that-overlay-the-stacks) | Operands in slots fixed by depth, in records that overlay the stack's | proposed | |
 
@@ -52,6 +52,14 @@ with other pointer sizes.
 **Instead.** A compiler to a denser form (registers, superinstructions that
 drop records): faster on paper, but positions would no longer map back, and
 snapshots and fuel would depend on the build.
+
+**Amended by decision 16 (2026-11-21).** What this decision is for stays:
+fuel is the module's instructions, and positions are the module's, in every
+build. How it holds changed: the register loop's records stand for several
+instructions each, and it stops only where its frame is the stack
+machine's (a segment's start); fuel is charged by segments, and the loop in
+place counts the rest of one exactly. Positions convert there, and anywhere
+else the loop in place runs.
 
 ## 3. Code is a cache
 
@@ -640,6 +648,10 @@ clever as it needs and still be learned from the plain one.
 ## 14. Operands in records, as overlays on them
 
 **Decided and built (2026-11-16).**
+
+**Replaced by decision 16 (2026-11-21).** The register loop names its
+operands directly and leaves out the moves without forms; the forms and
+fused records went with the stack loop. What follows is how they were.
 
 ### Problem
 

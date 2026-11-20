@@ -155,27 +155,16 @@ void wm_free(void* ptr);
 #endif
 #endif
 /*
- * Fusing the commonest instruction pairs saves a dispatch but costs a test:
- * a gain on microcontrollers, a loss where branch prediction makes dispatch
- * cheap (desktop and server processors), so it is off there.
+ * The loop in place fusing the commonest instruction pairs saves a dispatch
+ * but costs a test: a gain on microcontrollers, a loss where branch
+ * prediction makes dispatch cheap (desktop and server processors), so it
+ * is off there.
  */
 #ifndef WM_FUSE
 #if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
 #define WM_FUSE 0
 #else
 #define WM_FUSE 1
-#endif
-#endif
-/*
- * Runs of block, loop, end and nop skipped by one handler, their fuel paid
- * at once: fewer dispatches, but on processors with branch prediction those
- * dispatches help predict the next ones, so it is off there.
- */
-#ifndef WM_NOP_RUNS
-#if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
-#define WM_NOP_RUNS 0
-#else
-#define WM_NOP_RUNS 1
 #endif
 #endif
 /*
@@ -402,10 +391,12 @@ typedef struct WmTailEntry
 {
     uint32_t offset;
     uint32_t cell;
-    /* A call or return: the loop in place has charged its fuel. */
-    uint16_t charge;
     /* Side table entries of the instructions before it. */
     uint16_t sides;
+    /* The stack's top there, fp-relative. */
+    uint16_t top;
+    /* A call or return: the loop in place has charged its fuel. */
+    uint8_t charge;
 } WmTailEntry;
 typedef struct WmTail
 {
@@ -831,7 +822,7 @@ enum
 #include "wm_records.def"
     WM_R_COUNT
 };
-/* Experiment (decision 16): the register loop; the stack's height in slots before each instruction. */
+/* The register loop (decision 16): the stack's height in slots before each instruction, in their order. */
 WmResult wm_code_heights(const WmModule* module, uint32_t index, uint16_t* heights);
 /* Side table entries of the instructions of code before offset (in the module). */
 uint32_t wm_reg_sides_before(const WmModule* module, const WmCode* code, uint32_t offset);
@@ -839,6 +830,9 @@ uint32_t wm_reg_sides_before(const WmModule* module, const WmCode* code, uint32_
 WmResult wm_reg_tail(WmModule* module, WmCode* code, WmTail** out);
 void wm_reg_tail_free(WmTail* tail);
 const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset);
+/* The segment start whose SEG is the record at ip of func (its tail made if need be), or NULL. */
+const WmTailEntry* wm_reg_segment(WmFunc* func, const WmCell* ip);
+const WmTailEntry* wm_reg_at_cell(const WmTail* tail, uint32_t cell);
 /* The stack machine's frame at the memory access whose record is at cell; its offset and top. */
 WmResult wm_reg_stack_at(WmModule* module, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top);
 /* The register loop stopped at a segment it has not the fuel for: the loop in place goes on. */
@@ -862,6 +856,7 @@ WmResult wm_code_stack(const WmModule* module, uint32_t index, uint32_t offset, 
 /* One function's records dropped, by CLOCK, for an allocation the heap refused; 0 when none can go. */
 int wm_code_drop_one(void);
 void* wm_code_malloc(size_t size);
+void* wm_code_realloc(void* ptr, size_t size);
 void wm_code_free(void* ptr);
 void wm_code_add_module(WmModule* module);
 void wm_code_remove_module(WmModule* module);

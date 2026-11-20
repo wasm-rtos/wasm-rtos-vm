@@ -34,6 +34,11 @@ size_t wm_code_cache_bytes(void) { return g_bytes; }
 
 void* wm_code_malloc(size_t size) { return g_allocator ? g_allocator(NULL, size ? size : 1u) : wm_malloc(size); }
 
+void* wm_code_realloc(void* ptr, size_t size)
+{
+    return g_allocator ? g_allocator(ptr, size ? size : 1u) : wm_realloc(ptr, size ? size : 1u);
+}
+
 void wm_code_free(void* ptr)
 {
     if (!ptr)

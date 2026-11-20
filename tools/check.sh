@@ -29,7 +29,7 @@ for mode in 1 2; do
     cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 -DWM_SPEC_IMAGE=$mode source/*.c tools/wm-spec.c -lm -o build/wm-spec-image || exit 1
     python3 tools/spec.py build/wm-spec-image "$SPEC" >/dev/null && echo "spec (code image $mode): ok" || { echo "spec (code image $mode): FAIL"; fail=1; }
 done
-for mode in "" -DWM_HAS_VALIDATION=0 "-DWM_FUSE=1 -DWM_NOP_RUNS=1" -DWM_PREDECODE=0; do
+for mode in "" -DWM_HAS_VALIDATION=0 "-DWM_FUSE=1" -DWM_PREDECODE=0; do
     # shellcheck disable=SC2086
     cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 $mode source/*.c test/image.c -lm -o build/image || exit 1
     build/image >/dev/null && echo "code images:   ok $mode" || { echo "code images:   FAIL $mode"; build/image | grep FAIL; fail=1; }
@@ -56,9 +56,9 @@ cc -std=gnu99 -O1 -g -DWM_PREDECODE=0 -fsanitize=address,undefined source/*.c to
 python3 tools/spec.py build/wm-spec-inplace "$SPEC" >/dev/null && echo "spec (in place): ok" || { echo "spec (in place): FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -DWM_PREDECODE=0 -DWM_FUSE=1 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-fuse || exit 1
 python3 tools/spec.py build/wm-spec-fuse "$SPEC" >/dev/null && echo "spec (fused):  ok" || { echo "spec (fused):  FAIL"; fail=1; }
-cc -std=gnu99 -O1 -g -DWM_NOP_RUNS=1 -DWM_FUSE=1 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-nop || exit 1
+cc -std=gnu99 -O1 -g -DWM_FUSE=1 -fsanitize=address,undefined source/*.c tools/wm-spec.c -lm -o build/wm-spec-nop || exit 1
 python3 tools/spec.py build/wm-spec-nop "$SPEC" >/dev/null && echo "spec (as on chips): ok" || { echo "spec (as on chips): FAIL"; fail=1; }
-cc -std=gnu99 -O1 -DWM_NOP_RUNS=1 -DWM_FUSE=1 -fsanitize=address,undefined source/*.c test/fuel.c -lm -o build/fuel || exit 1
+cc -std=gnu99 -O1 -DWM_FUSE=1 -fsanitize=address,undefined source/*.c test/fuel.c -lm -o build/fuel || exit 1
 build/fuel >/dev/null && echo "fuel (as on chips): ok" || { echo "fuel (as on chips): FAIL"; fail=1; }
 for fuse in 0 1; do
     cc -std=gnu99 -O1 -g -DWM_FUSE=$fuse -fsanitize=address,undefined source/*.c test/fuel.c -lm -o build/fuel || exit 1

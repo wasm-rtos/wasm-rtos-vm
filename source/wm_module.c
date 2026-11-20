@@ -449,9 +449,9 @@ typedef struct Validator
     const uint8_t* prev;
     uint8_t stopped;
 #if WM_PREDECODE
-    /* The stack's height in slots before each instruction, by its offset from body; 0xFFFF where unreachable. */
+    /* The stack's height in slots before each instruction, in their order; 0xFFFF where unreachable. */
     uint16_t* heights;
-    const uint8_t* body;
+    uint32_t height_count;
 #endif
 } Validator;
 
@@ -812,7 +812,7 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
         uint32_t index;
 #if WM_PREDECODE
         if (v->heights)
-            v->heights[at - v->body] = c->unreachable || v->slots > 0xFFFEu ? 0xFFFFu : (uint16_t)v->slots;
+            v->heights[v->height_count++] = c->unreachable || v->slots > 0xFFFEu ? 0xFFFFu : (uint16_t)v->slots;
 #endif
         if (v->stop)
         {
@@ -1788,7 +1788,7 @@ static WmResult validate_again(const WmModule* m, uint32_t index, const uint8_t*
 }
 
 #if WM_PREDECODE
-/* The stack's height before each instruction of function index (of the module's own), by offset from its body. */
+/* The stack's height before each instruction of function index (of the module's own), in their order. */
 WmResult wm_code_heights(const WmModule* m, uint32_t index, uint16_t* heights)
 {
     WmModule shadow;
@@ -1807,7 +1807,6 @@ WmResult wm_code_heights(const WmModule* m, uint32_t index, uint16_t* heights)
     v.l = &l;
     v.m = &shadow;
     v.heights = heights;
-    v.body = m->codes[index].body;
     r.p = m->code_entries;
     r.end = m->bytes + m->size;
     r.error = NULL;

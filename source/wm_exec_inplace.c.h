@@ -96,7 +96,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 /* Stopped at a segment's SEG, its frame the stack machine's: the loop in place counts what fuel is left. */
                 WmModule* m = rt->saved.func->instance->module;
                 WmCode* c = rt->saved.func->code;
-                const WmCell* seg = (const WmCell*)(const void*)rt->saved.pc;
+                const WmTailEntry* e;
                 if (rt->fuel == 0)
                     return wm_fuel_exhausted;
                 if ((result = wm_reg_tail(m, c, &tail)))
@@ -104,9 +104,10 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                     rt->suspended = 0;
                     return result;
                 }
-                rt->saved.pc = m->bytes + seg[1].u32;
-                rt->saved.sp = rt->saved.fp + seg[2].u32;
-                rt->saved.st = tail->side + wm_reg_entry(tail, seg[1].u32)->sides;
+                e = wm_reg_at_cell(tail, (uint32_t)((const WmCell*)(const void*)rt->saved.pc - c->fast));
+                rt->saved.pc = m->bytes + e->offset;
+                rt->saved.sp = rt->saved.fp + e->top;
+                rt->saved.st = tail->side + e->sides;
                 rt->saved.inplace = 1;
                 mixed = 1;
                 first = 1;
@@ -224,7 +225,6 @@ in_place:;
                 if (fuel_on)
                     rt->fuel = fuel;
                 rt->suspended = 1;
-                mixed = 0;
                 result = run_fast(rt, func, 1);
                 goto fast_checked;
             }

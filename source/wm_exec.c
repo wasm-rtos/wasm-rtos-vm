@@ -792,10 +792,10 @@ static void profile_write(void)
 #endif
     for (uint32_t op = 0; op < 256; ++op)
         if (g_profile_ops[op])
-            fprintf(f, "op 0x%02X %llu\n", op, (unsigned long long)g_profile_ops[op]);
+            fprintf(f, "op 0x%02X %llu\n", (unsigned)op, (unsigned long long)g_profile_ops[op]);
     for (uint32_t op = 0; op < 256; ++op)
         if (g_profile_shared[op])
-            fprintf(f, "shared 0x%02X %llu\n", op, (unsigned long long)g_profile_shared[op]);
+            fprintf(f, "shared 0x%02X %llu\n", (unsigned)op, (unsigned long long)g_profile_shared[op]);
     fclose(f);
 }
 

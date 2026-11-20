@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds and runs a fuzz target of test/fuzz/ with libFuzzer.
-#   tools/fuzz.sh target [seconds] [build]     build: plain (default), chips, paged
+#   tools/fuzz.sh target [seconds] [build]     build: plain (default), chips (the loop in place fusing pairs), paged
 # The corpus starts from the spec suite's modules ($SPEC) and test/*.wasm and
 # grows in build/fuzz/corpus-<target>; crashes land in build/fuzz/.
 set -euo pipefail
@@ -14,7 +14,7 @@ if [ -z "${FUZZ_CC:-}" ]; then
 fi
 case "$build" in
     plain) flags="" ;;
-    chips) flags="-DWM_FUSE=1 -DWM_NOP_RUNS=1" ;;
+    chips) flags="-DWM_FUSE=1" ;;
     paged) flags="-DWM_MEMORY_ALWAYS_PAGED=1 -DWM_FRAME_SIZE=256" ;;
     *) echo "unknown build $build"; exit 2 ;;
 esac

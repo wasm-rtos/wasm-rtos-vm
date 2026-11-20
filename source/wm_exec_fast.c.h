@@ -177,7 +177,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
             fuel = WM_NONE;                                                                                    \
         }                                                                                                      \
         fuel -= n_;                                                                                            \
-        ip = t_ + 3;                                                                                           \
+        ip = t_ + 1;                                                                                           \
         NEXT();                                                                                                \
     } while (0)
 #define IMM (cell >> 16)
@@ -259,7 +259,6 @@ r_seg:
         fuel = WM_NONE;
     }
     fuel -= IMM;
-    ip += 2;
     NEXT();
 r_mov:
     fp[IMM] = fp[(ip++)->u32];
@@ -639,9 +638,12 @@ suspend:
     rt->saved.pc = (const uint8_t*)(const void*)ip;
     rt->saved.st = NULL;
     rt->saved.fp = fp;
-    /* Stops come at a segment's SEG, where its top is, or at a function's start. */
-    rt->saved.sp = fp + (ip && (ip->u32 & 0xFFFFu) == g_fast_offsets[WM_R_SEG] ? ip[2].u32
-                                                                               : func->param_slots + func->code->local_slots);
+    /*
+     * Stops come at a segment's SEG or at a function's start. Where the
+     * stack's top is at a SEG the function's tail says (wm_reg_segment),
+     * when something needs it: the frame's locals end here.
+     */
+    rt->saved.sp = fp + func->param_slots + func->code->local_slots;
     rt->saved.inplace = 0;
     if (fuel_on)
         rt->fuel = fuel;
