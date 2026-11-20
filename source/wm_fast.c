@@ -359,14 +359,15 @@ static void fuse(const uint16_t* handlers, WmCell* record, const uint8_t* kinds)
  * 8 bytes each, sorted by offset so the records can be matched in one walk.
  */
 #if WM_REGISTER
-static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail);
+typedef struct RegFind RegFind;
+static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail, RegFind* find);
 #endif
 
 WmResult wm_predecode(WmModule* m, WmCode* code, const WmSide* side)
 {
 #if WM_REGISTER
     if (1)
-        return reg_translate(m, code, side, NULL);
+        return reg_translate(m, code, side, NULL, NULL);
 #endif
     {
     const uint16_t* handlers = wm_fast_handlers();
@@ -651,10 +652,13 @@ int wm_fast_position(const WmModule* m, const WmCode* code, const WmCell* ip, ui
     uint32_t cell = 0;
     uint32_t target = (uint32_t)(ip - code->fast);
 #if WM_REGISTER
-    /* Records do not follow instructions there: no positions. */
-    (void)m, (void)target, (void)cell, (void)offset;
-    *side = code->side;
-    return 0;
+    /* Records do not follow instructions there: the register loop stops only at a segment's SEG. */
+    (void)target, (void)cell;
+    if (!ip || (ip->u32 & 0xFFFFu) != wm_fast_handlers()[WM_R_SEG])
+        return 0;
+    *offset = ip[1].u32;
+    *side = code->side + wm_reg_sides_before(m, code, ip[1].u32);
+    return 1;
 #endif
     *side = code->side;
     for (const uint8_t* p = code->body; p <= code->end;)
@@ -956,7 +960,16 @@ static void reg_entry(WmTail* tail, uint32_t offset, uint32_t cell, uint32_t cha
  * register loop can be entered at (in order of offset): segment starts,
  * and calls and returns, which flush first. Its records stay as they are.
  */
-static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail)
+/* Where a record of a memory access stands: its instruction, the stack's height and what was pending there. */
+struct RegFind
+{
+    uint32_t cell;
+    int found;
+    uint32_t offset, height, pending;
+    RegValue pend[256];
+};
+
+static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail, RegFind* find)
 {
     uint32_t index = (uint32_t)(code - m->codes);
     const WmType* type = &m->types[m->func_types[m->func_imports + index]];
@@ -1390,6 +1403,10 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 {
                     uint32_t offset;
                     uint8_t load = 0, store = 0;
+                    RegValue before[256];
+                    uint32_t before_pending = o.pending;
+                    if (find && !find->found)
+                        memcpy(before, o.pend, o.pending * sizeof(RegValue));
                     leb_u32(&p);
                     offset = leb_u32(&p);
                     switch (op)
@@ -1432,6 +1449,14 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                         reg_head(&o, WM_R_ACCESS, op);
                         reg_put(&o, top);
                         reg_put(&o, offset);
+                    }
+                    if (find && !find->found && (load || store) && offset <= 0xFFFFu && head_cell == find->cell)
+                    {
+                        find->found = 1;
+                        find->offset = (uint32_t)(start - m->bytes);
+                        find->height = h;
+                        find->pending = before_pending;
+                        memcpy(find->pend, before, before_pending * sizeof(RegValue));
                     }
                 }
                 else if (op >= 0x45u && op <= 0xC4u && reg_i32(op, &ss, &sc, &arity))
@@ -1535,7 +1560,7 @@ WmResult wm_reg_tail(WmModule* m, WmCode* code, WmTail** out)
     if (!tail)
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
     if (!(result = wm_code_side(m, index, &tail->side)))
-        result = reg_translate(m, code, tail->side, tail);
+        result = reg_translate(m, code, tail->side, tail, NULL);
     if (result)
     {
         wm_reg_tail_free(tail);
@@ -1568,5 +1593,37 @@ const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset)
             high = mid;
     }
     return low < tail->count && tail->entries[low].offset == offset ? &tail->entries[low] : NULL;
+}
+
+/*
+ * The stack machine's frame at the access whose record is at cell: what was
+ * pending there goes into its slots, and the access's offset and the
+ * stack's top (fp-relative) come back. The function is translated again.
+ */
+WmResult wm_reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top)
+{
+    RegFind* find = (RegFind*)wm_calloc(1, sizeof(RegFind));
+    WmTail scratch;
+    WmResult result;
+    uint32_t index = (uint32_t)(code - m->codes);
+    const WmType* type = &m->types[m->func_types[m->func_imports + index]];
+    if (!find)
+        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    memset(&scratch, 0, sizeof(scratch));
+    find->cell = cell;
+    result = reg_translate(m, code, code->tail->side, &scratch, find);
+    wm_free(scratch.entries);
+    if (!result && !find->found)
+        result = WM_ERR_TRAP("trap: no access at the register loop's stop");
+    if (!result)
+    {
+        for (uint32_t i = 0; i < find->pending; ++i)
+            if (find->pend[i].kind != P_SLOT)
+                fp[find->pend[i].slot] = find->pend[i].kind == P_CONST ? find->pend[i].value : fp[find->pend[i].value];
+        *offset = find->offset;
+        *top = type->param_slots + code->local_slots + find->height;
+    }
+    wm_free(find);
+    return result;
 }
 #endif

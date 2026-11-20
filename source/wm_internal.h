@@ -852,6 +852,8 @@ uint32_t wm_reg_sides_before(const WmModule* module, const WmCode* code, uint32_
 WmResult wm_reg_tail(WmModule* module, WmCode* code, WmTail** out);
 void wm_reg_tail_free(WmTail* tail);
 const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset);
+/* The stack machine's frame at the memory access whose record is at cell; its offset and top. */
+WmResult wm_reg_stack_at(WmModule* module, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top);
 /* The register loop stopped at a segment it has not the fuel for: the loop in place goes on. */
 extern const char wm_fuel_short[];
 #endif

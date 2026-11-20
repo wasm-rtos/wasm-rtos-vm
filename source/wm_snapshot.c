@@ -154,10 +154,21 @@ typedef struct Place
 } Place;
 
 static WmResult place_of(const WmInstance* inst, const WmRuntime* rt, WmFunc* func, const uint8_t* pc,
-                         const WmSide* st, const uint32_t* fp, Place* out)
+                         const WmSide* st, const uint32_t* fp, int inplace, Place* out)
 {
     out->func = func;
     out->fp = (uint32_t)(fp - rt->stack);
+#if WM_REGISTER
+    /* Stopped in the loop in place inside a function of the register loop: its own side table, from 0. */
+    if (inplace)
+    {
+        out->offset = (uint32_t)(pc - inst->module->bytes);
+        out->side = func->code->side + (uint32_t)(st - func->code->tail->side);
+        return NULL;
+    }
+#else
+    (void)inplace;
+#endif
 #if WM_PREDECODE
     /* A predecoded position is a record (its function on a stack keeps them): written as the instruction it stands for. */
     if (WM_RUNS_FAST(func->instance->module))
@@ -337,7 +348,7 @@ static void set_place(const WmInstance* inst, WmRuntime* rt, const Place* p, WmF
  * record. The records are made here, once every frame is on the runtime,
  * so that making some cannot drop others the snapshot stopped in.
  */
-static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st)
+static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, uint8_t* inplace)
 {
     const WmModule* m = func->instance->module;
     const WmCell* ip;
@@ -346,6 +357,30 @@ static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st)
         return NULL;
     if ((result = wm_code_load(func)))
         return result;
+#if WM_REGISTER
+    {
+        /* A segment's start is its SEG; anywhere else (the top frame only) the loop in place goes on. */
+        WmTail* tail;
+        const WmTailEntry* e;
+        uint32_t offset = (uint32_t)(*pc - m->bytes);
+        if ((result = wm_reg_tail((WmModule*)(uintptr_t)m, func->code, &tail)))
+            return result;
+        e = wm_reg_entry(tail, offset);
+        if (e && !e->charge)
+        {
+            *pc = (const uint8_t*)(const void*)(func->code->fast + e->cell);
+            *st = NULL;
+            return NULL;
+        }
+        if (!inplace)
+            return wm_snapshot_invalid;
+        *st = tail->side + wm_reg_sides_before(m, func->code, offset);
+        *inplace = 1;
+        return NULL;
+    }
+#else
+    (void)inplace;
+#endif
     if (!(ip = wm_fast_ip(m, func->code, (uint32_t)(*pc - m->bytes))))
         return wm_snapshot_invalid;
     *pc = (const uint8_t*)(const void*)ip;
@@ -400,11 +435,11 @@ static WmResult snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSn
     {
         const WmFrame* f = &rt->frames[i];
         if (i == rt->depth)
-            result = place_of(inst, rt, saved->func, saved->pc, saved->st, saved->fp, &places[i]);
+            result = place_of(inst, rt, saved->func, saved->pc, saved->st, saved->fp, saved->inplace, &places[i]);
         else if (func_index(inst, f->func) == WM_NONE)
             result = WM_ERR_UNSUPPORTED("unsupported: a call of another instance is in progress");
         else
-            result = place_of(inst, rt, f->func, f->pc, f->st, f->fp, &places[i]);
+            result = place_of(inst, rt, f->func, f->pc, f->st, f->fp, 0, &places[i]);
     }
     /* Function references on the stack become indices: where they are, the code says. */
     if (!result && m->stack_refs)
@@ -735,9 +770,10 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
     rt->sp = saved->sp;
     rt->suspended = 1;
 #if WM_PREDECODE
-    result = to_record(saved->func, &saved->pc, &saved->st);
+    saved->inplace = 0;
+    result = to_record(saved->func, &saved->pc, &saved->st, &saved->inplace);
     for (uint32_t i = 0; !result && i < depth; ++i)
-        result = to_record(rt->frames[i].func, &rt->frames[i].pc, &rt->frames[i].st);
+        result = to_record(rt->frames[i].func, &rt->frames[i].pc, &rt->frames[i].st, NULL);
     if (result)
     {
         rt->depth = 0;

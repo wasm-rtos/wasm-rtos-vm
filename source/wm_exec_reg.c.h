@@ -13,10 +13,73 @@ static ptrdiff_t g_fast_shift;
 static const char wm_page_stop[] = "page fault";
 const char wm_fuel_short[] = "fuel short of a segment";
 
+/* The host address of size bytes at ea of a paged memory, through the TLB, or NULL (as the fast loop's). */
+static WM_ALWAYS_INLINE uint8_t* tlb_host(const WmTlb* tlb, uint32_t ea, uint32_t size, uint32_t space, int store)
+{
+    const WmTlbEntry* e = &tlb->entries[(ea >> WM_FRAME_LOG2) & (WM_TLB_ENTRIES - 1u)];
+    uint32_t want = (ea & (WM_FRAME_MASK | (size - 1u))) | (space << 3);
+    return (store ? e->wtag : e->tag) == want ? (uint8_t*)((uintptr_t)ea + e->addend) : NULL;
+}
+
+/*
+ * The register loop stopped at an access of a paged memory the TLB did not
+ * have (rt->fault_*, the record at saved.pc): make the frame and fill the
+ * TLB, the record runs again; or make the access here through the memory
+ * functions, its operands and result in their slots, and step past it.
+ * While a frame is read in the background, the stack is made the stack
+ * machine's there and the loop in place goes on with the access.
+ */
 static WmResult page_fault(WmRuntime* rt)
 {
-    (void)rt;
-    return T_OOB_MEMORY;
+    WmFunc* func = rt->saved.func;
+    WmMemory* memory = func->instance->memory;
+    const WmCell* rec = (const WmCell*)(const void*)rt->saved.pc;
+    uint32_t* fp = rt->saved.fp;
+    uint8_t op = rt->fault_op;
+    uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
+    uint8_t size = (uint8_t)(1u << (d & 3u));
+    int store = op >= 0x36u;
+    WmResult result = wm_page_fault(rt->tlb, memory, rt->fault_address, rt->fault_offset, size, store);
+    if (result == wm_page_emulate)
+    {
+        uint64_t ea = (uint64_t)rt->fault_address + rt->fault_offset;
+        uint32_t c1 = rec[1].u32;
+        uint8_t bytes[4];
+        uint32_t value = 0;
+        if (ea > 0xFFFFFFFFu)
+            return T_OOB_MEMORY;
+        if (store)
+        {
+            value = fp[c1 >> 16];
+            for (uint32_t i = 0; i < size; ++i)
+                bytes[i] = (uint8_t)(value >> (8u * i));
+            result = wm_memory_write(memory, (uint32_t)ea, bytes, size);
+        }
+        else if (!(result = wm_memory_read(memory, (uint32_t)ea, bytes, size)))
+        {
+            for (uint32_t i = 0; i < size; ++i)
+                value |= (uint32_t)bytes[i] << (8u * i);
+            fp[rec[0].u32 >> 16] = (uint32_t)((d & 4u) ? sign_extend(value, size) : value);
+        }
+        if (!result)
+            rt->saved.pc = (const uint8_t*)(const void*)(rec + 2);
+        return result;
+    }
+    if (result == wm_page_wait)
+    {
+        WmModule* m = func->instance->module;
+        WmTail* tail;
+        uint32_t offset, top;
+        WmResult made;
+        if ((made = wm_reg_tail(m, func->code, &tail)) ||
+            (made = wm_reg_stack_at(m, func->code, (uint32_t)(rec - func->code->fast), fp, &offset, &top)))
+            return made;
+        rt->saved.pc = m->bytes + offset;
+        rt->saved.sp = fp + top;
+        rt->saved.st = tail->side + wm_reg_sides_before(m, func->code, offset);
+        rt->saved.inplace = 1;
+    }
+    return result;
 }
 
 WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
@@ -111,13 +174,36 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 #define IMM (cell >> 16)
 #define LO(C) ((C) & 0xFFFFu)
 #define HI(C) ((C) >> 16)
-#define ADDR(ADDRESS, OFFSET, SIZE, HOST)                                                                      \
+/*
+ * HOST = the place of SIZE bytes at ADDRESS + OFFSET: a memory in one block
+ * first and directly; a paged one through the TLB, and when it is not
+ * there the loop stops at the record (ip - 2) for page_fault.
+ */
+#define ADDR(ADDRESS, OFFSET, SIZE, HOST, OP, STORE)                                                           \
     do                                                                                                         \
     {                                                                                                          \
-        if ((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size))                   \
-            TRAP(mem || !inst->memory ? T_OOB_MEMORY                                                           \
-                                      : WM_ERR_UNSUPPORTED("unsupported: paged memory in the register loop")); \
-        HOST = mem + (ADDRESS) + (OFFSET);                                                                     \
+        if (__builtin_expect(!((OFFSET) > mem_size || wm_out_of_bounds((ADDRESS), (OFFSET) + (SIZE), mem_size)), \
+                             1))                                                                               \
+            HOST = mem + (ADDRESS) + (OFFSET);                                                                 \
+        else                                                                                                   \
+        {                                                                                                      \
+            uint32_t ea_ = (ADDRESS) + (OFFSET);                                                               \
+            HOST = !mem && inst->memory && ea_ >= (OFFSET)                                                     \
+                       ? tlb_host(rt->tlb, ea_, (SIZE), inst->memory->space, (STORE))                          \
+                       : NULL;                                                                                 \
+            if (!HOST)                                                                                         \
+            {                                                                                                  \
+                if (mem || !inst->memory)                                                                      \
+                    TRAP(T_OOB_MEMORY);                                                                        \
+                rt->fault_address = (ADDRESS);                                                                 \
+                rt->fault_offset = (OFFSET);                                                                   \
+                rt->fault_op = (OP);                                                                           \
+                rt->fault_cells = 2u;                                                                          \
+                ip -= 2;                                                                                       \
+                stop = wm_page_stop;                                                                           \
+                goto suspend;                                                                                  \
+            }                                                                                                  \
+        }                                                                                                      \
     } while (0)
 
     if (resume)
@@ -317,24 +403,24 @@ r_access:
     ip += 2;
     NEXT();
 }
-#define REG_LOAD(NAME, name, TYPE)                                                                             \
+#define REG_LOAD(NAME, name, TYPE, OP)                                                                         \
     r_##name:                                                                                                  \
     {                                                                                                          \
         uint32_t c1 = (ip++)->u32;                                                                             \
         TYPE value;                                                                                            \
         uint8_t* host;                                                                                         \
-        ADDR(fp[LO(c1)], HI(c1), sizeof(TYPE), host);                                                          \
+        ADDR(fp[LO(c1)], HI(c1), sizeof(TYPE), host, (OP), 0);                                                \
         __builtin_memcpy(&value, host, sizeof(TYPE));                                                          \
         fp[IMM] = (uint32_t)(int32_t)value;                                                                    \
         NEXT();                                                                                                \
     }
-#define REG_STORE(NAME, name, TYPE)                                                                            \
+#define REG_STORE(NAME, name, TYPE, OP)                                                                        \
     r_##name:                                                                                                  \
     {                                                                                                          \
         uint32_t c1 = (ip++)->u32;                                                                             \
         TYPE value = (TYPE)fp[HI(c1)];                                                                         \
         uint8_t* host;                                                                                         \
-        ADDR(fp[LO(c1)], IMM, sizeof(TYPE), host);                                                             \
+        ADDR(fp[LO(c1)], IMM, sizeof(TYPE), host, (OP), 1);                                                    \
         __builtin_memcpy(host, &value, sizeof(TYPE));                                                          \
         NEXT();                                                                                                \
     }
@@ -505,7 +591,9 @@ suspend:
     rt->saved.pc = (const uint8_t*)(const void*)ip;
     rt->saved.st = NULL;
     rt->saved.fp = fp;
-    rt->saved.sp = fp + func->param_slots + func->code->local_slots + func->code->max_stack;
+    /* Stops come at a segment's SEG, where its top is, or at a function's start. */
+    rt->saved.sp = fp + (ip && (ip->u32 & 0xFFFFu) == g_fast_offsets[WM_R_SEG] ? ip[2].u32
+                                                                               : func->param_slots + func->code->local_slots);
     rt->saved.inplace = 0;
     if (fuel_on)
         rt->fuel = fuel;

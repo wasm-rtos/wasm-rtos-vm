@@ -8,10 +8,10 @@
 #define REG(NAME, name)
 #endif
 #ifndef REG_LOAD
-#define REG_LOAD(NAME, name, TYPE) REG(NAME, name)
+#define REG_LOAD(NAME, name, TYPE, OP) REG(NAME, name)
 #endif
 #ifndef REG_STORE
-#define REG_STORE(NAME, name, TYPE) REG(NAME, name)
+#define REG_STORE(NAME, name, TYPE, OP) REG(NAME, name)
 #endif
 #ifndef REG_I32
 #define REG_I32(NAME, name) REG(SS_##NAME, ss_##name) REG(SC_##NAME, sc_##name)
@@ -41,14 +41,14 @@ REG(GLOBAL_SET, global_set)
 REG(TABLE_GET, table_get)
 REG(TABLE_SET, table_set)
 REG(ACCESS, access)
-REG_LOAD(LOAD32, load32, uint32_t)
-REG_LOAD(LOAD8_S, load8_s, int8_t)
-REG_LOAD(LOAD8_U, load8_u, uint8_t)
-REG_LOAD(LOAD16_S, load16_s, int16_t)
-REG_LOAD(LOAD16_U, load16_u, uint16_t)
-REG_STORE(STORE32, store32, uint32_t)
-REG_STORE(STORE8, store8, uint8_t)
-REG_STORE(STORE16, store16, uint16_t)
+REG_LOAD(LOAD32, load32, uint32_t, 0x28u)
+REG_LOAD(LOAD8_S, load8_s, int8_t, 0x2Cu)
+REG_LOAD(LOAD8_U, load8_u, uint8_t, 0x2Du)
+REG_LOAD(LOAD16_S, load16_s, int16_t, 0x2Eu)
+REG_LOAD(LOAD16_U, load16_u, uint16_t, 0x2Fu)
+REG_STORE(STORE32, store32, uint32_t, 0x36u)
+REG_STORE(STORE8, store8, uint8_t, 0x3Au)
+REG_STORE(STORE16, store16, uint16_t, 0x3Bu)
 REG(MEMORY_SIZE, memory_size)
 REG(MEMORY_GROW, memory_grow)
 REG(NUMERIC, numeric)
