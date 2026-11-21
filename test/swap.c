@@ -307,10 +307,10 @@ int main(int argc, char** argv)
         /* Frames the host fills with zeros leave without a write, give their slots back, and read as zeros. */
         static const uint8_t zeros[4096];
         unsigned long written;
-        uint32_t used = slots_used(), frame = wm_frame_size();
+        uint32_t used = slots_used();
         written = g_written;
-        for (uint32_t at = 65536; at < 2u * 65536u; at += frame)
-            wm_memory_write(memory, at, zeros, frame);
+        for (uint32_t at = 65536; at < 2u * 65536u; at += sizeof(zeros))
+            wm_memory_write(memory, at, zeros, sizeof(zeros));
         call1(rt, inst, "sum", 4, 0, 0);
         check(g_written - written <= BUDGET, "frames of zeros leave RAM without a write");
         check(slots_used() < used, "and give their slots back");
