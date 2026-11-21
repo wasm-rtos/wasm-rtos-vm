@@ -619,8 +619,24 @@ struct WmMemory
     /* Each frame's place in the pager's ring of frames in RAM (WM_NONE: not in it). */
     uint32_t* ring_place;
     struct WmMemory* next;
+    /*
+     * Counts what may have changed its bytes (a run of its instance's code,
+     * a host write, growing): a memory in one block has no dirty frames, so
+     * its first copied frames have their copy in storage only while changes
+     * is still copied_at (wm_memory_clean).
+     */
+    uint32_t changes;
+    uint32_t copied_at;
+    uint32_t copied;
 #endif
 };
+
+#if WM_HAS_MMU
+/* A memory's bytes may change: the copies wm_memory_clean made of a memory in one block may not hold. */
+#define WM_MEMORY_CHANGES(m) ((m) ? (void)++((WmMemory*)(m))->changes : (void)0)
+#else
+#define WM_MEMORY_CHANGES(m) ((void)0)
+#endif
 
 #if WM_HAS_MMU
 #define WM_FRAME (1u << WM_FRAME_LOG2)

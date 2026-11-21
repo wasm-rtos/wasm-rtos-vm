@@ -702,6 +702,9 @@ in_place:;
             frame->st = st;
             frame->fp = fp;
             frame->func = func;
+            /* Into another instance: its memory may change too (wm_memory_clean). */
+            if (callee->instance != func->instance)
+                WM_MEMORY_CHANGES(callee->instance->memory);
             func = callee;
             REFRESH();
             pc = code->body;

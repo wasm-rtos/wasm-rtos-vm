@@ -174,7 +174,9 @@ uint32_t wm_memory_grow(WmMemory* memory, uint32_t delta);
 /*
  * The memory's bytes in one block, and its size; NULL when it is paged (the
  * heap had no block that large), and then wm_memory_read and
- * wm_memory_write reach it.
+ * wm_memory_write reach it. For reading: a host that writes a memory with
+ * a pager writes through wm_memory_write or wm_memory_pointer, which count
+ * the change (wm_memory_clean).
  */
 uint8_t* wm_memory_data(const WmMemory* memory, uint32_t* size);
 /* Copy bytes out of a memory or into it, one block or paged: a trap error when they are out of bounds. */
@@ -315,6 +317,17 @@ uint32_t wm_memory_frame_slot(const WmMemory* memory, uint32_t index);
  * stores. NULL when done or when the frame had no slot.
  */
 WmResult wm_memory_frame_unstore(WmMemory* memory, uint32_t index);
+/*
+ * Write one more frame of a memory with a pager to storage ahead of need,
+ * keeping it in RAM, so that it leaves RAM later with no write: the next
+ * frame of a memory in one block not copied since its bytes last could
+ * change (a run of its code, a host write), or a dirty frame of a paged
+ * memory, which is clean then. A frame all zero is not written, its slot
+ * let go. *out_written is 1 when a frame was written, 0 when all have their
+ * copy. For the host between runs, one frame at a time, for memories of
+ * programs that will not run soon (as Linux writes back dirty pages ahead).
+ */
+WmResult wm_memory_clean(WmMemory* memory, uint32_t* out_written);
 /* The frames of a memory with a pager that are in RAM in one block (see block in WmPager); 0 when it is paged. */
 uint32_t wm_memory_block_frames(const WmMemory* memory);
 /*

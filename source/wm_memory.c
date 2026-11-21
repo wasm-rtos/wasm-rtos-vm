@@ -684,6 +684,7 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
         return WM_NONE;
     if (delta == 0)
         return old;
+    WM_MEMORY_CHANGES(mem);
 #if WM_HAS_MMU
     if (mem->data && in_pool(mem->data))
     {
@@ -1233,26 +1234,101 @@ WmResult wm_memory_block_in(WmMemory* memory)
     for (uint32_t i = 0; i < memory->frame_count; ++i)
         if (memory->marks[i] & WM_MARK_BUSY)
             return wm_page_wait;
+    /* A new block: nothing of it is copied ahead yet. */
+    memory->copied = 0;
+    WM_MEMORY_CHANGES(memory);
     return g_pool ? pool_block_in(memory) : heap_block_in(memory);
 }
 
+
+/* The first frames of a memory in one block that have their copy in storage (wm_memory_clean). */
+static uint32_t block_copied(const WmMemory* memory)
+{
+    return memory->copied_at == memory->changes ? memory->copied : 0u;
+}
+
+/* Frame index of a memory in one block to storage now, or to nothing (its slot let go) when it is all zero. */
+static WmResult block_frame_out(WmMemory* memory, uint32_t index)
+{
+    const uint8_t* frame = memory->data + ((size_t)index << WM_FRAME_LOG2);
+    if (!frame_is_zero(frame))
+        return memory->pager->write(memory->pager->context, &memory->slots[index], frame);
+    if (memory->slots[index] != WM_NONE)
+        memory->pager->drop(memory->pager->context, memory->slots[index]);
+    memory->slots[index] = WM_NONE;
+    return NULL;
+}
+
+WmResult wm_memory_clean(WmMemory* memory, uint32_t* out_written)
+{
+    WmResult result;
+    *out_written = 0;
+    if (!memory->pager || !memory->marks)
+        return NULL;
+    if (is_pager_block(memory))
+    {
+        /* Changed since the copies were made: they start again from the first frame. */
+        if (memory->copied_at != memory->changes)
+        {
+            memory->copied_at = memory->changes;
+            memory->copied = 0;
+        }
+        if (memory->copied >= memory->frame_count)
+            return NULL;
+        if ((result = block_frame_out(memory, memory->copied)))
+            return result;
+        ++memory->copied;
+        *out_written = 1;
+        return NULL;
+    }
+    if (memory->data)
+        return NULL;
+    /* Paged: the next dirty frame that may leave, from where the last search ended. */
+    for (uint32_t n = 0; n < memory->frame_count; ++n)
+    {
+        uint32_t index = (memory->copied + n) % memory->frame_count;
+        uint8_t* frame = memory->frames[index];
+        uint32_t slot = memory->slots[index];
+        if (!(memory->marks[index] & WM_MARK_DIRTY) || !frame_here(frame) || frame_in_block(memory, index) ||
+            (memory->marks[index] & WM_MARK_BUSY))
+            continue;
+        if (frame_is_zero(frame))
+        {
+            if (slot != WM_NONE)
+                memory->pager->drop(memory->pager->context, slot);
+            slot = WM_NONE;
+        }
+        else if ((result = memory->pager->write(memory->pager->context, &slot, frame)))
+            return result;
+        memory->slots[index] = slot;
+        /* Clean now, and out of the TLB: the next store marks it dirty again. */
+        memory->marks[index] &= (uint16_t)~WM_MARK_DIRTY;
+        tlb_forget_frame(memory->space, index);
+        memory->copied = index + 1u;
+        *out_written = 1;
+        return NULL;
+    }
+    return NULL;
+}
 
 WmResult wm_memory_block_out(WmMemory* memory)
 {
     uint8_t* data = memory->data;
     WmResult result = NULL;
+    uint32_t copied;
     if (!is_pager_block(memory))
         return NULL;
     for (uint32_t i = 0; i < memory->frame_count; ++i)
         if (memory->marks[i] & WM_MARK_PINS)
             return WM_ERR_EXHAUSTION("exhaustion: a host holds part of the memory");
-    /* Each frame is written from the block as it is; until all are, the block stays the memory. */
+    /*
+     * Each frame is written from the block as it is, but those copied ahead
+     * since it last changed; until all are, the block stays the memory.
+     */
+    copied = block_copied(memory);
     for (uint32_t i = 0; i < memory->frame_count && !result; ++i)
-    {
-        const uint8_t* frame = data + ((size_t)i << WM_FRAME_LOG2);
-        if (!frame_is_zero(frame) && !(result = memory->pager->write(memory->pager->context, &memory->slots[i], frame)))
+        if ((i < copied || !(result = block_frame_out(memory, i))) && memory->slots[i] != WM_NONE)
             memory->frames[i] = WM_FRAME_OUT;
-    }
     if (result)
     {
         /* The frames stored so far let their slots go: nothing of the block stays in storage. */
@@ -1275,6 +1351,7 @@ WmResult wm_memory_block_out(WmMemory* memory)
     g_resident -= memory->frame_count;
     for (uint32_t i = 0; i < memory->frame_count; ++i)
         memory->marks[i] = 0;
+    memory->copied = 0;
     space_renew(memory);
     return NULL;
 }
@@ -1327,6 +1404,12 @@ WmResult wm_memory_frame_unstore(WmMemory* memory, uint32_t index)
 }
 uint32_t wm_memory_block_frames(const WmMemory* memory) { (void)memory; return 0; }
 WmResult wm_memory_block_out(WmMemory* memory) { (void)memory; return NULL; }
+WmResult wm_memory_clean(WmMemory* memory, uint32_t* out_written)
+{
+    (void)memory;
+    *out_written = 0;
+    return NULL;
+}
 WmResult wm_memory_block_in(WmMemory* memory) { (void)memory; return NULL; }
 int wm_memory_frame_look(WmMemory* memory, uint32_t index) { (void)memory, (void)index; return -1; }
 WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
@@ -1346,6 +1429,7 @@ WmResult wm_memory_pin(WmMemory* memory, uint32_t address, uint32_t length, int 
 
 WmResult wm_memory_pointer(WmMemory* memory, uint32_t address, uint32_t length, uint8_t** out)
 {
+    WM_MEMORY_CHANGES(memory);
     *out = NULL;
     if (!in_bounds(memory, address, length))
         return E_OOB;
@@ -1401,6 +1485,7 @@ WmResult wm_memory_read(WmMemory* memory, uint32_t address, void* out, uint32_t 
 WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, uint32_t length)
 {
     const uint8_t* from = (const uint8_t*)data;
+    WM_MEMORY_CHANGES(memory);
     if (!in_bounds(memory, address, length))
         return E_OOB;
     if (memory->data)
@@ -1425,6 +1510,7 @@ WmResult wm_memory_write(WmMemory* memory, uint32_t address, const void* data, u
 
 WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint32_t length)
 {
+    WM_MEMORY_CHANGES(memory);
     if (!in_bounds(memory, address, length))
         return E_OOB;
     if (memory->data)
@@ -1454,6 +1540,7 @@ WmResult wm_memory_fill(WmMemory* memory, uint32_t address, uint8_t value, uint3
 
 WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t length)
 {
+    WM_MEMORY_CHANGES(memory);
     uint8_t chunk[64];
     if (!in_bounds(memory, to, length) || !in_bounds(memory, from, length))
         return E_OOB;

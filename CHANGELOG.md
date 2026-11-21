@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Frames written ahead of need** (decision 17): `wm_memory_clean`
+  writes one more frame of a memory to storage between runs and keeps it
+  in RAM, so a memory in one block later leaves RAM with no write (a
+  count of what may change it says whether the copies hold), and a paged
+  memory's dirty frames come out clean.
 - **A frame of zeros is not stored**: a dirty frame all zero that leaves
   RAM is untouched again, with no write and its slot given back (a
   program's memory measured 31% to 87% frames of zeros).
