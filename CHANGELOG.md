@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Shorter records**: branches that move no values hold their distance in
+  their head; i64 and f64 constants are one record; other accesses two
+  cells. CoreMark's records 17.0 to 15.3 KB, below the stack loop's.
+- **A module that finds no room** drops predecoded code first and tries
+  again, as frames and tables did (decision 3).
 - **The register loop** (decision 16) in place of the stack loop: frame
   slots as operands, the stack at slots fixed by its depth, moves taken
   into operands, no records for block markers, compares with their
