@@ -929,6 +929,15 @@ uint32_t wm_memory_stored(const WmMemory* memory)
     return bytes;
 }
 
+/* A frame of bytes all zero: it needs no copy in storage, as an untouched frame reads as zero. */
+static int frame_is_zero(const uint8_t* frame)
+{
+    for (uint32_t i = 0; i < WM_FRAME; ++i)
+        if (frame[i])
+            return 0;
+    return 1;
+}
+
 int wm_memory_frame_look(WmMemory* memory, uint32_t index)
 {
     int touched;
@@ -951,6 +960,18 @@ WmResult wm_memory_frame_take(WmMemory* memory, uint32_t index)
         return WM_ERR_UNSUPPORTED("unsupported: this frame cannot leave RAM");
     frame = memory->frames[index];
     slot = memory->slots[index];
+    /*
+     * A dirty frame of zeros is untouched again: no write, and its slot, if
+     * it had one, goes (as Linux keeps no copy of a page filled with zeros).
+     */
+    if ((memory->marks[index] & WM_MARK_DIRTY) && frame_is_zero(frame))
+    {
+        if (slot != WM_NONE)
+            memory->pager->drop(memory->pager->context, slot);
+        slot = WM_NONE;
+        memory->slots[index] = WM_NONE;
+        memory->marks[index] &= (uint16_t)~WM_MARK_DIRTY;
+    }
     /* Only a dirty frame is written; a clean one has its copy, or was never written (zeros). */
     if (memory->marks[index] & WM_MARK_DIRTY)
     {
@@ -1215,14 +1236,6 @@ WmResult wm_memory_block_in(WmMemory* memory)
     return g_pool ? pool_block_in(memory) : heap_block_in(memory);
 }
 
-/* A frame of bytes all zero: it needs no copy in storage, as an untouched frame reads as zero. */
-static int frame_is_zero(const uint8_t* frame)
-{
-    for (uint32_t i = 0; i < WM_FRAME; ++i)
-        if (frame[i])
-            return 0;
-    return 1;
-}
 
 WmResult wm_memory_block_out(WmMemory* memory)
 {

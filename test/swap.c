@@ -303,6 +303,22 @@ int main(int argc, char** argv)
         check(g_taken - taken > TOUCHED / 2u && g_written - written <= BUDGET, "frames that were only read leave without a write");
     }
 
+    {
+        /* Frames the host fills with zeros leave without a write, give their slots back, and read as zeros. */
+        static const uint8_t zeros[4096];
+        unsigned long written;
+        uint32_t used = slots_used(), frame = wm_frame_size();
+        written = g_written;
+        for (uint32_t at = 65536; at < 2u * 65536u; at += frame)
+            wm_memory_write(memory, at, zeros, frame);
+        call1(rt, inst, "sum", 4, 0, 0);
+        check(g_written - written <= BUDGET, "frames of zeros leave RAM without a write");
+        check(slots_used() < used, "and give their slots back");
+        check(call1(rt, inst, "peek", 65536 + 8, 0, 0) == 0 && call1(rt, inst, "peek", 2 * 65536 - 4, 0, 0) == 0,
+              "they read back as zeros");
+        sum = call1(rt, inst, "sum", 4, 0, 0);
+    }
+
     /* A second memory shares the same RAM. */
     check(!wm_instantiate(&other, module, rt, NULL, NULL), "instantiate a second memory");
     call1(rt, other, "fill", 1, 0, 0);
