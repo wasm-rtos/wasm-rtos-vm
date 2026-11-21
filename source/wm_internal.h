@@ -155,27 +155,16 @@ void wm_free(void* ptr);
 #endif
 #endif
 /*
- * Fusing the commonest instruction pairs saves a dispatch but costs a test:
- * a gain on microcontrollers, a loss where branch prediction makes dispatch
- * cheap (desktop and server processors), so it is off there.
+ * The loop in place fusing the commonest instruction pairs saves a dispatch
+ * but costs a test: a gain on microcontrollers, a loss where branch
+ * prediction makes dispatch cheap (desktop and server processors), so it
+ * is off there.
  */
 #ifndef WM_FUSE
 #if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
 #define WM_FUSE 0
 #else
 #define WM_FUSE 1
-#endif
-#endif
-/*
- * Runs of block, loop, end and nop skipped by one handler, their fuel paid
- * at once: fewer dispatches, but on processors with branch prediction those
- * dispatches help predict the next ones, so it is off there.
- */
-#ifndef WM_NOP_RUNS
-#if defined(__x86_64__) || defined(__i386__) || defined(__aarch64__)
-#define WM_NOP_RUNS 0
-#else
-#define WM_NOP_RUNS 1
 #endif
 #endif
 /*
@@ -391,13 +380,30 @@ typedef union WmCell
     int32_t s32;
 } WmCell;
 
-/* The predecoded records' kinds, each the code of one handler (wm_ops.def). */
-enum
+
+/*
+ * Experiment (decision 16): what the loop in place needs to run part of a
+ * function that runs in the register loop, where fuel ends inside a
+ * segment or a snapshot stopped: the function's side table entries (its
+ * own, from 0), and the places the register loop can take over again.
+ */
+typedef struct WmTailEntry
 {
-#define WM_RECORD(NAME, name) WM_F_##NAME,
-#include "wm_ops.def"
-    WM_F_COUNT
-};
+    uint32_t offset;
+    uint32_t cell;
+    /* Side table entries of the instructions before it. */
+    uint16_t sides;
+    /* The stack's top there, fp-relative. */
+    uint16_t top;
+    /* A call or return: the loop in place has charged its fuel. */
+    uint8_t charge;
+} WmTailEntry;
+typedef struct WmTail
+{
+    WmSide* side;
+    WmTailEntry* entries;
+    uint32_t count, capacity;
+} WmTail;
 
 typedef struct WmCode
 {
@@ -427,6 +433,8 @@ typedef struct WmCode
     uint8_t pinned;
     /* fast points into the code image: nothing to free, not counted in the cache. */
     uint8_t mapped;
+    /* Register loop experiment: what the loop in place needs to run part of it (wm_reg_tail), or NULL. */
+    WmTail* tail;
 } WmCode;
 
 typedef struct WmLimits
@@ -727,6 +735,8 @@ typedef struct WmSuspended
     const WmSide* st;
     uint32_t* fp;
     uint32_t* sp;
+    /* Register loop experiment: stopped in the loop in place, inside a function of the register loop. */
+    uint8_t inplace;
 } WmSuspended;
 
 struct WmRuntime
@@ -805,6 +815,29 @@ void wm_module_predecode(WmModule* module);
 WmResult wm_code_load(WmFunc* func);
 WmResult wm_code_make(WmModule* module, WmCode* code, const WmSide* side);
 WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
+#if WM_PREDECODE
+enum
+{
+#define WM_REC(NAME, name) WM_R_##NAME,
+#include "wm_records.def"
+    WM_R_COUNT
+};
+/* The register loop (decision 16): the stack's height in slots before each instruction, in their order. */
+WmResult wm_code_heights(const WmModule* module, uint32_t index, uint16_t* heights);
+/* Side table entries of the instructions of code before offset (in the module). */
+uint32_t wm_reg_sides_before(const WmModule* module, const WmCode* code, uint32_t offset);
+/* The function's tail (WmCode.tail), made if it has none. */
+WmResult wm_reg_tail(WmModule* module, WmCode* code, WmTail** out);
+void wm_reg_tail_free(WmTail* tail);
+const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset);
+/* The segment start whose SEG is the record at ip of func (its tail made if need be), or NULL. */
+const WmTailEntry* wm_reg_segment(WmFunc* func, const WmCell* ip);
+const WmTailEntry* wm_reg_at_cell(const WmTail* tail, uint32_t cell);
+/* The stack machine's frame at the memory access whose record is at cell; its offset and top. */
+WmResult wm_reg_stack_at(WmModule* module, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top);
+/* The register loop stopped at a segment it has not the fuel for: the loop in place goes on. */
+extern const char wm_fuel_short[];
+#endif
 /* What a function's operand stack and locals hold at one of its instructions (wm_code_stack). */
 typedef struct WmCodeStack
 {
@@ -823,13 +856,13 @@ WmResult wm_code_stack(const WmModule* module, uint32_t index, uint32_t offset, 
 /* One function's records dropped, by CLOCK, for an allocation the heap refused; 0 when none can go. */
 int wm_code_drop_one(void);
 void* wm_code_malloc(size_t size);
+void* wm_code_realloc(void* ptr, size_t size);
 void wm_code_free(void* ptr);
 void wm_code_add_module(WmModule* module);
 void wm_code_remove_module(WmModule* module);
 /* The fast loop stopped at a call into a function without records: the frame is made, the records are not. */
 extern const char wm_code_stop[];
 int wm_fast_position(const WmModule* module, const WmCode* code, const WmCell* ip, uint32_t* offset, uint32_t* side);
-const WmCell* wm_fast_ip(const WmModule* module, const WmCode* code, uint32_t offset);
 
 /* Shared helpers. */
 /* CRC-32 (the polynomial of zlib and Ethernet) of data added to crc; start from 0xFFFFFFFF and invert at the end. */

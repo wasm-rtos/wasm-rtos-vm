@@ -750,20 +750,24 @@ static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32
 #include <stdlib.h>
 #include <unistd.h>
 
-static const char* const g_record_names[WM_F_COUNT] = {
-#define WM_RECORD(NAME, name) #name,
-#include "wm_ops.def"
+#if WM_PREDECODE
+static const char* const g_record_names[WM_R_COUNT] = {
+#define WM_REC(NAME, name) #name,
+#include "wm_records.def"
 };
-static uint64_t g_profile_records[WM_F_COUNT];
-/* The previous record's kind first, WM_F_COUNT for none yet. */
-static uint64_t g_profile_pairs[WM_F_COUNT + 1u][WM_F_COUNT];
+#endif
+#if WM_PREDECODE
+static uint64_t g_profile_records[WM_R_COUNT];
+/* The previous record's kind first, WM_R_COUNT for none yet. */
+static uint64_t g_profile_pairs[WM_R_COUNT + 1u][WM_R_COUNT];
+#endif
 static uint64_t g_profile_ops[256];
 /* Opcodes run by the fast loop's shared numeric and access records. */
 static uint64_t g_profile_shared[256];
 #if WM_PREDECODE
 /* Kinds by their handler's offset (wm_exec_fast.c.h). */
 static uint8_t g_profile_kinds[65536];
-static uint8_t g_profile_previous = WM_F_COUNT;
+static uint8_t g_profile_previous = WM_R_COUNT;
 #endif
 
 static void profile_write(void)
@@ -776,20 +780,22 @@ static void profile_write(void)
     snprintf(path, sizeof(path), "%s.%ld", name, (long)getpid());
     if (!(f = fopen(path, "w")))
         return;
-    for (uint32_t k = 0; k < WM_F_COUNT; ++k)
+#if WM_PREDECODE
+    for (uint32_t k = 0; k < WM_R_COUNT; ++k)
         if (g_profile_records[k])
             fprintf(f, "record %s %llu\n", g_record_names[k], (unsigned long long)g_profile_records[k]);
-    for (uint32_t a = 0; a < WM_F_COUNT; ++a)
-        for (uint32_t b = 0; b < WM_F_COUNT; ++b)
+    for (uint32_t a = 0; a < WM_R_COUNT; ++a)
+        for (uint32_t b = 0; b < WM_R_COUNT; ++b)
             if (g_profile_pairs[a][b])
                 fprintf(f, "pair %s %s %llu\n", g_record_names[a], g_record_names[b],
                         (unsigned long long)g_profile_pairs[a][b]);
+#endif
     for (uint32_t op = 0; op < 256; ++op)
         if (g_profile_ops[op])
-            fprintf(f, "op 0x%02X %llu\n", op, (unsigned long long)g_profile_ops[op]);
+            fprintf(f, "op 0x%02X %llu\n", (unsigned)op, (unsigned long long)g_profile_ops[op]);
     for (uint32_t op = 0; op < 256; ++op)
         if (g_profile_shared[op])
-            fprintf(f, "shared 0x%02X %llu\n", op, (unsigned long long)g_profile_shared[op]);
+            fprintf(f, "shared 0x%02X %llu\n", (unsigned)op, (unsigned long long)g_profile_shared[op]);
     fclose(f);
 }
 

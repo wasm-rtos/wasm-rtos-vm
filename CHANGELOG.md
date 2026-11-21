@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The register loop** (decision 16) in place of the stack loop: frame
+  slots as operands, the stack at slots fixed by its depth, moves taken
+  into operands, no records for block markers, compares with their
+  branches. Fuel charged by segments, exact by the instruction (the loop
+  in place counts the rest of a short one); snapshots as before. CoreMark
+  ESP32 +33% (-Os +31%), Black Pill +28%, Mac +14.5% (+9% in the
+  kernel's slices); the loop's code on Xtensa
+  11.8 KB to 6.6 KB. The stack loop's forms and fused records (decision
+  14) go with it; `WM_NOP_RUNS` is gone, `WM_FUSE` is the loop in place's.
 - **Moves fused with what takes them next**: eleven records chosen by the
   profile (a local set, got or teed together with the add, shift, load,
   store, compare or branch after it). CoreMark records run −12.4%; ESP32

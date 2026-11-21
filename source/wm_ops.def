@@ -1,74 +1,22 @@
 /*
- * The predecoded records, one line each, in the order of their codes: the
- * one description the record kinds (WM_F_*), the fast loop's handler table,
- * the predecoder's choice of record and the i32 operations both loops run
- * are made from. Include it with the kinds you need defined; a kind left
- * undefined is a plain WM_RECORD, and WM_RECORD left undefined is nothing.
+ * The i32 instructions and memory accesses both loops run, one line each:
+ * the one description the loop in place's short paths, the shared i32
+ * helpers (i32_add() and the others in wm_exec.c) and the fast loop's
+ * records (wm_records.def) are made from. Include it with the kinds you
+ * need defined; a kind left undefined is nothing.
  *
- * WM_RECORD(NAME, name)                   a record, its handler f_name
- * WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)   an i32 access with the offset as
- *                                         operand; KIND is LOAD or STORE
+ * WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)   an i32 access with the
+ *                                         offset as operand; KIND is LOAD or STORE
  * WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)     an i32 instruction: EXPR of a and,
  *                                         for two operands, b
- * WM_RECORD_FUSED(NAME, name)                    the first record of a common run
- * WM_RECORD_FORM(NAME, name, SHAPE, OP, op)      the i32 instruction OP of the
- *                                                list with its operands in the
- *                                                records before it or its result
- *                                                in a local.set after (decision 14)
- * WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) local.get, then the access
- *                                                LOAD of the list from it
- * WM_RECORD_FUSED_BRANCH(NAME, name)             one ending in a branch (WM_FUSE)
- *
- * Which runs are fused follows what runs most (tools/profile.py).
  */
-#ifndef WM_RECORD
-#define WM_RECORD(NAME, name)
-#endif
 #ifndef WM_RECORD_ACCESS
-#define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND) WM_RECORD(NAME, name)
+#define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)
 #endif
 #ifndef WM_RECORD_I32
-#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) WM_RECORD(NAME, name)
-#endif
-#ifndef WM_RECORD_FUSED
-#define WM_RECORD_FUSED(NAME, name) WM_RECORD(NAME, name)
-#endif
-#ifndef WM_RECORD_FORM
-#define WM_RECORD_FORM(NAME, name, SHAPE, OP, op) WM_RECORD_FUSED(NAME, name)
-#endif
-#ifndef WM_RECORD_FUSED_GET_LOAD
-#define WM_RECORD_FUSED_GET_LOAD(NAME, name, LOAD, TYPE) WM_RECORD_FUSED(NAME, name)
-#endif
-#ifndef WM_RECORD_FUSED_BRANCH
-#define WM_RECORD_FUSED_BRANCH(NAME, name) WM_RECORD_FUSED(NAME, name)
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)
 #endif
 
-WM_RECORD(UNREACHABLE, unreachable)
-WM_RECORD(NOP, nop)
-WM_RECORD(IF, if)
-WM_RECORD(JUMP, jump)
-WM_RECORD(BR, br)
-WM_RECORD(BR_IF, br_if)
-WM_RECORD(BR_TABLE, br_table)
-WM_RECORD(RETURN, return)
-WM_RECORD(CALL, call)
-WM_RECORD(CALL_INDIRECT, call_indirect)
-WM_RECORD(DROP, drop)
-WM_RECORD(SELECT, select)
-WM_RECORD(LOCAL_GET1, local_get1)
-WM_RECORD(LOCAL_SET1, local_set1)
-WM_RECORD(LOCAL_TEE1, local_tee1)
-WM_RECORD(LOCAL_GET, local_get)
-WM_RECORD(LOCAL_SET, local_set)
-WM_RECORD(LOCAL_TEE, local_tee)
-WM_RECORD(GLOBAL_GET, global_get)
-WM_RECORD(GLOBAL_SET, global_set)
-WM_RECORD(GLOBAL_GET1, global_get1)
-WM_RECORD(GLOBAL_SET1, global_set1)
-WM_RECORD(TABLE_GET, table_get)
-WM_RECORD(TABLE_SET, table_set)
-/* Every other access, through the table of sizes. */
-WM_RECORD(ACCESS, access)
 WM_RECORD_ACCESS(I32_LOAD, i32_load, 0x28, uint32_t, LOAD)
 WM_RECORD_ACCESS(I32_LOAD8_S, i32_load8_s, 0x2C, int8_t, LOAD)
 WM_RECORD_ACCESS(I32_LOAD8_U, i32_load8_u, 0x2D, uint8_t, LOAD)
@@ -77,13 +25,6 @@ WM_RECORD_ACCESS(I32_LOAD16_U, i32_load16_u, 0x2F, uint16_t, LOAD)
 WM_RECORD_ACCESS(I32_STORE, i32_store, 0x36, uint32_t, STORE)
 WM_RECORD_ACCESS(I32_STORE8, i32_store8, 0x3A, uint8_t, STORE)
 WM_RECORD_ACCESS(I32_STORE16, i32_store16, 0x3B, uint16_t, STORE)
-WM_RECORD(MEMORY_SIZE, memory_size)
-WM_RECORD(MEMORY_GROW, memory_grow)
-WM_RECORD(CONST16, const16)
-WM_RECORD(CONST32, const32)
-WM_RECORD(CONST64, const64)
-/* Every other numeric instruction, through the shared ones of wm_exec.c. */
-WM_RECORD(NUMERIC, numeric)
 WM_RECORD_I32(EQZ, eqz, 0x45, 1, a == 0)
 WM_RECORD_I32(EQ, eq, 0x46, 2, a == b)
 WM_RECORD_I32(NE, ne, 0x47, 2, a != b)
@@ -104,75 +45,6 @@ WM_RECORD_I32(XOR, xor, 0x73, 2, a ^ b)
 WM_RECORD_I32(SHL, shl, 0x74, 2, a << (b & 31u))
 WM_RECORD_I32(SHR_S, shr_s, 0x75, 2, (uint32_t)((int32_t)a >> (b & 31u)))
 WM_RECORD_I32(SHR_U, shr_u, 0x76, 2, a >> (b & 31u))
-WM_RECORD(REF_NULL, ref_null)
-WM_RECORD(REF_IS_NULL, ref_is_null)
-WM_RECORD(REF_FUNC, ref_func)
-WM_RECORD(SAT, sat)
-WM_RECORD(MISC, misc)
-/*
- * Fused: the first record of a common run gets one of these; it runs the
- * whole run when there is fuel for it, else only its own instruction.
- */
-/*
- * Forms (decision 14), named by the sequence they run: get_get_add is
- * local.get, local.get, i32.add; add_set is i32.add, local.set. Only those
- * that run 0.1% or more of the records of CoreMark or of the kernel's test
- * programs (tools/profile.py): the rest would only take room in the loop.
- */
-WM_RECORD_FORM(GET_GET_ADD, get_get_add, GET_GET, ADD, add)
-WM_RECORD_FORM(GET_CONST_ADD, get_const_add, GET_CONST, ADD, add)
-WM_RECORD_FORM(CONST_ADD, const_add, CONST, ADD, add)
-WM_RECORD_FORM(GET_ADD, get_add, GET, ADD, add)
-WM_RECORD_FORM(ADD_SET, add_set, SET, ADD, add)
-WM_RECORD_FORM(GET_GET_ADD_SET, get_get_add_set, GET_GET_SET, ADD, add)
-WM_RECORD_FORM(GET_CONST_ADD_SET, get_const_add_set, GET_CONST_SET, ADD, add)
-WM_RECORD_FORM(CONST_SUB, const_sub, CONST, SUB, sub)
-WM_RECORD_FORM(CONST_MUL, const_mul, CONST, MUL, mul)
-WM_RECORD_FORM(GET_CONST_AND, get_const_and, GET_CONST, AND, and)
-WM_RECORD_FORM(CONST_AND, const_and, CONST, AND, and)
-WM_RECORD_FORM(GET_CONST_OR, get_const_or, GET_CONST, OR, or)
-WM_RECORD_FORM(GET_CONST_XOR, get_const_xor, GET_CONST, XOR, xor)
-WM_RECORD_FORM(GET_XOR, get_xor, GET, XOR, xor)
-WM_RECORD_FORM(GET_CONST_SHL, get_const_shl, GET_CONST, SHL, shl)
-WM_RECORD_FORM(CONST_SHL, const_shl, CONST, SHL, shl)
-WM_RECORD_FORM(GET_CONST_SHR_U, get_const_shr_u, GET_CONST, SHR_U, shr_u)
-WM_RECORD_FORM(CONST_SHR_U, const_shr_u, CONST, SHR_U, shr_u)
-WM_RECORD_FUSED(GET_CONST, get_const)
-WM_RECORD_FUSED(GET_GET, get_get)
-WM_RECORD_FUSED(SET_GET, set_get)
-WM_RECORD_FUSED(TEE_CONST, tee_const)
-/* Moves and what takes them next, by the profile (2026-11-20). */
-WM_RECORD_FUSED(SET_GET_CONST_ADD, set_get_const_add)
-WM_RECORD_FUSED(SET_GET_GET, set_get_get)
-WM_RECORD_FUSED(TEE_CONST_SHR_U, tee_const_shr_u)
-WM_RECORD_FUSED(TEE_CONST_XOR, tee_const_xor)
-WM_RECORD_FUSED(TEE_LOAD, tee_load)
-WM_RECORD_FUSED(GET_TEE, get_tee)
-WM_RECORD_FUSED(GET_STORE, get_store)
-WM_RECORD_FUSED(GET_BR_TABLE, get_br_table)
-WM_RECORD_FUSED_GET_LOAD(GET_LOAD, get_load, I32_LOAD, uint32_t)
-WM_RECORD_FUSED_GET_LOAD(GET_LOAD8_S, get_load8_s, I32_LOAD8_S, int8_t)
-WM_RECORD_FUSED_GET_LOAD(GET_LOAD8_U, get_load8_u, I32_LOAD8_U, uint8_t)
-WM_RECORD_FUSED_GET_LOAD(GET_LOAD16_S, get_load16_s, I32_LOAD16_S, int16_t)
-WM_RECORD_FUSED_GET_LOAD(GET_LOAD16_U, get_load16_u, I32_LOAD16_U, uint16_t)
-WM_RECORD_FUSED_BRANCH(TEE_BR_IF, tee_br_if)
-WM_RECORD_FUSED_BRANCH(SET_GET_BR_IF, set_get_br_if)
-WM_RECORD_FUSED_BRANCH(EQ_BR_IF, eq_br_if)
-WM_RECORD_FUSED_BRANCH(NE_BR_IF, ne_br_if)
-WM_RECORD_FUSED_BRANCH(EQZ_BR_IF, eqz_br_if)
-WM_RECORD_FUSED_BRANCH(LE_U_BR_IF, le_u_br_if)
-WM_RECORD_FUSED_BRANCH(LT_U_BR_IF, lt_u_br_if)
-WM_RECORD_FUSED_BRANCH(EQ_IF, eq_if)
-WM_RECORD_FUSED_BRANCH(NE_IF, ne_if)
-WM_RECORD_FUSED_BRANCH(EQZ_IF, eqz_if)
-WM_RECORD_FUSED_BRANCH(GET_SET_GET_BR_IF, get_set_get_br_if)
-WM_RECORD_FUSED_BRANCH(GET_CONST_EQ_BR_IF, get_const_eq_br_if)
-WM_RECORD_FUSED_BRANCH(GET_CONST_NE_IF, get_const_ne_if)
 
-#undef WM_RECORD
 #undef WM_RECORD_ACCESS
 #undef WM_RECORD_I32
-#undef WM_RECORD_FUSED
-#undef WM_RECORD_FORM
-#undef WM_RECORD_FUSED_GET_LOAD
-#undef WM_RECORD_FUSED_BRANCH

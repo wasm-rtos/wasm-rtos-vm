@@ -21,8 +21,9 @@ What was tried and not kept, with its numbers, is in
 | [11](#11-a-snapshot-is-checked-as-a-module-is) | A snapshot is checked as a module is | 2026-11-15 | no use after free on references; a bad snapshot is refused |
 | [12](#12-what-runs-is-counted-and-speed-is-guarded-by-counts) | What runs is counted, and speed is guarded by counts | 2026-11-16 | a profile of records and pairs; CI fails a change 2% slower |
 | [13](#13-hot-code-is-written-for-people-and-checked-by-its-machine-code) | Hot code is written for people, and checked by its machine code | 2026-11-16 | rules for the loops; fast loops as variants |
-| [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them | 2026-11-16 | 18 forms; CoreMark ESP32 +3.7%, Black Pill +8.8%; exact fuel and snapshots kept |
+| [14](#14-operands-in-records-as-overlays-on-them) | Operands in records, as overlays on them (replaced by 16) | 2026-11-16 | 18 forms; CoreMark ESP32 +3.7%, Black Pill +8.8%; exact fuel and snapshots kept |
 | [15](#15-records-in-storage-the-processor-reads-ram-for-the-hot-ones) | Records in storage the processor reads, RAM for the hot ones | 2026-11-20 | code from flash with no RAM: ESP32 −3.2%, Black Pill −5.8%; short of RAM −1.6% instead of −48% |
+| [16](#16-operands-in-slots-fixed-by-depth-in-records-that-overlay-the-stacks) | Operands in slots fixed by depth, in records that overlay the stack's | 2026-11-21 | the register loop: CoreMark ESP32 +33%, Black Pill +28%; fuel and snapshots exact as before |
 
 ## 1. The interpreter counts fuel itself
 
@@ -51,6 +52,14 @@ with other pointer sizes.
 **Instead.** A compiler to a denser form (registers, superinstructions that
 drop records): faster on paper, but positions would no longer map back, and
 snapshots and fuel would depend on the build.
+
+**Amended by decision 16 (2026-11-21).** What this decision is for stays:
+fuel is the module's instructions, and positions are the module's, in every
+build. How it holds changed: the register loop's records stand for several
+instructions each, and it stops only where its frame is the stack
+machine's (a segment's start); fuel is charged by segments, and the loop in
+place counts the rest of one exactly. Positions convert there, and anywhere
+else the loop in place runs.
 
 ## 3. Code is a cache
 
@@ -640,6 +649,10 @@ clever as it needs and still be learned from the plain one.
 
 **Decided and built (2026-11-16).**
 
+**Replaced by decision 16 (2026-11-21).** The register loop names its
+operands directly and leaves out the moves without forms; the forms and
+fused records went with the stack loop. What follows is how they were.
+
 ### Problem
 
 After decision 13's fused records, 39% of what CoreMark runs (as for
@@ -851,3 +864,169 @@ with validation (every function made again and compared, and the CRCs),
 validated. Writing the image to flash: 128 ms on the ESP32, 401 ms on the
 Black Pill (a byte at a time). The Uno's flash is the same
 (35 512 bytes): predecoding is not built there.
+
+## 16. Operands in slots fixed by depth, in records that overlay the stack's
+
+**Decided and built (2026-11-21).** It replaces the stack loop and its forms (decision 14).
+
+### Problem
+
+After the forms (decision 14) and the moves fused with what takes them
+next (experiments.md, 2026-11-20), CoreMark as for chips runs 15.9
+million records for 32.9 million instructions, 2.07 a dispatch. About
+31% of the records still compute nothing:
+
+| Records that only move values or mark blocks | Share of records |
+|---|---:|
+| `local.get`, `local.tee`, `local.set`, constants, alone | 12.2% |
+| `nop` runs (`block`, `loop`, `end`, `nop`) | 7.4% |
+| Fused moves: `set_get`, `get_get`, `set_get_get`, `get_tee`, … | 11.6% |
+
+Each fused record by the profile is a handler more in a loop that runs
+from ESP32's cache of flash, and each takes one sequence only. The
+operand stack itself costs on every record: `sp` moves, and `tos` is
+written back whenever a record needs the slot under it.
+
+A register machine does no moving of its own: Shi, Casey, Ertl and Gregg
+(*Virtual machine showdown: stack versus registers*, 2005/2008) translated
+JVM stack code to registers and ran 47% fewer instructions in 32% less
+time; WAMR's fast interpreter gives operands as offsets of slots in the
+frame and leaves out most `local.get`s; wasm3 names slots and `_r0`.
+
+### Decision
+
+- **The stack in slots fixed by its depth.** Validation knows the
+  operand stack's height at every instruction; the predecoder gives each
+  value the slot of its depth (after the locals), so the record of
+  `i32.add` at depth 3 reads slots 1 and 2 and writes slot 1. No `sp` at
+  run time. At every record boundary the frame's slots are exactly what
+  the stack machine's stack holds there, so snapshots, their format,
+  stopping anywhere and moving between builds stay as they are (decision
+  2 and 11): what changes is how a record finds its operands, not where
+  they are.
+- **Copy propagation over the overlays.** As forms are (decision 14), a
+  register record is the first record of a sequence, the records after it
+  kept as they are. An operand that is a local or a constant is named
+  directly (`L3`, `#5`), not copied to a slot first; the `local.get`,
+  `local.set` and constants it absorbed are overlaid, still there for a
+  stop or a short budget of fuel (then only the first record runs, as
+  now). Fuel stays exact: a sequence runs only with fuel for all of it.
+- **Operand kinds by shape, not by every combination.** A handler per
+  operation and shape (`slot, slot`, `slot, local`, `local, const`, …) as
+  wasm3 has them; the shapes made are the ones the profile asks for
+  (decision 13), the others reading operands through one general
+  decoder. Markers (`nop` runs) with no stack effect are skipped by the
+  record before them, which carries the fuel they cost.
+- **A loop of its own.** The register loop is a variant of the fast loop
+  chosen by `WM_FAST_LOOP` (decision 13); the loop in place stays the
+  reference and the stack loop stays for builds and boards where it wins.
+
+### Why
+
+- Fuel, stops at any instruction and portable snapshots are what the
+  engine is for; with slots fixed by depth they cost nothing, because the
+  frame at a record boundary is the stack machine's state, not a map of
+  it (decision 14 rejected maps).
+- The moves and the stack pointer are the work left that every processor
+  sees. The fused moves took 12.4% of the records for +7.7% on the ESP32;
+  half of the 31% left would be about +10% there, the bar below.
+- Records grow (operands in each), but decision 15 lets a board keep them
+  in flash, and RAM holds the hot ones.
+
+### Instead
+
+- **More fused records by the profile**: done first (2026-11-20), the
+  baseline this decision must beat: eleven records took 12.4% of the
+  records, ESP32 +7.7%, Black Pill +11.0%. What is left is spread over
+  more sequences, each a handler more.
+- **Register code with maps back to the stack machine** (V8, HotSpot):
+  rejected in decision 14; two copies of every function and maps for
+  every stop.
+- **Stack caching in more registers** (Ertl's dynamic stack caching, a
+  second `tos`): each handler in several states, the loop several times
+  larger; on Xtensa `tos` alone cost 0.5%.
+
+### Risks
+
+- The loop larger for ESP32's cache of flash: the kernel's board checks
+  (a queue of 500 exchanges) are the guard, as for decision 14.
+- Records with operands are larger: RAM for the code cache up, until a
+  board maps code images.
+- `tos` goes: on the Mac it gave 7.6%; slots fixed by depth must make that
+  up first.
+
+### How it is decided
+
+An experiment first, kept out of `main` until it wins, against the build
+with the fused moves (ESP32 17.83, Black Pill 8.96, Mac as for chips
+3342): the register loop
+for i32 arithmetic, comparisons, branches, loads and stores, locals and
+constants, every other instruction through the stack records. Kept only
+if CoreMark gains at least 10% on the ESP32 and the Black Pill, loses on
+no machine (the Mac too), the board checks pass, and the Uno does not
+change. Either way it goes into experiments.md with its numbers.
+
+### Measured: the prototype
+
+A prototype (experiments.md, *A register loop, as a prototype*) is above
+the bar on every machine: CoreMark +16.2% on a Mac, +17.3% on an ESP32
+(-Os +35.8%), +12.4% on a Black Pill, against the fused moves; records
+6% smaller. It is an upper bound: fuel one a record, no snapshots,
+memory in one block only.
+
+### What the exact version needs
+
+- **Fuel by the instruction, charged by the segment.** A segment runs
+  from a label, a call or a branch to the next; the translator knows how
+  many instructions it holds, and its first record takes them all, as
+  fuel metering by basic blocks does (wasm-instrument's gas, wasmtime's
+  fuel at block heads). With too little fuel for the whole segment the
+  call goes on in the loop in place from the segment's first instruction,
+  where the frame is the stack machine's, and stops exactly where the
+  fuel ends. One check a segment instead of one a record.
+- **Stops only where the frame is the stack machine's.** Fuel (in place,
+  above), a yield after a host function and a call into a function
+  without records come at calls or labels, which flush every pending
+  value. So snapshots stay as they are, taken there.
+- **Paged memory.** A TLB miss inside a segment has values pending:
+  either each access record keeps the list of what is pending there (a
+  small deopt map, as V8 keeps for its stops), or a paged memory runs on
+  the stack loop. The second needs both loops in the firmware and code
+  dropped when a memory leaves its block.
+- **Positions of traps** for traces: the translator run again for the
+  function that trapped, to find the instruction of the record.
+
+### Measured: built
+
+Against the stack loop with the fused moves (main before it), the same
+CoreMark:
+
+| | Stack loop | Register loop |
+|---|---:|---:|
+| ESP32 -O2 | 17.83 | 23.72 (+33%) |
+| ESP32 -Os | 15.40 | 20.22 (+31%) |
+| Black Pill | 8.96 | 11.49 (+28%) |
+| Mac, no fuel | 3390 | 3882 (+14.5%) |
+| Mac, slices of 10 000 (the kernel's) | 3337 | 3638 (+9.0%) |
+| CoreMark's records | 16 220 B | 17 028 B |
+| The loop's machine code, Xtensa -O2 | 11 772 B | 6 608 B |
+| Uno flash | 35 512 B | 35 512 B |
+
+The kernel's board checks on the ESP32, 19 of 19: CoreMark in the system
+17.51 → 22.10, `fib(24)` 225 → 158 ms, 500 round trips through a queue
+50 → 50 ms, programs at once 19 → 18. The one program fewer: about 600
+bytes more a program, of records (a call and a branch hold their top and
+targets) and of tails; the next step is records of branches without the
+cells they do not need.
+
+Fuel: CoreMark counts the same 32 876 269 instructions as the stack loop in
+slices of 7, 1000 and 10 000. The spec suite in every build (paged and
+swapped too), the wasm-rtos kernel's 86 tests (paged too), snapshots
+between builds and `test/fuel.c` pass.
+
+### Checks
+
+The ones every loop has: the spec suite in every build, `test/fuel.c`
+(fuel exact at every instruction), snapshots between builds and loops
+(taken in the register loop, read back in place), `fuzz_diff` comparing
+the register loop with the loop in place, the kernel's tests.

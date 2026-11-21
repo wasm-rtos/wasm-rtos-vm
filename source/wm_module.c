@@ -448,6 +448,11 @@ typedef struct Validator
     const uint8_t* stop;
     const uint8_t* prev;
     uint8_t stopped;
+#if WM_PREDECODE
+    /* The stack's height in slots before each instruction, in their order; 0xFFFF where unreachable. */
+    uint16_t* heights;
+    uint32_t height_count;
+#endif
 } Validator;
 
 static void push(Validator* v, uint8_t type)
@@ -805,6 +810,10 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
         uint8_t op;
         Control* c = &v->ctls[v->ctl_count - 1u];
         uint32_t index;
+#if WM_PREDECODE
+        if (v->heights)
+            v->heights[v->height_count++] = c->unreachable || v->slots > 0xFFFEu ? 0xFFFFu : (uint16_t)v->slots;
+#endif
         if (v->stop)
         {
             if (at == v->stop)
@@ -1777,6 +1786,40 @@ static WmResult validate_again(const WmModule* m, uint32_t index, const uint8_t*
     v->r = NULL;
     return r.error;
 }
+
+#if WM_PREDECODE
+/* The stack's height before each instruction of function index (of the module's own), in their order. */
+WmResult wm_code_heights(const WmModule* m, uint32_t index, uint16_t* heights)
+{
+    WmModule shadow;
+    Validator v;
+    Loader l;
+    Reader r;
+    shadow = *m;
+    memset(&l, 0, sizeof(l));
+    memset(&v, 0, sizeof(v));
+    shadow.side = NULL;
+    shadow.side_count = 0;
+    l.m = &shadow;
+    l.again = 1;
+    l.has_data_count = 1;
+    l.data_count = m->data_count;
+    v.l = &l;
+    v.m = &shadow;
+    v.heights = heights;
+    r.p = m->code_entries;
+    r.end = m->bytes + m->size;
+    r.error = NULL;
+    for (uint32_t i = 0; i < index && !r.error; ++i)
+        skip(&r, read_u32(&r));
+    read_code(&l, &r, index, &v);
+    wm_free(v.vals);
+    wm_free(v.ctls);
+    wm_free(v.locals);
+    wm_free(shadow.side);
+    return r.error;
+}
+#endif
 
 #if WM_PREDECODE
 /*

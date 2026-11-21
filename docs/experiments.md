@@ -25,6 +25,11 @@ the build before the experiment; ±0 is within noise.
 | [Fused records chosen by the profile](#fused-records-chosen-by-the-profile) | kept | +2.9% | +4.3% | +3.8% |
 | [Forms: operands in the records before an instruction](#forms-operands-in-the-records-before-an-instruction) | kept, 18 of 63 | +3.7% | +2.0% chips | +8.8% |
 | [Moves fused with what takes them next](#moves-fused-with-what-takes-them-next) | kept, 11 records | +7.7% | +7.5% chips | +11.0% |
+| [A register loop, as a prototype](#a-register-loop-as-a-prototype) | kept, as decision 16 | +17.3% (-Os +35.8%) | +16.2% | +12.4% |
+| [Fuel by segment: a record of its own, or in the branches](#fuel-by-segment-a-record-of-its-own-or-in-the-branches) | kept in the branches | +13.6% | −2.6% | |
+| [The loop in place finding its place by walking the function](#the-loop-in-place-finding-its-place-by-walking-the-function) | rejected | | −12% in slices | |
+| [A segment's offset and top in its record](#a-segments-offset-and-top-in-its-record) | moved to the tail | queue 66 → 50 ms | | |
+| [The translator's memory by the byte](#the-translators-memory-by-the-byte) | rejected | | peak 34.8 → 19.1 KB | |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
@@ -218,6 +223,98 @@ records for them, each one line of `wm_ops.def` and one pattern:
 too large for its cache of flash: 19 of 19 pass, CoreMark in the system
 15.87 → 17.51, 500 round trips through a queue 110 → 50 ms, `fib(24)` 229
 → 225 ms, 19 programs at once in both. The Uno does not change.
+
+### A register loop, as a prototype
+
+**Kept, as decision 16** · 2026-11-21
+
+**Tried.** Decision 16 as a prototype (`WM_REGISTER=1`, branch
+`agent/register-experiment`): records name frame slots, the stack at
+slots fixed by its depth, no stack pointer or `tos` while it runs;
+`local.get`, `local.set`, `local.tee` and constants taken into the
+operands of the records next to them within a block; no records for
+`block`, `loop`, `end` and `nop`; an i32 compare and the branch on it in
+one record; everything else on the slots below the record's top, through
+the helpers the loops share. The spec suite passes in full. It is an
+upper bound of what such a loop gives: fuel is one a record, not one an
+instruction, snapshots are not made, and memory must be in one block.
+
+| CoreMark | The fused moves | Prototype, first | Prototype, compares with branches |
+|---|---:|---:|---:|
+| Mac | 3307 | 3631 | 3844 (+16.2%) |
+| ESP32 -O2 | 17.83 | 19.67 | 20.91 (+17.3%) |
+| ESP32 -Os | 15.40 | 19.97 | 20.92 (+35.8%) |
+| Black Pill | 8.96 | 9.35 | 10.07 (+12.4%) |
+| Records and side table in RAM | 16 292 B | | 15 280 B |
+
+**Found.** Above the bar of decision 16 on every machine. With -Os the
+ESP32 gains most: the register loop's handlers are short, and the
+compiler builds them as well at -Os as at -O2. What an exact version
+costs is in decision 16.
+
+### Fuel by segment: a record of its own, or in the branches
+
+**Kept in the branches** · 2026-11-21
+
+**Tried.** The register loop charging fuel by segments instead of a test
+before every record: first with a `SEG` record at each segment's start,
+then with branches, calls and returns charging the segment they go to and
+stepping past its `SEG`.
+
+| CoreMark | Fuel by the record | A `SEG` record | In branches, calls, returns |
+|---|---:|---:|---:|
+| Mac | 3933 | 3668 (−6.7%) | 3832 (−2.6%, near noise) |
+| ESP32 -O2 | 20.91 | 22.43 (+7.3%) | 23.76 (+13.6%) |
+
+**Found.** CoreMark's segments are one or two records long: a dispatch of
+its own for the fuel costs more than the test it saves where branch
+prediction makes that test free. Charged by the branch that is taken
+anyway, it costs nearly nothing.
+
+### The loop in place finding its place by walking the function
+
+**Rejected** · 2026-11-21
+
+**Tried.** Where a segment is short of fuel, the side table position for the
+loop in place counted by walking the function from its start each time.
+
+| Mac CoreMark, slices of 10 000 (the kernel's) | CoreMark |
+|---|---:|
+| walking the function each time | 3176 |
+| the position kept with each place (`WmTailEntry.sides`) | 3600 |
+
+**Found.** A slice of the kernel is a few microseconds on a Mac; walking a
+function at each one cost a tenth of it.
+
+### A segment's offset and top in its record
+
+**Moved to the tail** · 2026-11-21
+
+**Tried.** The register loop's `SEG` holding the segment's offset in the
+module and its stack top beside its fuel, three cells.
+
+| Records | Three cells | One cell, the rest in the tail |
+|---|---:|---:|
+| CoreMark | 20 668 B | 17 028 B |
+| the kernel's board check program | 8 424 B | 7 448 B |
+| ESP32 board checks: queue of 500 round trips | 66 ms | 50 ms |
+
+**Found.** Only a stop and the loop in place need the offset and the top;
+the tail the loop in place makes has them already.
+
+### The translator's memory by the byte
+
+**Rejected** · 2026-11-21
+
+**Tried.** The translator's arrays by byte of the function: stack heights,
+the record of every instruction, a flag for every label; the cells grown in
+a buffer of their own and copied.
+
+| CoreMark, heap at its peak while instantiating, above what stays | |
+|---|---:|
+| the stack loop's predecoder | 12.2 KB |
+| arrays by the byte | 34.8 KB |
+| heights by the instruction, labels only, cells in place | 19.1 KB |
 
 ### Records of their own for 64-bit instructions
 

@@ -29,12 +29,39 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
     profile_start();
 #endif
 #if WM_PREDECODE
+    /*
+     * The loop in place runs part of a function of the register loop: where
+     * fuel ends inside a segment, or a snapshot stopped. It keeps to that
+     * function and hands back at the first place the register loop can
+     * take over (tail->entries).
+     */
+    int mixed = 0;
+    int first = 0;
+    WmTail* tail = NULL;
+    WmResult result = NULL;
+#endif
+#if WM_PREDECODE
     if (WM_RUNS_FAST((resume ? rt->saved.func : func)->instance->module))
     {
-        WmResult result = resume ? NULL : wm_code_load(func);
+#if !WM_PREDECODE
+        WmResult result = NULL;
+#endif
+#if WM_PREDECODE
+        if (resume && rt->saved.inplace)
+        {
+            if ((result = wm_reg_tail(rt->saved.func->instance->module, rt->saved.func->code, &tail)))
+                return result;
+            mixed = 1;
+            goto in_place;
+        }
+#endif
+        result = resume ? NULL : wm_code_load(func);
         if (result)
             return result;
         result = run_fast(rt, func, resume);
+#if WM_PREDECODE
+    fast_checked:
+#endif
         for (;;)
         {
 #if WM_HAS_MMU
@@ -63,11 +90,39 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                 }
                 rt->saved.pc = (const uint8_t*)(const void*)rt->saved.func->code->fast;
             }
+#if WM_PREDECODE
+            else if (result == wm_fuel_short)
+            {
+                /* Stopped at a segment's SEG, its frame the stack machine's: the loop in place counts what fuel is left. */
+                WmModule* m = rt->saved.func->instance->module;
+                WmCode* c = rt->saved.func->code;
+                const WmTailEntry* e;
+                if (rt->fuel == 0)
+                    return wm_fuel_exhausted;
+                if ((result = wm_reg_tail(m, c, &tail)))
+                {
+                    rt->suspended = 0;
+                    return result;
+                }
+                e = wm_reg_at_cell(tail, (uint32_t)((const WmCell*)(const void*)rt->saved.pc - c->fast));
+                rt->saved.pc = m->bytes + e->offset;
+                rt->saved.sp = rt->saved.fp + e->top;
+                rt->saved.st = tail->side + e->sides;
+                rt->saved.inplace = 1;
+                mixed = 1;
+                first = 1;
+                resume = 1;
+                goto in_place;
+            }
+#endif
             else
                 return result;
             result = run_fast(rt, func, 1);
         }
     }
+#endif
+#if WM_PREDECODE
+in_place:;
 #endif
     uint32_t entry_depth = rt->depth;
     const WmCode* code;
@@ -92,13 +147,18 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
     uint8_t fuel_on = rt->fuel_on && rt->nesting == 1u;
     uint32_t fuel = fuel_on ? rt->fuel : WM_NONE;
 
+#if WM_PREDECODE
+#define INPLACE_SIDE (mixed ? tail->side : inst->module->side)
+#else
+#define INPLACE_SIDE (inst->module->side)
+#endif
 #define REFRESH()                                                                                              \
     do                                                                                                         \
     {                                                                                                          \
         code = func->code;                                                                                     \
         inst = func->instance;                                                                                 \
         bytes = inst->module->bytes;                                                                           \
-        side = inst->module->side;                                                                             \
+        side = INPLACE_SIDE;                                                                                   \
         mem = inst->memory ? inst->memory->data : NULL;                                                        \
         mem_size = mem ? WM_MEMORY_SIZE(inst->memory) : 0;                                                     \
     } while (0)
@@ -131,6 +191,45 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
     for (;;)
     {
         uint8_t op;
+#if WM_PREDECODE
+        if (mixed)
+        {
+            const WmTailEntry* e = wm_reg_entry(tail, (uint32_t)(pc - bytes));
+            /*
+             * Where a short segment was handed over, the loop in place starts
+             * it, unless it starts with a call or return: never run here.
+             */
+            if (e && first && !e->charge)
+                e = e + 1 < tail->entries + tail->count && e[1].offset == e->offset ? e + 1 : NULL;
+            first = 0;
+            if (e)
+            {
+                /* A call or a return: its fuel is charged here, the register loop runs it. */
+                if (e->charge && fuel-- == 0)
+                {
+                    if (fuel_on)
+                    {
+                        fuel = 0;
+                        stop = wm_fuel_exhausted;
+                        goto suspend;
+                    }
+                    fuel = WM_NONE - 1u;
+                }
+                rt->saved.entry_depth = entry_depth;
+                rt->saved.func = func;
+                rt->saved.pc = (const uint8_t*)(const void*)(code->fast + e->cell);
+                rt->saved.st = NULL;
+                rt->saved.fp = fp;
+                rt->saved.sp = sp;
+                rt->saved.inplace = 0;
+                if (fuel_on)
+                    rt->fuel = fuel;
+                rt->suspended = 1;
+                result = run_fast(rt, func, 1);
+                goto fast_checked;
+            }
+        }
+#endif
         if (fuel-- == 0)
         {
             if (fuel_on)
@@ -654,6 +753,9 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         rt->saved.st = st;
         rt->saved.fp = fp;
         rt->saved.sp = sp;
+#if WM_PREDECODE
+        rt->saved.inplace = (uint8_t)mixed;
+#endif
         if (fuel_on)
             rt->fuel = fuel;
         rt->suspended = 1;

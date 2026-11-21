@@ -27,34 +27,53 @@ so the three are one unit for the compiler.
   module's bytes with the side table. Every build has it; on AVR it is the
   only one.
 - **Predecoded** (`run_fast`, `source/wm_exec_fast.c.h`, with
-  `WM_PREDECODE`, the default where labels can be values): runs records,
-  one per instruction, in 32-bit cells. The
-  first cell holds the handler (an offset from the first handler) and a
-  16-bit operand (a local's index, a small constant, a call's function, a
-  branch's distance), so most instructions take one cell and branches two.
-  It is two to three times faster. A module whose operands do not fit runs
-  in place.
+  `WM_PREDECODE`, the default where labels can be values): the register
+  loop (decision 16). A function is translated (`source/wm_fast.c`) into
+  records of 32-bit cells whose operands are slots of the frame:
+  parameters and locals, then the operand stack at slots fixed by its
+  depth, which validation knows at every instruction
+  (`wm_code_heights`). There is no stack pointer while it runs. The first
+  cell holds the handler (an offset from the first handler) and a 16-bit
+  operand, usually the slot the result goes to. A module whose operands
+  do not fit runs in place.
 
-The records are listed once, in `source/wm_ops.def` (decision 9): their
-kinds, the loop's table of handlers and the predecoder's choice of record
-come from it, and so do the i32 operations with records of their own
-(`i32_add` and the rest), which both loops run. A new record is a line
-there and its handler; a new i32 operation is only the line.
+The translator keeps a `local.get`, a constant or a result as what it is
+until something needs it in its slot (copy propagation within a block):
+`local.get a; i32.const 4; i32.add; local.set b` is one record,
+`b = a + 4`. `block`, `loop`, `end` and `nop` have no records; an i32
+compare and the `br_if` or `if` on it are one record. Everything else
+runs as on the stack, on the slots below the record's top, through the
+helpers both loops share. At a label, a call and a branch every value is
+in its slot, so there the frame is the stack machine's.
 
-The top of the stack stays in a register (`tos`); its slot is written only
-when the stack goes to memory (`FAST_SPILL`): before a call, a helper, a
-branch that moves values, a stop. There the stack is in memory as the loop
-in place keeps it, so either loop goes on from where the other stopped.
+The records are listed in `source/wm_records.def`; the i32 instructions
+and accesses both loops run are described once in `source/wm_ops.def`
+(decision 9), and the register records of i32 operations (a slot and a
+slot, or a slot and a constant) and of compares with branches are made
+from them.
 
-Records follow instructions one to one, so positions convert both ways
-(`wm_fast_position`, `wm_fast_ip`): fuel and snapshots stay those of the
-module's own instructions, whichever loop runs.
+Records do not follow instructions one to one (decision 2 as amended by
+16). The register loop stops only where the frame is the stack machine's:
+at a segment's start (below), or at a function's first instruction. There
+a position converts both ways (`wm_fast_position`, `WmTail`). Anywhere
+else, as a snapshot from another build may stop, the loop in place runs
+that function until the register loop can take over again.
 
 Nothing is called from inside the predecoded loop for the rare cases: on
 Xtensa a call anywhere in the handlers costs the whole loop its registers.
 A TLB miss and a call into a function without records are exceptions: the
-loop stops as it does for fuel, `wm_execute` deals with them and resumes,
-and the instruction runs again (a miss) or the callee starts (code).
+loop stops, `wm_execute` deals with them and resumes, and the record runs
+again (a miss) or the callee starts (code).
+
+### The loop in place inside a predecoded function
+
+`wm_reg_tail` makes, once a function needs it, what the loop in place needs
+to run part of it: its side table entries, made again from validation and
+numbered from 0, and the places the register loop can take over (segment
+starts, and calls and returns, which put every value in its slot first),
+each with its record and the side table position there. It goes with the
+function's records, and first when the heap is short. The loop in place
+runs with it until the fuel ends or such a place comes, and hands over.
 
 ## The code cache
 
@@ -111,25 +130,22 @@ One unit of fuel is one WebAssembly instruction of the module. The
 interpreter counts it itself: programs are not rewritten or instrumented,
 so any `.wasm` from any compiler is counted the same way.
 
-Each record pays its fuel before it runs:
+Fuel is charged by segments. A segment runs from a label, a call's return
+or a branch's way on to the next such place, so all its instructions run
+when its first one does; the translator counts them into the segment's
+`SEG` record. A branch charges the segment it lands on and steps past its
+`SEG`; a call charges the callee's first segment, a return the caller's
+segment after the call; only a fall into a label runs a `SEG` record. One
+check a segment, not one an instruction, as fuel metering by basic blocks
+does.
 
-```c
-if (fuel-- == 0) {
-    if (fuel_on) { fuel = 0; stop = wm_fuel_exhausted; goto suspend; }
-    fuel = WM_NONE - 1u;   /* fuel off: the counter just goes round */
-}
-```
-
-So a stop is always between two instructions, and `goto suspend` writes
-the whole state (function, position, frame and stack pointers, call depth)
-into `rt->saved`, as plain data. With fuel off the counter still runs from
-its top, so the hot path has no test for whether fuel is on.
-
-Fused records (`WM_FUSE`: `local.get + i32.const + i32.add` and the like)
-pay for every instruction they stand for; without fuel for all of them only
-the first runs, and the rest follow one by one. Runs of `nop`, `block`,
-`loop` and `end` (`WM_NOP_RUNS`) pay the same way. A record that stops for
-a TLB miss gets its fuel back, as it runs again.
+With too little fuel for a whole segment, the register loop stops at its
+start (`wm_fuel_short`) and the loop in place counts what is left, one
+instruction at a time, and stops exactly where the fuel ends. The next
+slice goes on there, in place, until the register loop can take over. So
+a stop is always between two instructions, the same ones in every build,
+and `goto suspend` writes the whole state into `rt->saved`, as plain
+data. With fuel off the counter still runs from its top.
 
 Only the outermost call stops (`rt->nesting == 1`): a host function's own
 calls back into the program run to the end, as the host's C stack cannot
@@ -142,7 +158,12 @@ indices; nothing holds a host address. So a snapshot from one build and
 chip loads into another: a 64-bit build with records and a 32-bit one
 running in place agree. Loading a snapshot of a predecoded module makes the
 records once every frame is on the runtime, so making some cannot drop
-others the snapshot stopped in. The width of references matters only to
+others the snapshot stopped in; a frame that stopped at a segment's start
+goes on in the register loop, the top one anywhere else in the loop in
+place (`rt->saved.inplace`). A program waiting for a frame of paged memory
+stopped inside a segment: there the function is translated again to put
+what was pending into its slots (`wm_reg_stack_at`), and the loop in place
+goes on with the access, so a snapshot can be taken while it waits. The width of references matters only to
 modules that can have them on the value stack, where a function reference
 is written as its index, as in globals and tables.
 
@@ -209,8 +230,5 @@ ESP32 with wasm-rtos, 500 round trips between two programs through a queue
 take 27 ms with it and 52 ms without. A program that runs alone gains
 nothing (CoreMark 12.97 against 12.96).
 
-Several choices are made per processor, from measurements: fusing pairs
-(`WM_FUSE`) and skipping `nop` runs (`WM_NOP_RUNS`) gain on microcontrollers
-and lose where branch prediction makes dispatch cheap; numeric helpers are
-not inlined on Xtensa (`WM_INLINE_OPS`), where a compact loop leaves the
-flash cache room for the kernel.
+Numeric helpers are not inlined on Xtensa (`WM_INLINE_OPS`), where a
+compact loop leaves the flash cache room for the kernel.
