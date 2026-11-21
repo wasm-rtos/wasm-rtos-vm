@@ -22,8 +22,12 @@ WM_REC(UNREACHABLE, unreachable)
 WM_REC(SEG, seg)
 WM_REC(MOV, mov)
 WM_REC(MOVC, movc)
+WM_REC(MOVC64, movc64)
 WM_REC(JUMP, jump)
+/* Branches: the distance in the head when no values move, else in cells with the slots to keep and drop. */
+WM_REC(BR0, br0)
 WM_REC(BR, br)
+WM_REC(BR_IF0, br_if0)
 WM_REC(BR_IF, br_if)
 WM_REC(BR_UNLESS, br_unless)
 WM_REC(BR_TABLE, br_table)
@@ -40,7 +44,9 @@ WM_REC(GLOBAL_GET, global_get)
 WM_REC(GLOBAL_SET, global_set)
 WM_REC(TABLE_GET, table_get)
 WM_REC(TABLE_SET, table_set)
+/* Any other access on the slots below its top: the offset beside the top when it fits 16 bits, else a cell of its own. */
 WM_REC(ACCESS, access)
+WM_REC(ACCESS_FAR, access_far)
 WM_REC_LOAD(LOAD32, load32, uint32_t, 0x28u)
 WM_REC_LOAD(LOAD8_S, load8_s, int8_t, 0x2Cu)
 WM_REC_LOAD(LOAD8_U, load8_u, uint8_t, 0x2Du)
@@ -59,7 +65,7 @@ WM_REC(REF_IS_NULL, ref_is_null)
 WM_REC(REF_FUNC, ref_func)
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) WM_REC_I32(NAME, name)
 #include "wm_ops.def"
-/* An i32 compare and a branch taken when it holds: slots, or a slot and a constant. */
+/* An i32 compare and a branch taken when it holds, no values moving: slots, or a slot and a constant; the distance in the head. */
 #ifndef WM_REC_CMP
 #define WM_REC_CMP(NAME, name) WM_REC(BRIF_SS_##NAME, brif_ss_##name) WM_REC(BRIF_SC_##NAME, brif_sc_##name)
 #endif

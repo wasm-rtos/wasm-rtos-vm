@@ -30,6 +30,7 @@ the build before the experiment; ±0 is within noise.
 | [The loop in place finding its place by walking the function](#the-loop-in-place-finding-its-place-by-walking-the-function) | rejected | | −12% in slices | |
 | [A segment's offset and top in its record](#a-segments-offset-and-top-in-its-record) | moved to the tail | queue 66 → 50 ms | | |
 | [The translator's memory by the byte](#the-translators-memory-by-the-byte) | rejected | | peak 34.8 → 19.1 KB | |
+| [Shorter records for branches, constants and other accesses](#shorter-records-for-branches-constants-and-other-accesses) | kept | +2.5% | ±0 | |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
@@ -315,6 +316,33 @@ a buffer of their own and copied.
 | the stack loop's predecoder | 12.2 KB |
 | arrays by the byte | 34.8 KB |
 | heights by the instruction, labels only, cells in place | 19.1 KB |
+
+### Shorter records for branches, constants and other accesses
+
+**Kept** · 2026-11-21
+
+**Tried.** A branch that keeps or drops no values both ways needs neither
+its slots nor its top: its distance goes into its head (a function has at
+most 0x7FFF cells, so it fits 16 bits). `br` one cell, `br_if` and a
+compare with its branch two, `else` one. An i64 or f64 constant one record
+of three cells, not two of two; an access through the shared code two
+cells when its offset fits 16 bits.
+
+| | Before | After |
+|---|---:|---:|
+| CoreMark's records | 17 028 B | 15 324 B (the stack loop had 16 220) |
+| the kernel's board check program | 7 448 B | 6 480 B (5 744) |
+| ESP32 CoreMark, -O2, alone | 23.72 | 24.32 |
+| Mac CoreMark, slices of 10 000 | 3466 | 3507 |
+
+**Found.** The records run are the same (12.92 million for CoreMark); the
+gain alone is the loop's own. In the kernel on the ESP32, without the loop
+in IRAM, CoreMark moved 22.10 → 19.69 and the queue 50 → 127 ms with
+nothing changed but the layout of code in flash; with `-DWM_IRAM` (now how
+the board checks build) 22.64 and 37 ms. Programs at once stay 18: the
+19th fails to parse its module (`exhaustion`) with 74 KB free, so the heap
+is split, not short; a module that finds no room now drops predecoded
+code first and tries again.
 
 ### Records of their own for 64-bit instructions
 

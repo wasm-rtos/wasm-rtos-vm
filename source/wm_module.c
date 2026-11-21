@@ -1629,7 +1629,7 @@ static void trim(void* array, uint32_t count, size_t size)
         *at = fit;
 }
 
-WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size)
+static WmResult load_module(WmModule** out, const uint8_t* bytes, uint32_t size)
 {
     Loader l;
     WmResult result;
@@ -1661,6 +1661,15 @@ WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size)
     trim(&l.m->side, l.m->side_count, sizeof(WmSide));
     *out = l.m;
     return NULL;
+}
+
+/* Memory of programs before code (decision 3): with no room for a module, predecoded code goes first. */
+WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size)
+{
+    WmResult result;
+    while ((result = load_module(out, bytes, size)) && !strncmp(result, "exhaustion", 10) && wm_code_drop_one())
+        ;
+    return result;
 }
 
 void wm_module_free(WmModule* m)

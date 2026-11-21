@@ -81,7 +81,7 @@ Defaults are chosen per processor; set any of them with `-D`.
 | `WM_HAS_VALIDATION` | 1 | check modules as the standard requires; 0 trusts them (smaller, faster to load) |
 | `WM_HAS_TRACE` | 1 (0 on AVR) | after a trap, the functions it was in, with names (`wm_trace`) |
 | `WM_HAS_ALLOCATOR` | 1 (0 on AVR) | allocations through `wm_set_allocator` |
-| `WM_PREDECODE` | 1 where labels can be values (not AVR) | the fast loop: 2–3 times faster, costs RAM for decoded code |
+| `WM_PREDECODE` | 1 where labels can be values (not AVR) | the register loop: 2–3 times faster than in place, costs RAM for decoded code |
 | `WM_FRAME_SIZE` | 4096 (0 on AVR) | frame size of paged memory, a power of two from 256 to 65536; 0: memory always in one block, no paging built in |
 | `WM_TERSE_ERRORS` | 0 (1 on AVR) | errors keep only their kind (`"trap:"`), saving RAM for strings |
 | `WM_IRAM` | off | ESP32: the interpreter loop in IRAM (see [docs/internals.md](docs/internals.md#esp32)) |
