@@ -1030,3 +1030,62 @@ The ones every loop has: the spec suite in every build, `test/fuel.c`
 (fuel exact at every instruction), snapshots between builds and loops
 (taken in the register loop, read back in place), `fuzz_diff` comparing
 the register loop with the loop in place, the kernel's tests.
+
+## 17. Frames written ahead of need, between runs
+
+**Decided and built (2026-11-21).**
+
+### Problem
+
+When RAM is short, the kernel takes the block of a task that sleeps out
+of RAM whole (`wm_memory_block_out`): every frame of it written there and
+then, while the task that needs the room waits, and with it the whole
+system. A memory of two pages is 32 frames: 13 ms through a compressed
+store on an ESP32 (421 µs a frame), and tens of milliseconds to an SD
+card. The time to write them was there before, while nothing ran.
+
+### Decision
+
+- **`wm_memory_clean(memory, &written)`** writes one more frame to the
+  pager's storage and keeps it in RAM, for the host to call between runs,
+  one frame at a time, as Linux writes dirty pages back ahead of need:
+  - for a memory in one block, the next frame not copied since the memory
+    last could change, the copies made in order from the first frame;
+  - for a paged memory, the next dirty frame, which is clean then (out of
+    the TLB, so the next store marks it dirty again);
+  - a frame all zero is not written; its slot goes (decision of 2026-11-21
+    on frames of zeros).
+- **A memory in one block keeps no marks of its own stores**, so it counts
+  what may change it, `changes`: a call into its instance (`wm_call`), a
+  call from one instance into another's function (in both loops), a run
+  resumed (every instance with a frame on the stack), a host write
+  (`wm_memory_write`, `fill`, `copy`, `pointer`), growing, a snapshot
+  restored into it, going back into one block. The copies hold while
+  `changes` is what it was when they were made; then `wm_memory_block_out`
+  writes only the frames past them, often none.
+- `wm_memory_data`'s pointer is for reading: a host that writes a memory
+  with a pager goes through the functions that count.
+
+### Why
+
+Linux's flusher threads and kswapd write dirty pages before the memory
+is needed, so that reclaim finds clean pages it can drop at once; macOS
+and Windows (the modified page writer) do the same. Here the kernel knows
+when a task will not run for a while, which no counter of touches can
+tell, and it has idle time between the tasks' wakings.
+
+Counting changes instead of marking frames keeps a memory in one block at
+full speed: one compare more per call between functions (two loads of
+instances already at hand), nothing per access.
+
+### Checks
+
+`test/clean.c`: a block copied ahead leaves RAM with no write and reads
+back as it was; half copied, only the rest is written; after a run of its
+code, its code called from another instance, a host write, growing it, a
+host pointer into it, or a run resumed after the copies were made, it is
+written again and reads back as changed. Taking out any one of the counts
+in a call, a call between instances (each loop) or a resume makes its
+check fail. A paged memory's dirty frames come out clean once each, leave
+RAM with no write, and a store marks one dirty again. Frames of 256 B,
+4 KiB and 64 KiB, and the loop in place.
