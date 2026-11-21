@@ -27,4 +27,12 @@
   (func (export "copy") (param $to i32) (param $from i32) (param $n i32)
     (memory.copy (local.get $to) (local.get $from) (local.get $n)))
   (func (export "peek") (param $at i32) (result i32)
-    (i32.load (local.get $at))))
+    (i32.load (local.get $at)))
+  ;; Adds one to the word at every 4 KiB step, with plain stores (test/clean.c).
+  (func (export "add") (param $pages i32)
+    (local $i i32) (local $end i32)
+    (local.set $end (i32.mul (local.get $pages) (i32.const 65536)))
+    (loop $l
+      (i32.store (local.get $i) (i32.add (i32.load (local.get $i)) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 4096)))
+      (br_if $l (i32.lt_u (local.get $i) (local.get $end))))))

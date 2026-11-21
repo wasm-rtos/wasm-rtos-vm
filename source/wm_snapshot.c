@@ -675,6 +675,7 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
         int kept = zeros == KEPT_MEMORY && length == KEPT_MEMORY;
         if (!kept)
         {
+            WM_MEMORY_CHANGES(memory);
 #if WM_HAS_MMU
             if (!memory->data)
                 wm_memory_fill(memory, 0, 0, (uint32_t)size);

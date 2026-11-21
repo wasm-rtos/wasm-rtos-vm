@@ -743,6 +743,9 @@ WmResult wm_call(WmRuntime* rt, WmFunc* f, const uint32_t* args, uint32_t* resul
 #endif
     ++rt->nesting;
     rt->yielding = 0;
+    /* The memory the call reaches may change: copies of it ahead of need may not hold. */
+    if (f->instance)
+        WM_MEMORY_CHANGES(f->instance->memory);
     if (f->host)
     {
         rt->sp = base + room;
@@ -766,6 +769,11 @@ WmResult wm_resume(WmRuntime* rt, uint32_t* results)
 #if WM_HAS_TRACE
     rt->trap_func = NULL;
 #endif
+    /* Every instance with a call on the stack may run again, and change its memory. */
+    WM_MEMORY_CHANGES(rt->saved.func->instance->memory);
+    for (uint32_t i = 0; i < rt->depth; ++i)
+        if (rt->frames[i].func)
+            WM_MEMORY_CHANGES(rt->frames[i].func->instance->memory);
     ++rt->nesting;
     return finish(rt, rt->saved.entry, rt->saved.base, rt->saved.entry_depth, wm_execute(rt, NULL, 1), results);
 }
