@@ -190,7 +190,8 @@ A memory the heap has no block for is paged instead, in frames of
 lets it stay in one block (its `block` callback, from the RAM it has to
 spare): then all its frames count as in RAM and are reserved in storage,
 and `wm_memory_block_out` sends it to storage whole (frames still all zero
-need no copy) and lets it go on paged. `wm_memory_block_in` makes a paged
+need no copy; a dirty frame of zeros taken out of RAM is untouched again,
+with no write and no slot, as Linux keeps no copy of a page of zeros) and lets it go on paged. `wm_memory_block_in` makes a paged
 memory one block again when RAM has room: frames in RAM are copied, those
 in storage read back, and their RAM and slots go (as the kernel of an OS
 collapses small pages into a huge one).

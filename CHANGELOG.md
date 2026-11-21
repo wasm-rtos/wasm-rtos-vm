@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A frame of zeros is not stored**: a dirty frame all zero that leaves
+  RAM is untouched again, with no write and its slot given back (a
+  program's memory measured 31% to 87% frames of zeros).
 - **Shorter records**: branches that move no values hold their distance in
   their head; i64 and f64 constants are one record; other accesses two
   cells. CoreMark's records 17.0 to 15.3 KB, below the stack loop's.
