@@ -22,6 +22,9 @@ python3 tools/spec.py build/wm-spec-fast-swap "$SPEC" >/dev/null 2>&1 && echo "s
 # A code cache of one byte: records only for the functions on the stack, every other call makes them again.
 cc -std=gnu99 -O1 -g -fsanitize=address -DWM_SPEC_CODE_LIMIT=1 source/*.c tools/wm-spec.c -lm -o build/wm-spec-code || exit 1
 python3 tools/spec.py build/wm-spec-code "$SPEC" >/dev/null && echo "spec (code cache of 1 byte): ok" || { echo "spec (code cache of 1 byte): FAIL"; fail=1; }
+# The engine's heap (decision 20).
+cc -std=gnu99 -O1 -g -Wall -Wextra -fsanitize=address,undefined source/*.c test/heap.c -lm -o build/heap || exit 1
+build/heap >/dev/null && echo "heap:          ok" || { echo "heap:          FAIL"; build/heap | grep FAIL; fail=1; }
 # The code area (decision 18): its own test, and the spec suite with every unpinned span moved at each
 # allocation (old places filled with a pattern), with a cache of one byte, in the fast loop and paged.
 cc -std=gnu99 -O1 -g -fsanitize=address,undefined -DWM_CHECKS=1 source/*.c test/area.c -lm -o build/area || exit 1

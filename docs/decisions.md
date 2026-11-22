@@ -1349,3 +1349,92 @@ bytes, and past the memory a trap; `poll_oneoff` on one clock sleeping
 5 ms; `proc_exit` ending with the host's trap and its code; two file
 calls nobody answers giving ENOSYS. The kernel's suite runs through it
 unchanged (1734 checks).
+
+## 20. A heap of the engine's own: TLSF, and code from the other end
+
+**Decided (2026-11-22).** The user: «сделаем щас… как лучше правильно в
+целом по скорости, стандартам и как делают другие».
+
+### Problem
+
+On the Black Pill, CoreMark in the system runs out of memory with enough
+of it free: 3 to 12 KB free in a 110 KB heap, in pieces smaller than the
+2.6 KB chunk the code area asks for (docs/experiments.md, "Records in an
+area of their own"). The C library's allocator mixes what never moves
+(programs' memory, stacks, the kernel's objects) with what the engine can
+move (records, decision 18) and with short-lived buffers, so the holes
+the code area leaves are taken by blocks that stay, and the area cannot
+grow even after it compacts. Its time per call is not bounded either,
+and it differs on every platform (newlib, ESP-IDF, glibc, Emscripten).
+
+### Decision
+
+- **`source/wm_heap.c`, `wm_heap.h`**: an allocator over one block of
+  memory the host gives (`wm_heap_new(memory, bytes)`), the same on every
+  platform, used through the allocators the engine already takes
+  (`wm_set_allocator`, `wm_set_code_allocator`). Optional: a host that
+  keeps its own allocator changes nothing.
+- **TLSF** (two-level segregated fit): free blocks in lists by size, a
+  first level by power of two and 16 classes in each, found through two
+  bitmaps; allocation and freeing in constant time, a block split on
+  allocation and merged with free neighbours on freeing (boundary tags).
+  Good fit: a request takes a block of its class or the next one up.
+- **Code from the other end.** Allocations that the engine can move (the
+  code area's chunks, through `wm_heap_code_allocator`) are cut from the
+  top of the highest free block that fits; everything else from the
+  bottom of the block TLSF finds. What moves gathers at the top, what
+  stays at the bottom, and the area's compaction then frees one piece at
+  the boundary instead of holes between blocks that stay. Finding the
+  highest block walks the free lists: chunks are few and large, so this
+  is rare; ordinary allocations stay constant time.
+- `realloc` grows into a free neighbour and shrinks in place, splitting
+  off the rest; otherwise it moves, from the same end.
+- `wm_heap_stats`: bytes free, the largest free block, bytes used, for
+  hosts and tests.
+- One thread at a time, as the engine; interrupt handlers do not allocate.
+
+### Why
+
+TLSF (Masmano, Ripoll, Crespo, Real, 2004) is the allocator real-time
+systems use where time per call must be bounded and fragmentation low:
+NuttX offers it as its heap, Zephyr's sys_heap is a near relative
+(buckets by power of two, constant time), and WAMR's runtime has its own
+heap for the same reasons; FreeRTOS's heap_4 is first fit
+with merging, slower and more fragmented. Measured studies give TLSF
+fragmentation as low as the best general allocators' (Doug Lea's) at a
+fraction of their worst case time.
+
+Keeping what moves apart from what stays is how compacting systems avoid
+holes: managed runtimes put movable objects in their own spaces, and the
+two-ended heap of many embedded systems grows fixed data from one end and
+transient data from the other.
+
+### Instead
+
+- **A fixed region for code**: simple, but its size is a guess: too
+  small and code is dropped, too large and programs lose memory.
+- **Pages of one size for everything** (frames, as Linux gives memory):
+  no external fragmentation at all, but stacks and chunks would need
+  rework; after 1.0, on top of this heap.
+- **Running from bytecode when records do not fit**: keeps calls from
+  failing but slow; it stays the fallback when memory is short in fact.
+
+### Checks
+
+`test/heap.c`: blocks of many sizes allocated, freed in random order and
+merged back to one; `realloc` in place and moving, contents kept; code
+allocations above all others; the Black Pill's pattern (programs, stacks,
+chunks) leaves the free memory in one piece after the area compacts.
+Boards: the Black Pill with the system's memory from `wm_heap`, CoreMark
+in it. Larger tests later (fuzzing the allocator, every platform).
+
+### Work, all of it
+
+| # | What | Where |
+|---|---|---|
+| 1 | This decision | docs |
+| 2 | `wm_heap.c/.h`, TLSF, high end, stats, allocator adapters | source |
+| 3 | `test/heap.c`, `check.sh`, API list | test, tools |
+| 4 | The kernel takes code from the high end when the heap is in use | wasm-rtos |
+| 5 | Black Pill on `wm_heap`, CoreMark measured, experiments.md | port |
+
