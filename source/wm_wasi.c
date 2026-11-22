@@ -140,7 +140,8 @@ static WmResult fd_write(WmRuntime* runtime, void* user, uint32_t* slots, WmMemo
     {
         uint8_t iov[8];
         uint32_t length;
-        (void)get(&c, iovs + i * 8u, iov, sizeof(iov));
+        if (get(&c, iovs + i * 8u, iov, sizeof(iov)) != E_SUCCESS)
+            RETURN(E_FAULT);
         length = read32(iov + 4);
         if (!in_bounds(memory, read32(iov), length) || length > UINT32_MAX - total)
             RETURN(E_FAULT);
@@ -151,7 +152,8 @@ static WmResult fd_write(WmRuntime* runtime, void* user, uint32_t* slots, WmMemo
         uint8_t iov[8];
         uint32_t address, length;
         uint8_t* data = NULL;
-        (void)get(&c, iovs + i * 8u, iov, sizeof(iov));
+        if (get(&c, iovs + i * 8u, iov, sizeof(iov)) != E_SUCCESS)
+            RETURN(E_FAULT);
         address = read32(iov);
         length = read32(iov + 4);
         if (!wm_memory_pointer(memory, address, length, &data) && data)
@@ -188,7 +190,8 @@ static WmResult poll_oneoff(WmRuntime* runtime, void* user, uint32_t* slots, WmM
     for (uint32_t i = 0; i < count; ++i)
     {
         uint8_t tag;
-        (void)get(&c, in + i * 48u, subscription, sizeof(subscription));
+        if (get(&c, in + i * 48u, subscription, sizeof(subscription)) != E_SUCCESS)
+            RETURN(E_FAULT);
         tag = subscription[8];
         if (tag == EVENTTYPE_CLOCK)
         {
@@ -214,7 +217,8 @@ static WmResult poll_oneoff(WmRuntime* runtime, void* user, uint32_t* slots, WmM
     {
         uint64_t wait_ns = soonest_ns > now ? soonest_ns - now : 0;
         uint64_t wait_ms = (wait_ns + 999999u) / 1000000u;
-        (void)get(&c, in + soonest * 48u, subscription, sizeof(subscription));
+        if (get(&c, in + soonest * 48u, subscription, sizeof(subscription)) != E_SUCCESS)
+            RETURN(E_FAULT);
         memset(event, 0, sizeof(event));
         memcpy(event, subscription, 8);
         event[10] = EVENTTYPE_CLOCK;
