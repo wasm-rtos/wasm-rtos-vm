@@ -54,6 +54,9 @@ How these work inside: [docs/internals.md](docs/internals.md).
   computers and in the browser (Emscripten).
 - Optional `dylink.0` shared libraries (`wm_dylink.h`): a program and its
   libraries in one runtime, like an ELF process.
+- Optional WASI preview 1 without files (`wm_wasi.h`): programs built with
+  a WASI C library run; the host says what the clocks, sleeping and output
+  are.
 
 ## Building
 
@@ -320,7 +323,24 @@ WmInstance*  wm_dylink_instance(const WmDylink* process);
 void         wm_dylink_free(WmDylink* process);
 ```
 
-The comments in `wm.h` and `wm_dylink.h` give the details of each call.
+### WASI without files (`wm_wasi.h`)
+
+```c
+static const WmWasiHost host = { .now_ns = now_ns, .sleep_ms = sleep_ms, .write = write_out };
+/* in the resolver given to wm_instantiate: */
+WmResult r = wm_wasi_resolve(&host, module, module_length, name, name_length, &out->as.func);
+if (!r && !out->as.func) /* not WASI, or a call it does not answer: */
+    r = wm_wasi_resolve_absent(program, module, module_length, name, &out->as.func); /* ENOSYS */
+```
+
+Clocks, `poll_oneoff` on clocks, `sched_yield`, the standard streams,
+arguments, environment (none), random bytes and `proc_exit`, in both
+`wasi_snapshot_preview1` and `wasi_unstable`. A host with files answers the
+file calls first. `wm_wasi_free` gives back the functions made.
+
+The comments in `wm.h`, `wm_dylink.h` and `wm_wasi.h` give the details of
+each call. `docs/api-1.0.txt` lists the public names at 1.0;
+`tools/check-api.py` checks that they are only added.
 
 ## Tests
 

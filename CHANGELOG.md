@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **WASI without files** (decision 19): `wm_wasi.h` answers the WASI
+  preview 1 calls that need no file system for any host, through a
+  `WmWasiHost` of plain functions; every other WASI call links and
+  returns ENOSYS. Moved from the wasm-rtos kernel, which now uses it.
+- **The public API at 1.0** in `docs/api-1.0.txt`, checked by
+  `tools/check-api.py` in CI: names are only added.
 - **The translator's state is in the heap, not on the C stack**: it took
   6 400 bytes of stack on a Cortex-M4, which on an STM32 with STM32duino
   (1 KiB of stack above the heap) overwrote the heap when it was nearly
