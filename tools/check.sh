@@ -74,6 +74,10 @@ cc -std=gnu99 -O1 -g -DWM_MEMORY_ALWAYS_PAGED=1 -fsanitize=address,undefined sou
 python3 tools/spec.py build/wm-spec-paged "$SPEC" >/dev/null && echo "spec (paged):  ok" || { echo "spec (paged):  FAIL"; fail=1; }
 cc -std=gnu99 -O1 -DWM_MEMORY_ALWAYS_PAGED=1 -fsanitize=address,undefined source/*.c test/fuel.c -lm -o build/fuel || exit 1
 build/fuel >/dev/null && echo "fuel (paged):  ok" || { echo "fuel (paged):  FAIL"; fail=1; }
+for mode in "" "-DWM_MEMORY_ALWAYS_PAGED=1"; do
+    cc -std=gnu99 -O1 -g $mode -fsanitize=address,undefined source/*.c test/wasi.c -lm -o build/wasi || exit 1
+    build/wasi >/dev/null && echo "wasi:          ok ${mode:-(one block)}" || { echo "wasi:          FAIL $mode"; fail=1; }
+done
 for mode in "" "-DWM_PREDECODE=0"; do
     # Predecoded needs ASan alone (see above); in place keeps UBSan too.
     san="-fsanitize=address${mode:+,undefined}"
