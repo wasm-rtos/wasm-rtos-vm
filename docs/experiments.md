@@ -725,6 +725,26 @@ itself, while the others keep theirs (a decision of its own): then a
 call never fails for want of records, and CoreMark runs at whatever
 speed the memory allows.
 
+### Values the register translator keeps pending
+
+**Kept: 128** · 2026-11-22 (decision 18 branch)
+
+**Tried.** How many operands the translator holds before it writes them
+to slots (`WM_REG_PENDING`), each 12 bytes, twice (pending and a copy),
+in the heap while a function is translated. CoreMark in the system on an
+ESP32 (each result the same on every run):
+
+| Pending | Translator's buffers | CoreMark |
+|---:|---:|---:|
+| 256 (main before) | 6 KB | 21.55 on main, 22.27 here |
+| 128 | 3 KB | **22.38** |
+| 64 | 1.5 KB | 21.17 (−1.8% against main) |
+
+**Found.** With 64, CoreMark's longer expressions are written out early
+and run slower; 128 is as fast as 256 at half its memory. With the code
+area this branch is 3.9% faster than main on the ESP32; the loop's
+machine code is the same byte for byte, so the gain is in the records.
+
 ## Checks
 
 ### Writing the fuel back at every trap

@@ -258,7 +258,7 @@ typedef struct
  * of real code keep more.
  */
 #ifndef WM_REG_PENDING
-#define WM_REG_PENDING 64u
+#define WM_REG_PENDING 128u
 #endif
 
 typedef struct
