@@ -1090,6 +1090,180 @@ check fail. A paged memory's dirty frames come out clean once each, leave
 RAM with no write, and a store marks one dirty again. Frames of 256 B,
 4 KiB and 64 KiB, and the loop in place.
 
+## 18. Records in an area of their own, moved together when it has holes
+
+**Proposed (2026-11-22).**
+
+### Problem
+
+On a Black Pill (STM32F411, 128 KiB of RAM) the system checks' CoreMark
+ends with "exhaustion: out of memory" while the board has room for it.
+Measured with the allocator wrapped (the board's `malloc`, `realloc` and
+`calloc` reporting what they refuse):
+
+| | bytes |
+|---|---:|
+| heap at the start of the checks | 110 592 |
+| free after CoreMark is loaded (memory 64 KiB, stack 8 KiB, module, kernel) | 31 692 |
+| CoreMark's records, all of them | about 15 300 |
+| refused: `realloc` to 4 096 for a function's records | |
+| free at that moment, in pieces | 9 896 |
+
+The memory is there, in holes. Every allocation of the engine shares one
+heap: the program's memory (one block of 64 KiB), its stack, the module,
+the records of each function, a function's tail (what the loop in place
+needs inside a segment), and the translator's work: its state, its
+arrays, and the records it grows by doubling (`realloc` 1, 2, 4 KiB).
+Records live short and come and go in any order (the code cache drops
+them by CLOCK and makes them again), between blocks that live long, so
+the heap ends in pieces none of which takes the next function. Dropping
+more code does not help: a dropped function leaves a hole where it was.
+
+Before the register loop the same CoreMark ran on this board (2026-11-12);
+its translation now takes more at once (decision 16).
+
+### Decision
+
+**1. An area of the engine's own for records** (`wm_code.c`).
+
+- **Chunks.** The area is a list of chunks, each from the code allocator
+  (`wm_set_code_allocator`, or the engine's): at least `WM_CODE_CHUNK`
+  bytes (default 4 KiB), larger for a function that needs more; a chunk
+  header of 16 bytes (next, size, top). Records of one function lie in
+  one chunk.
+- **A function's records are a span**: its `WmCode` (`fast`, `own`,
+  `fast_cells`) already says where and how long; no header per span.
+- **Allocation is a bump** at a chunk's top: the last chunk first, then
+  any with room at its top.
+- **Dropping a function leaves a hole**, counted per chunk (`dead`).
+- **Compaction** when a request finds no top with room but the area has
+  holes enough: the spans of each chunk slide down over the holes
+  (`memmove`), in address order (the codes of all modules sorted by
+  `fast`), and each moved function's `fast` and `own` are set to its new
+  place. A function pinned (on a stack: `pin_stacks`, and the one being
+  made) does not move; spans after it slide up to it. Spans may also move
+  into an earlier chunk with room, so the last ones empty.
+- **Empty chunks go back** to the allocator at once; the last chunk is cut
+  to its top (`realloc` down, in place) when the heap needs room.
+- **Records need nothing changed when they move**: handlers are offsets
+  from the first, branches relative, calls by function index
+  (`inst->funcs`), so a function runs wherever its records are (a code
+  image already runs them from flash, decision 15).
+
+What points into records and how each stays right:
+
+| Holder | Kept right by |
+|---|---|
+| `WmCode.fast`, `own` | compaction sets them |
+| a frame's return (`WmFrame.pc`) | its function is pinned (on the stack) |
+| a stopped run (`rt->saved.pc`) | `saved.func` pinned while suspended |
+| the function calling a host (`rt->caller`) and the nested callers | pinned while `rt->nesting` |
+| the loop's own `ip` | only inside a run, whose function is on the stack |
+| a code image (`mapped`) | not in the area: never moves |
+| tails (`WmTailEntry`) | cell indices, not addresses |
+| the profile (`WM_PROFILE`) | counts by record kind |
+
+**2. Translation straight into the area, at a chunk's top.** The
+translator writes cells at the top of the chunk with the most room; when
+that runs out it asks the area for more, which may compact (its own
+growing span moves too: the translator takes its `cells` back from the
+area after every request) or take a new chunk of twice what it has
+written (one copy). At the end the span is cut to its count. No `realloc`
+chain in the shared heap, and no second pass.
+
+**3. Tails** (already measured on the board, part of this work): a
+translation only for a tail keeps the last 256 cells in a ring (1 KiB;
+it reads back no more than the last record, its cells are let go), and
+making a tail drops other code and tries again when the heap refuses it,
+as records do.
+
+**4. Memory before code.** `wm_code_drop_one`, which the memory calls
+when the heap refuses a frame or a block, gives the heap memory back now,
+not a hole in the area: it drops by CLOCK until a chunk empties (or the
+last chunk can be cut by what was asked), compacts, and frees it. 1 when
+the heap got something back, 0 when nothing could go.
+
+**5. Accounting stays**: `wm_code_cache_bytes` counts the records as now;
+`wm_code_area_bytes` (new) the chunks, holes and tops included;
+`wm_code_cache_limit` limits the records.
+
+### Why
+
+- Records are what an engine can move cheaply: no pointers inside, one
+  owner, the code on the stacks known. This is how mature code caches
+  keep their memory whole: V8 compacts its code space (with relocation
+  information, which records here do not need), HotSpot keeps compiled
+  code in a heap of its own and flushes the cold; the Memory Manager of
+  the classic Mac OS compacted relocatable blocks behind handles, and
+  zsmalloc compacts zram's pages in Linux. `WmCode` is the handle.
+- Short-lived blocks apart from long-lived ones is the rule that keeps a
+  heap whole; the program's memory and stack, which live as long as the
+  program, stay in the shared heap, the code that comes and goes leaves
+  it.
+- Nothing changes while a program runs: the same records, the same loop.
+  The cost is a `memmove` when a request would otherwise fail.
+
+### Instead
+
+- **A better allocator in the port (TLSF, size classes).** Less
+  fragmentation in general, but short and long lives still mix in one
+  heap; and the engine must work on the allocator a board has.
+- **Counting the records first, then translating into an exact span.**
+  No compaction, but the translation twice; and a span of the exact size
+  still needs a hole that large.
+- **A fixed region for code.** Simple, but its room sits idle when there
+  is little code and is missing when there is much; the program's memory
+  could not have it back.
+- **Running a function in place when its records find no room.** A
+  guarantee for code larger than RAM altogether, slower for that
+  function: worth having, as its own decision (19), after this one.
+- **Smaller cells.** Saves room everywhere, costs speed in the loop.
+
+### Costs
+
+- Flash: the area and compaction, an estimated 1–2 KiB on Xtensa and
+  Cortex-M (measured with the work); nothing on AVR (no predecoding).
+- RAM: 16 bytes a chunk; a top not yet used in the last chunk, given back
+  when the heap needs it.
+- Time: a compaction moves at most the area's live records (15 KiB for
+  CoreMark: about 0.1 ms on a Black Pill); translation as now.
+
+### Checks
+
+- `test/area.c`, under AddressSanitizer:
+  - holes: functions filling chunks, every other dropped, a function
+    larger than any hole and smaller than their sum is made, by
+    compaction, in no more memory;
+  - a function on the stack keeps its address while a host function it
+    called makes another module's code and compacts (its records' address
+    before and after the import), and the run goes on;
+  - a translation that outgrows its chunk while it runs (chunks of 256
+    bytes) is moved by the compaction it asked for and ends right;
+  - memory before code: `memory.grow` by more than the heap has is done
+    once chunks are freed, and the area is smaller after;
+  - `wm_code_cache_bytes`, `wm_code_area_bytes` and the heap agree after
+    each step; everything given back at the end.
+- The spec tests with a code cache of almost nothing and chunks of 256
+  bytes (records dropped, made and moved all the time), in the fast loop,
+  paged and swapped; fuel exact at every slicing (`fuel (as on chips)`);
+  the snapshot tests; the fuzzers' finds.
+- The loop's machine code unchanged (its hash, as `quick.sh` checks).
+- Boards: the Black Pill's system checks all pass, CoreMark in them
+  included; ESP32 19/19, programs at once not fewer than 18, CoreMark not
+  lower; Mac CoreMark not lower.
+
+### Work, all of it
+
+| # | What | Where |
+|---|---|---|
+| 1 | The area: chunks, bump, holes, compaction, freeing, `wm_code_area_bytes` | `wm_code.c`, `wm_internal.h`, `wm.h` |
+| 2 | Translation straight into the area | `wm_fast.c` |
+| 3 | Tails: the ring and the room (done in the branch) | `wm_fast.c` |
+| 4 | Memory before code gives the heap memory | `wm_code.c`, `wm_memory.c` |
+| 5 | Code images copied into RAM go into the area | `wm_code.c` |
+| 6 | `test/area.c`, spec runs under pressure in `check.sh` and CI | tests, tools |
+| 7 | Boards, `docs/experiments.md` with the numbers, README, CHANGELOG | |
+
 ## 19. WASI without files in the interpreter
 
 **Decided and built (2026-11-22).** Part of the operating system's
