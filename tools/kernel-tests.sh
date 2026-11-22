@@ -19,6 +19,8 @@ rm -rf "$out"
 mkdir -p "$out/kernel/vm" "$out/tests"
 for f in "$KERNEL"/*.c "$KERNEL"/*.h; do ln -s "$f" "$out/kernel/"; done
 ln -s "$KERNEL/include" "$out/kernel/include"
+# The devices (the kernel's hw/ submodule, its decision 14).
+ln -s "$KERNEL/hw" "$out/kernel/hw"
 ln -s "$VM/source" "$out/kernel/vm/source"
 cp -R "$TESTS_DIR"/. "$out/tests/"
 
@@ -54,7 +56,7 @@ for name in "${names[@]}"; do
                 -o "$dir/libdylink0.so" "$dir/library.o" >"$dir/build.txt" 2>&1
     fi
     if ! "$CC_BIN" -std=c11 -O1 -g ${SANITIZE:+-fsanitize=address,undefined} -w -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \
-            $EXTRA_CFLAGS ${flags[@]+"${flags[@]}"} -I"$out/kernel" "$dir/main.c" "$out"/kernel/*.c "$VM"/source/wm_*.c -lm -o "$dir/runner" >"$dir/build.txt" 2>&1; then
+            $EXTRA_CFLAGS ${flags[@]+"${flags[@]}"} -I"$out/kernel" -I"$VM/source" "$dir/main.c" "$out"/kernel/*.c "$out"/kernel/hw/*.c "$VM"/source/wm_*.c -lm -o "$dir/runner" >"$dir/build.txt" 2>&1; then
         echo "FAIL $name (does not build: $(grep -m1 -E 'error' "$dir/build.txt"))"
         failed=$((failed + 1))
         continue
