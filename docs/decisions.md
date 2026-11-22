@@ -1143,8 +1143,11 @@ its translation now takes more at once (decision 16).
   place. A function pinned (on a stack: `pin_stacks`, and the one being
   made) does not move; spans after it slide up to it. Spans may also move
   into an earlier chunk with room, so the last ones empty.
-- **Empty chunks go back** to the allocator at once; the last chunk is cut
-  to its top (`realloc` down, in place) when the heap needs room.
+- **Empty chunks go back** to the allocator at once; a chunk is cut to its
+  top (`realloc` down) when the heap needs room, and only a chunk with no
+  pinned span: an allocator may answer a smaller size with a new address
+  (the kernel's is its own), and then every span of the chunk is moved
+  with it, which only unpinned spans may be.
 - **Records need nothing changed when they move**: handlers are offsets
   from the first, branches relative, calls by function index
   (`inst->funcs`), so a function runs wherever its records are (a code
@@ -1162,6 +1165,7 @@ What points into records and how each stays right:
 | a code image (`mapped`) | not in the area: never moves |
 | tails (`WmTailEntry`) | cell indices, not addresses |
 | the profile (`WM_PROFILE`) | counts by record kind |
+| writing or checking a code image (`wm_code_image_write`, `_verify`) | reads a function's records right after making them, with no request to the area between |
 
 **2. Translation straight into the area, at a chunk's top.** The
 translator writes cells at the top of the chunk with the most room; when
@@ -1241,6 +1245,8 @@ the heap got something back, 0 when nothing could go.
     bytes) is moved by the compaction it asked for and ends right;
   - memory before code: `memory.grow` by more than the heap has is done
     once chunks are freed, and the area is smaller after;
+  - an allocator that answers every smaller size with a new address: a
+    chunk with a pinned span is not cut, one without is, its spans moved;
   - `wm_code_cache_bytes`, `wm_code_area_bytes` and the heap agree after
     each step; everything given back at the end.
 - The spec tests with a code cache of almost nothing and chunks of 256
