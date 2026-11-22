@@ -155,6 +155,11 @@ int run(const uint8_t* bytes, uint32_t size)
 }
 ```
 
+More examples, each built and run in CI: hosts calling programs, host
+functions, two programs sharing the processor by fuel, a WASI program with
+`printf`, in
+[wasm-rtos-examples](https://github.com/wasm-rtos/wasm-rtos-examples).
+
 ## API reference
 
 Every public function of `wm.h`. Errors are static strings that start with
