@@ -22,11 +22,20 @@
 #define WM_HEAP_MAX_LOG2 (sizeof(size_t) > 4 ? 32 : sizeof(size_t) > 2 ? 24 : 16)
 #endif
 
+/* Blocks aligned to 2^WM_HEAP_ALIGN_LOG2 bytes: 8 for doubles and i64; 1 or 2 on AVR, which aligns nothing. */
+#ifndef WM_HEAP_ALIGN_LOG2
+#define WM_HEAP_ALIGN_LOG2 3
+#endif
+/* 2^WM_HEAP_SL_LOG2 classes per power of two: 16, or fewer for a smaller control on small chips. */
+#ifndef WM_HEAP_SL_LOG2
+#define WM_HEAP_SL_LOG2 4
+#endif
+
 enum
 {
-    ALIGN_LOG2 = 3, /* 8 bytes: doubles and i64 */
+    ALIGN_LOG2 = WM_HEAP_ALIGN_LOG2,
     ALIGN = 1 << ALIGN_LOG2,
-    SL_LOG2 = 4, /* 16 classes per power of two */
+    SL_LOG2 = WM_HEAP_SL_LOG2,
     SL_COUNT = 1 << SL_LOG2,
     FL_SHIFT = SL_LOG2 + ALIGN_LOG2, /* sizes below 2^FL_SHIFT are all in the first level, by ALIGN */
     FL_COUNT = WM_HEAP_MAX_LOG2 - FL_SHIFT + 1,
