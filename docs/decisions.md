@@ -1089,3 +1089,66 @@ in a call, a call between instances (each loop) or a resume makes its
 check fail. A paged memory's dirty frames come out clean once each, leave
 RAM with no write, and a store marks one dirty again. Frames of 256 B,
 4 KiB and 64 KiB, and the loop in place.
+
+## 19. WASI without files in the interpreter
+
+**Decided and built (2026-11-22).** Part of the operating system's
+decision 15 (each layer holds what is its own).
+
+### Problem
+
+WASI preview 1 is a standard for WebAssembly programs, not for one
+operating system, yet its calls lived in the kernel: the layouts of
+`iovec`, `subscription` and `event`, the error numbers, both namespaces,
+the ENOSYS answer for calls a build leaves out, about 400 lines. Anyone
+embedding the interpreter without the kernel (a mini OS of the
+interpreter and the devices, a board with no scheduler) had none of it,
+so a program built with a WASI C library did not even link there.
+
+### Decision
+
+- **`source/wm_wasi.c` and `wm_wasi.h`**: the calls that need no file
+  system: `clock_res_get`, `clock_time_get`, `sched_yield`,
+  `poll_oneoff` (clocks sleep, file subscriptions are ready at once),
+  `fd_write` to the standard streams, `fd_read` of an empty standard
+  input, `fd_fdstat_get`, `fd_close`, `fd_seek`, `fd_prestat_*`,
+  `args_*`, `environ_*` (none), `random_get`, `proc_exit`. Both
+  namespaces, `wasi_snapshot_preview1` and `wasi_unstable`.
+- **What the calls mean on a device is the host's**, in a `WmWasiHost`
+  of plain functions: the clocks, sleeping and yielding the caller (a
+  host with tasks blocks only the task; a host without waits there),
+  where output goes and what writing another fd answers, the arguments,
+  random bytes (NULL: a small generator of its own, not for secrets), and
+  the trap `proc_exit` ends with.
+- **`wm_wasi_resolve_absent`**: any other WASI call links, made to the
+  type the program declares, and returns ENOSYS, so a program that only
+  might call it still loads.
+- A host with files answers the file calls itself first and asks this
+  module for the rest, as the kernel does.
+- Memory goes through `wm_memory_read`, `wm_memory_write` and
+  `wm_memory_pointer`, so the calls work in a paged memory too. A range
+  outside the memory answers what it always did: EFAULT, or a trap for
+  the calls that always trapped.
+
+### Why
+
+Every engine that runs WASI programs keeps the standard's part apart
+from what a platform gives it: wasm3's `m3_api_wasi.c` and WAMR's
+`libc-wasi` sit beside the interpreter, and the host only supplies the
+clock, the output and the files. Here the kernel was the only host, so
+the line was never drawn.
+
+The calls answer byte for byte what the kernel answered: the same
+checks in the same order, the same errors, the same generator.
+
+### Checks
+
+`test/wasi.c`, the module alone with a host of a few functions, in a
+memory of one block and an always paged one: both buffers of an
+`fd_write` and the count, another fd answering the host's errno, a bad
+buffer writing nothing; `clock_time_get` through `wasi_unstable`, a
+clock that is not there, a result past the memory; arguments; random
+bytes, and past the memory a trap; `poll_oneoff` on one clock sleeping
+5 ms; `proc_exit` ending with the host's trap and its code; two file
+calls nobody answers giving ENOSYS. The kernel's suite runs through it
+unchanged (1734 checks).
