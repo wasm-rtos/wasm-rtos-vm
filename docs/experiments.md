@@ -696,6 +696,35 @@ CoreMark are not measured yet.
 loop that already exists for it), so a call never fails for records; or
 smaller tails; or records kept in the board's flash (a code store).
 
+### The engine's heap on the Black Pill
+
+**Kept: holes gone; not enough memory for CoreMark's records** · 2026-11-22 (decision 20)
+
+**Tried.** The whole system's `malloc` from `wm_heap` over one static
+block, code from its top.
+
+| Black Pill, in the OS | newlib's heap | `wm_heap`, 94 KB | `wm_heap`, 104 KB |
+|---|---|---|---|
+| Allocations refused | 514 | 0 | 0 |
+| Free after CoreMark loads | — | 11.7 KB | 26.4 KB |
+| CoreMark | out of memory | 2.52, every function in place | out of memory during the run |
+| Least free during the run | 4.8 KB | 11.7 KB | 3.8 KB |
+| Other checks, leaks | 17/17, none | 17/17, none | 17/17, none |
+
+**Found.** The heap does its part: no allocation is refused while memory
+is free, and everything comes back to one piece. With 94 KB the module
+is judged too large to predecode when it loads and runs in place whole
+(2.52, correct but slow). With 104 KB it is predecoded, and during the
+run a function's records find no room once the program's 64 KB memory,
+its 8 KB stack and the other functions' records are in: the call fails
+instead of going on. Moving to the bytecode loop is decided per module,
+at load, not per function when room runs out.
+
+**Next.** A function whose records find no room runs in place, by
+itself, while the others keep theirs (a decision of its own): then a
+call never fails for want of records, and CoreMark runs at whatever
+speed the memory allows.
+
 ## Checks
 
 ### Writing the fuel back at every trap
