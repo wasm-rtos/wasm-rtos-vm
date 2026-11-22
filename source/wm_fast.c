@@ -227,14 +227,15 @@ int wm_fast_position(const WmModule* m, const WmCode* code, const WmCell* ip, ui
 
 #if WM_PREDECODE
 /*
- * Experiment (decision 16): a function translated for the register loop.
- * Operands are frame slots (fp-relative: parameters and locals, then the
- * stack at B + depth); a value that is only a local or a constant stays
- * that until something needs it in its slot (copy propagation within a
- * block). Every instruction not done here runs as on the stack, on the
- * slots below the record's top, so the frame at a label, a call or a
- * branch is the stack machine's. Fuel is one a record, and snapshots are
- * not made: an experiment of what the loop could gain, not the engine.
+ * A function translated for the register loop (decision 16). Operands are
+ * frame slots (fp-relative: parameters and locals, then the stack at B +
+ * depth); a value that is only a local or a constant stays that until
+ * something needs it in its slot (copy propagation within a block). Every
+ * instruction not done here runs as on the stack, on the slots below the
+ * record's top, so the frame at a label, a call or a branch is the stack
+ * machine's. Fuel is charged by segment (SEG), exactly; a stop inside a
+ * segment goes on in the loop in place (WmTail), and snapshots are taken
+ * at the stack machine's positions.
  */
 enum
 {

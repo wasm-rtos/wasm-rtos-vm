@@ -1,5 +1,5 @@
 /*
- * Experiment (decision 16): the register loop's records. Operands are slots
+ * The register loop's records (decision 16). Operands are slots
  * of the frame (fp-relative: parameters, locals, then the stack by depth),
  * so a record names where its values are instead of taking them from a
  * stack pointer. WM_REC(NAME, name): a record, its handler r_name.

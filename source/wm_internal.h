@@ -382,7 +382,7 @@ typedef union WmCell
 
 
 /*
- * Experiment (decision 16): what the loop in place needs to run part of a
+ * The register loop (decision 16): what the loop in place needs to run part of a
  * function that runs in the register loop, where fuel ends inside a
  * segment or a snapshot stopped: the function's side table entries (its
  * own, from 0), and the places the register loop can take over again.
@@ -433,7 +433,7 @@ typedef struct WmCode
     uint8_t pinned;
     /* fast points into the code image: nothing to free, not counted in the cache. */
     uint8_t mapped;
-    /* Register loop experiment: what the loop in place needs to run part of it (wm_reg_tail), or NULL. */
+    /* What the loop in place needs to run part of it (wm_reg_tail), or NULL. */
     WmTail* tail;
 } WmCode;
 
@@ -751,7 +751,7 @@ typedef struct WmSuspended
     const WmSide* st;
     uint32_t* fp;
     uint32_t* sp;
-    /* Register loop experiment: stopped in the loop in place, inside a function of the register loop. */
+    /* Stopped in the loop in place, inside a function of the register loop. */
     uint8_t inplace;
 } WmSuspended;
 
