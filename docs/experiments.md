@@ -666,6 +666,36 @@ them in if there is room by then.
 round, and it sent those functions back to stop the loop at their next
 call, again and again. `wm_code_cache_trim` lets them go instead.
 
+### Records in an area of their own, on the Black Pill
+
+**Built, not enough alone** · 2026-11-22 (decision 18)
+
+**Tried.** Records in chunks of the code allocator, compacted when there
+are holes, with tails in a window of cells and memory before code giving
+the heap whole chunk tops back.
+
+| Black Pill, in the OS (heap 110 KB) | Result |
+|---|---|
+| The system's other 17 checks | pass, nothing leaked |
+| CoreMark | out of memory: `resume: exhaustion` |
+| Chunks refused while it ran | 281 (2.6 to 7.5 KB, with 3 to 12 KB free in pieces) |
+| Register translation buffers refused | 99 (1 to 2 KB) |
+| Least free heap during the run | 4 756 B |
+| The area after the run | 0 B: everything given back |
+
+**Found.** The area does what it says: it compacts, cuts and gives back,
+and holds nothing once CoreMark is gone (`test/area.c` and the spec suite
+with code moved at every allocation agree). What it cannot do is make the
+rest of the heap whole: the program's memory, stacks and the translator's
+buffers leave free bytes in pieces too small for a chunk, so the records
+CoreMark needs at once do not fit in 110 KB. The spec suite (27 437
+checks) and the kernel's tests (1 734) pass with it; the ESP32 and Mac
+CoreMark are not measured yet.
+
+**Next.** A function with no room runs from its bytecode in place (the
+loop that already exists for it), so a call never fails for records; or
+smaller tails; or records kept in the board's flash (a code store).
+
 ## Checks
 
 ### Writing the fuel back at every trap
