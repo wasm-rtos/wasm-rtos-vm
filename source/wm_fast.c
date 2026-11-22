@@ -1209,17 +1209,16 @@ static WmResult reg_tail_make(WmModule* m, WmCode* code, WmTail** out)
 /* What the loop in place needs to run part of a function that runs predecoded: made once, kept with its records. */
 WmResult wm_reg_tail(WmModule* m, WmCode* code, WmTail** out)
 {
-    uint8_t pinned = code->pinned;
     WmResult result;
     if (code->tail)
     {
         *out = code->tail;
         return NULL;
     }
-    code->pinned = 1;
+    ++code->pinned;
     while (out_of_room(result = reg_tail_make(m, code, out)) && wm_code_drop_one())
         ;
-    code->pinned = pinned;
+    --code->pinned;
     return result;
 }
 
@@ -1281,12 +1280,11 @@ static WmResult reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t*
 
 WmResult wm_reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top)
 {
-    uint8_t pinned = code->pinned;
     WmResult result;
-    code->pinned = 1;
+    ++code->pinned;
     while (out_of_room(result = reg_stack_at(m, code, cell, fp, offset, top)) && wm_code_drop_one())
         ;
-    code->pinned = pinned;
+    --code->pinned;
     return result;
 }
 

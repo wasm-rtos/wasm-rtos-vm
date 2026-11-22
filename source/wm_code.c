@@ -91,13 +91,19 @@ void wm_code_remove_module(WmModule* m)
         wm_code_drop(&m->codes[i]);
 }
 
+/* Pinning counts (decision 18): the area compacts inside code that pinned the stacks already. */
 static void pin_func(const WmFunc* f, uint8_t on)
 {
     if (f && f->code)
-        f->code->pinned = on;
+    {
+        if (on)
+            ++f->code->pinned;
+        else
+            --f->code->pinned;
+    }
 }
 
-/* Mark (or unmark) every function on a call stack. */
+/* Mark (or unmark) every function on a call stack; calls nest, as long as the stacks do not change between. */
 static void pin_stacks(uint8_t on)
 {
     for (WmRuntime* rt = wm_runtimes(); rt; rt = rt->next)
@@ -184,10 +190,10 @@ static void from_image(WmModule* m, WmCode* code)
     uint32_t count = m->image_index[i + 1u] - m->image_index[i];
     WmCell* copy;
     pin_stacks(1);
-    code->pinned = 1;
+    ++code->pinned;
     while (!(copy = (WmCell*)wm_code_malloc((size_t)count * sizeof(WmCell))) && make_room())
         ;
-    code->pinned = 0;
+    --code->pinned;
     pin_stacks(0);
     code->fast_cells = (uint16_t)count;
     code->mapped = !copy;
@@ -214,7 +220,7 @@ WmResult wm_code_make(WmModule* m, WmCode* code, const WmSide* side)
         return NULL;
     }
     pin_stacks(1);
-    code->pinned = 1;
+    ++code->pinned;
     do
     {
         WmSide* made = NULL;
@@ -222,7 +228,7 @@ WmResult wm_code_make(WmModule* m, WmCode* code, const WmSide* side)
             result = wm_predecode(m, code, side ? side : made);
         wm_free(made);
     } while (is_exhaustion(result) && make_room());
-    code->pinned = 0;
+    --code->pinned;
     pin_stacks(0);
     return result;
 }
@@ -245,10 +251,10 @@ WmResult wm_code_load(WmFunc* func)
     if (g_limit && g_bytes > g_limit)
     {
         pin_stacks(1);
-        code->pinned = 1;
+        ++code->pinned;
         while (g_bytes > g_limit && evict_one())
             ;
-        code->pinned = 0;
+        --code->pinned;
         pin_stacks(0);
     }
     return NULL;
