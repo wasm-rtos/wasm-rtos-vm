@@ -1127,10 +1127,17 @@ its translation now takes more at once (decision 16).
 **1. An area of the engine's own for records** (`wm_code.c`).
 
 - **Chunks.** The area is a list of chunks, each from the code allocator
-  (`wm_set_code_allocator`, or the engine's): at least `WM_CODE_CHUNK`
-  bytes (default 4 KiB), larger for a function that needs more; a chunk
-  header of 16 bytes (next, size, top). Records of one function lie in
-  one chunk.
+  (`wm_set_code_allocator`, or the engine's), with a header of 16 bytes
+  (24 with 64-bit pointers): next, size, top, live. Records of one
+  function lie in one chunk. A new chunk takes what the request needs,
+  at least half of what the area holds already and at least 256 bytes:
+  chunks stay few, as a vector grows, and the area does not become small
+  pieces among the heap's again (a chunk cut to each function would).
+- **Only what is needed stays.** The unused top of a chunk is given back
+  (`realloc` down) once it is more than a quarter of the area and more
+  than 256 bytes, and all of it at once when the heap is short (memory
+  before code, below): room the area holds back never keeps memory from
+  anything else.
 - **A function's records are a span**: its `WmCode` (`fast`, `own`,
   `fast_cells`) already says where and how long; no header per span.
 - **Allocation is a bump** at a chunk's top: the last chunk first, then
@@ -1144,8 +1151,7 @@ its translation now takes more at once (decision 16).
   made) does not move; spans after it slide up to it. Spans may also move
   into an earlier chunk with room, so the last ones empty.
 - **Empty chunks go back** to the allocator at once; a chunk is cut to its
-  top (`realloc` down) when the heap needs room, and only a chunk with no
-  pinned span: an allocator may answer a smaller size with a new address
+  top (`realloc` down) only when it has no pinned span: an allocator may answer a smaller size with a new address
   (the kernel's is its own), and then every span of the chunk is moved
   with it, which only unpinned spans may be.
 - **Records need nothing changed when they move**: handlers are offsets
@@ -1166,6 +1172,17 @@ What points into records and how each stays right:
 | tails (`WmTailEntry`) | cell indices, not addresses |
 | the profile (`WM_PROFILE`) | counts by record kind |
 | writing or checking a code image (`wm_code_image_write`, `_verify`) | reads a function's records right after making them, with no request to the area between |
+
+- **Pinning counts.** A function's `pinned` becomes a count: the area
+  compacts from inside code that pinned the stacks already (making a
+  function, giving the heap room), and an inner unpin must not unpin the
+  outer.
+- **A mode that moves always** (`WM_CODE_MOVE_ALWAYS`, tests only): every
+  request to the area moves every unpinned span to a new chunk and fills
+  the old place with a pattern, so a pointer into records kept anywhere
+  they may move fails at once under AddressSanitizer, not on a board a
+  week later (the classic Mac OS's bug of dangling pointers into blocks
+  that moved).
 
 **2. Translation straight into the area, at a chunk's top.** The
 translator writes cells at the top of the chunk with the most room; when
