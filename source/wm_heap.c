@@ -18,7 +18,8 @@
 #include "wm.h"
 
 #ifndef WM_HEAP_MAX_LOG2
-#define WM_HEAP_MAX_LOG2 (sizeof(size_t) > 4 ? 32 : 24) /* 4 GiB, or 16 MiB on 32-bit chips */
+/* 4 GiB, 16 MiB on 32-bit chips, 32 KiB where size_t has 16 bits (AVR). */
+#define WM_HEAP_MAX_LOG2 (sizeof(size_t) > 4 ? 32 : sizeof(size_t) > 2 ? 24 : 16)
 #endif
 
 enum
