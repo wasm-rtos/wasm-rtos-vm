@@ -28,6 +28,7 @@ WmSnapshotWrite
 WmTable
 wm_call
 wm_call_depth
+wm_code_area_bytes
 wm_code_cache_bytes
 wm_code_cache_limit
 wm_code_cache_trim

@@ -247,7 +247,7 @@ static void area_verify(const char* where)
         while (at < c->top)
         {
             WmSpan* h = (WmSpan*)(void*)((WmCell*)(void*)(c + 1) + at);
-            if (h->cells > 0x8000u || (h->owner && h->owner != BUILD && h->owner->own != (WmCell*)(void*)h + SPAN_CELLS) ||
+            if (c->top - at < SPAN_CELLS || h->cells > c->top - at - SPAN_CELLS || (h->owner && h->owner != BUILD && h->owner->own != (WmCell*)(void*)h + SPAN_CELLS) ||
                 (h->owner == BUILD && (g_build != c || g_build_at != at)))
             {
                 fprintf(stderr, "wm code area broken (%s): span at %u of %u\n", where, at, c->top);
