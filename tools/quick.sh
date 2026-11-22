@@ -12,6 +12,7 @@ SPEC="${SPEC:-$HOME/wasm-rtos/third-party/spec-2.0/json}"
 XTENSA="${XTENSA:-$HOME/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32-elf}"
 mkdir -p build
 fail=0
+python3 tools/check-api.py || fail=1
 cc -std=gnu99 -O2 -Wall -Wextra -Wno-unused-parameter -Wcast-qual -Werror source/*.c tools/wm-spec.c -lm \
     -o build/quick-werror && echo "build:         ok" || { echo "build:         FAIL"; exit 1; }
 for mode in "" "-DWM_FUSE=1" -DWM_PREDECODE=0 -DWM_MEMORY_ALWAYS_PAGED=1 -DWM_SPEC_PAGER=3; do

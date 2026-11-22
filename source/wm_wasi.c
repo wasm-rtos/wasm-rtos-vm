@@ -471,7 +471,7 @@ WmResult wm_wasi_resolve_absent(const WmModule* program, const char* module, uin
     const uint8_t *params = NULL, *results = NULL;
     uint32_t param_count = 0, result_count = 0, length = 0;
     char signature[24];
-    static const char key_nosys, key_quiet;
+    static char key_nosys, key_quiet;
     *out = NULL;
     if (!program || !is_wasi(module, module_length) ||
         !wm_module_import_type(program, name, &params, &param_count, &results, &result_count) ||
