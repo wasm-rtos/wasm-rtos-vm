@@ -62,11 +62,17 @@ typedef struct Block
 struct WmHeap
 {
     uint32_t fl_bitmap;
-    uint32_t sl_bitmap[FL_COUNT];
-    Block* lists[FL_COUNT][SL_COUNT];
+    /* First levels this heap's size needs (at most FL_COUNT); the bitmaps and lists follow the struct. */
+    int fl_count;
+    uint32_t* sl_bitmap;
+    Block** lists;
     Block* first;
     size_t used, blocks;
+    /* The lowest block cut from the top (NULL: none): ordinary blocks are taken below it while they can be. */
+    Block* boundary;
 };
+
+#define LIST(h, fl, sl) ((h)->lists[(fl) * SL_COUNT + (sl)])
 
 /* The first level's bitmap is 32 bits. */
 typedef char wm_heap_fl_fits[FL_COUNT <= 32 ? 1 : -1];
@@ -133,7 +139,7 @@ static void list_remove(WmHeap* h, Block* b)
         b->prev_free->next_free = b->next_free;
     else
     {
-        h->lists[fl][sl] = b->next_free;
+        LIST(h, fl, sl) = b->next_free;
         if (!b->next_free)
         {
             h->sl_bitmap[fl] &= ~(1u << sl);
@@ -150,10 +156,10 @@ static void list_insert(WmHeap* h, Block* b)
     int fl, sl;
     mapping(size_of(b), &fl, &sl);
     b->prev_free = NULL;
-    b->next_free = h->lists[fl][sl];
+    b->next_free = LIST(h, fl, sl);
     if (b->next_free)
         b->next_free->prev_free = b;
-    h->lists[fl][sl] = b;
+    LIST(h, fl, sl) = b;
     h->sl_bitmap[fl] |= 1u << sl;
     h->fl_bitmap |= 1u << fl;
 }
@@ -217,18 +223,56 @@ static void trim(WmHeap* h, Block* b, size_t size)
     }
 }
 
+/* The lowest block cut from the top at or above b, or NULL: blocks above the boundary are mostly code, so this is short. */
+static Block* high_from(Block* b)
+{
+    for (; size_of(b); b = next_phys(b))
+        if (!is_free(b) && (b->size & HIGH))
+            return b;
+    return NULL;
+}
+
+/* A block of the list's class or above that lies below the boundary, or NULL. */
+static Block* below_boundary(WmHeap* h, int fl, int sl)
+{
+    for (; fl < h->fl_count; ++fl, sl = 0)
+    {
+        uint32_t map = h->sl_bitmap[fl] & (~0u << sl);
+        while (map)
+        {
+            int s = ffs32(map);
+            for (Block* b = LIST(h, fl, s); b; b = b->next_free)
+                if (b < h->boundary)
+                    return b;
+            map &= map - 1u;
+        }
+    }
+    return NULL;
+}
+
 WmHeap* wm_heap_new(void* memory, size_t bytes)
 {
     uintptr_t start = ((uintptr_t)memory + ALIGN - 1) & ~(uintptr_t)(ALIGN - 1);
     size_t lost = start - (uintptr_t)memory;
-    size_t control = (sizeof(WmHeap) + ALIGN - 1) & ~(size_t)(ALIGN - 1);
     WmHeap* h = (WmHeap*)(void*)start;
     Block *b, *sentinel;
-    size_t size;
-    if (!memory || bytes < lost + control + 2 * sizeof(Block) + 64)
+    size_t size, at_bitmap, at_lists, control;
+    int fl_count;
+    if (!memory || bytes < lost + sizeof(WmHeap) + 256)
         return NULL;
     bytes = (bytes - lost) & ~(size_t)(ALIGN - 1);
-    memset(h, 0, sizeof(*h));
+    /* As many first levels as a block of this heap's size needs: the control grows with the heap. */
+    fl_count = fls_size(bytes) - FL_SHIFT + 2;
+    fl_count = fl_count < 1 ? 1 : fl_count > FL_COUNT ? FL_COUNT : fl_count;
+    at_bitmap = (sizeof(WmHeap) + sizeof(uint32_t) - 1) & ~(sizeof(uint32_t) - 1);
+    at_lists = (at_bitmap + (size_t)fl_count * sizeof(uint32_t) + sizeof(Block*) - 1) & ~(sizeof(Block*) - 1);
+    control = (at_lists + (size_t)fl_count * SL_COUNT * sizeof(Block*) + ALIGN - 1) & ~(size_t)(ALIGN - 1);
+    if (bytes < control + 2 * sizeof(Block) + 64)
+        return NULL;
+    memset(h, 0, control);
+    h->fl_count = fl_count;
+    h->sl_bitmap = (uint32_t*)(void*)(start + at_bitmap);
+    h->lists = (Block**)(void*)(start + at_lists);
     size = bytes - control - 2 * HEADER; /* the block's header, and the sentinel's */
     if (size > MAX_SIZE)
         size = MAX_SIZE & ~(size_t)(ALIGN - 1);
@@ -252,7 +296,7 @@ void* wm_heap_malloc(WmHeap* h, size_t size)
         return NULL;
     size = adjust(size);
     mapping_search(size, &fl, &sl);
-    if (fl >= FL_COUNT)
+    if (fl >= h->fl_count)
         return NULL;
     map = h->sl_bitmap[fl] & (~0u << sl);
     if (!map)
@@ -264,7 +308,14 @@ void* wm_heap_malloc(WmHeap* h, size_t size)
         map = h->sl_bitmap[fl];
     }
     sl = ffs32(map);
-    b = h->lists[fl][sl];
+    b = LIST(h, fl, sl);
+    if (h->boundary && b > h->boundary)
+    {
+        /* Among the code: a block below it that fits keeps what stays apart from what moves. */
+        Block* low = below_boundary(h, fl, sl);
+        if (low)
+            b = low;
+    }
     list_remove(h, b);
     mark_used(b);
     trim(h, b, size);
@@ -284,10 +335,10 @@ void* wm_heap_malloc_high(WmHeap* h, size_t size)
     /* The highest free block that fits: every list from the size's first level up (rare: chunks are few). */
     int first, unused;
     mapping(size, &first, &unused);
-    for (int fl = first; fl < FL_COUNT; ++fl)
+    for (int fl = first; fl < h->fl_count; ++fl)
         if (h->fl_bitmap & (1u << fl))
             for (int sl = 0; sl < SL_COUNT; ++sl)
-                for (b = h->lists[fl][sl]; b; b = b->next_free)
+                for (b = LIST(h, fl, sl); b; b = b->next_free)
                     if (size_of(b) >= size && b > best)
                         best = b;
     if (!best)
@@ -313,6 +364,8 @@ void* wm_heap_malloc_high(WmHeap* h, size_t size)
         mark_used(b);
     }
     b->size |= HIGH;
+    if (!h->boundary || b < h->boundary)
+        h->boundary = b;
     h->used += HEADER + size_of(b);
     ++h->blocks;
     return data_of(b);
@@ -328,6 +381,8 @@ void wm_heap_free(WmHeap* h, void* p)
     --h->blocks;
     b->size |= FREE;
     b->size &= ~(size_t)HIGH;
+    if (b == h->boundary)
+        h->boundary = high_from(next_phys(b));
     b = merge(h, b);
     mark_free(h, b);
 }
@@ -351,6 +406,23 @@ void* wm_heap_realloc(WmHeap* h, void* p, size_t size)
     want = adjust(size);
     next = next_phys(b);
     h->used -= HEADER + have;
+    if ((b->size & HIGH) && want + sizeof(Block) <= have)
+    {
+        /* A block from the top shrinks by its bottom: its data moves up, the bottom goes back free below it. */
+        Block* top = (Block*)(void*)((uint8_t*)data_of(b) + have - want - HEADER);
+        memmove(data_of(top), p, want);
+        top->prev_phys = b;
+        top->size = want | HIGH | PREV_FREE;
+        set_size(b, have - want - HEADER);
+        b->size = (b->size | FREE) & ~(size_t)HIGH;
+        next_phys(top)->prev_phys = top;
+        if (h->boundary == b)
+            h->boundary = top;
+        b = merge(h, b);
+        mark_free(h, b);
+        h->used += HEADER + want;
+        return data_of(top);
+    }
     if (want <= have || (is_free(next) && have + HEADER + size_of(next) >= want))
     {
         if (want > have)
@@ -411,13 +483,13 @@ int wm_heap_check(const WmHeap* h)
             used += HEADER + size_of(b), ++blocks;
         prev = b;
     }
-    for (int fl = 0; fl < FL_COUNT; ++fl)
+    for (int fl = 0; fl < h->fl_count; ++fl)
         for (int sl = 0; sl < SL_COUNT; ++sl)
         {
-            uint32_t has = h->lists[fl][sl] != NULL;
+            uint32_t has = LIST(h, fl, sl) != NULL;
             if (has != ((h->sl_bitmap[fl] >> sl) & 1u) || (has && !((h->fl_bitmap >> fl) & 1u)))
                 return 0;
-            for (const Block* b = h->lists[fl][sl]; b; b = b->next_free)
+            for (const Block* b = LIST(h, fl, sl); b; b = b->next_free)
             {
                 int f, s;
                 mapping(size_of(b), &f, &s);

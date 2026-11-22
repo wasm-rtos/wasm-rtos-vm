@@ -745,6 +745,36 @@ and run slower; 128 is as fast as 256 at half its memory. With the code
 area this branch is 3.9% faster than main on the ESP32; the loop's
 machine code is the same byte for byte, so the gain is in the records.
 
+### The heap on the board checks' own allocations
+
+**Kept: a boundary for code, a control sized to the heap; not kept: slabs** · 2026-11-22 (decision 20)
+
+**Tried.** The board checks (the same as on the Black Pill and the ESP32)
+run on a computer with the whole system's memory from `wm_heap`, every
+allocation recorded (`test/heap-trace.txt`, 14 991 calls) and replayed by
+`tools/heap-replay`. The measure that says whether a board fits: the
+smallest heap the trace runs in with nothing refused (its live data peak
+at 99.8 KB).
+
+| Heap | Smallest heap that fits | Lost to headers and holes |
+|---|---:|---:|
+| First version | 107.0 KB | 7.2 KB |
+| Code kept above a boundary, blocks of code shrinking by their bottom, control sized to the heap | **105.0 KB** | **5.2 KB (−28%)** |
+
+**Found.**
+- Ordinary blocks taken among the code were the holes; keeping them
+  below the lowest block of code, and having code shrink upwards, gives
+  2 KB back. The control for a 104 KB heap is 0.7 KB instead of 1.2.
+- At the peak only 38 blocks are live, 17 of them small: slabs for small
+  sizes would save about 136 bytes on a 32-bit board. Not built.
+- "How whole the free memory stays" measured while allocations are
+  refused depends on which ones are refused, so it moves between runs;
+  the smallest heap that fits does not.
+- The checks need a 120 KB heap on a computer for CoreMark to keep its
+  records (pointers are 8 bytes there); on the Black Pill 104 KB is not
+  enough. The heap loses 5% to itself: the rest is memory the system
+  needs, which a heap cannot give.
+
 ## Checks
 
 ### Writing the fuel back at every trap
