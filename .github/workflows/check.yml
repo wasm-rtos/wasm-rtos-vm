@@ -27,6 +27,7 @@ jobs:
       - name: Checkout the kernel and its tests
         run: |
           git clone --depth 1 https://github.com/wasm-rtos/wasm-rtos "$RUNNER_TEMP/wasm-rtos"
+          git -C "$RUNNER_TEMP/wasm-rtos" submodule update --init --depth 1 hw
           git clone --depth 1 https://github.com/wasm-rtos/wasm-rtos-tests "$RUNNER_TEMP/wasm-rtos-tests"
           {
             echo "KERNEL=$RUNNER_TEMP/wasm-rtos"
@@ -126,6 +127,14 @@ jobs:
           python3 tools/spec.py /tmp/wm-spec-gcc "$SPEC"
           gcc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 -DWM_SPEC_PAGER=3 source/*.c tools/wm-spec.c -lm -o /tmp/wm-spec-gcc-swap
           python3 tools/spec.py /tmp/wm-spec-gcc-swap "$SPEC"
+
+      # A board's C stack can be small: STM32duino leaves 1 KiB of it above
+      # the heap. No function of the interpreter keeps more than that.
+      - name: Stack frames under 1 KiB
+        run: |
+          for file in source/*.c; do
+            gcc -std=gnu99 -O2 -Wstack-usage=1024 -Werror -c "$file" -o /dev/null || exit 1
+          done
 
       - name: Run tools/check.sh
         run: tools/check.sh

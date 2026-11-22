@@ -317,6 +317,35 @@ a buffer of their own and copied.
 | arrays by the byte | 34.8 KB |
 | heights by the instruction, labels only, cells in place | 19.1 KB |
 
+### The translator's state on the C stack
+
+**Kept: in the heap** · 2026-11-22
+
+**Found.** The register loop's translator kept its state (`RegOut`, with
+256 pending values) and a copy of the pending values for finding a stop
+(`before`) on the C stack: 6 400 bytes on a Cortex-M4. STM32duino leaves
+the stack 1 KiB above the heap; when programs had taken the heap nearly
+whole, translating one more function wrote over it and the Black Pill
+hung, so hard it no longer heard the command to flash it (the system
+checks: in "many programs at once", since the register loop came; an
+ESP32's task stack of 8 KiB held it).
+
+**Kept.** `RegOut` from the heap, `before` in `RegFind`, which is there
+already. The C stack of the translator 6 400 → 240 bytes (Cortex-M4,
+`-O2`); CI builds every file with `-Wstack-usage=1024 -Werror`. The
+Black Pill's system checks then pass but CoreMark (below): 9 programs at
+once as before the register loop, all memory back after them.
+
+**Tried too.** Making a function's tail (what the loop in place needs to
+go on inside a segment) drop other code and try again when the heap
+refuses it, as records do. CoreMark in the system checks on a computer
+with the heap capped at 100 KiB ran without it as well (892 and 844),
+and a test could not reach the case: not kept.
+
+**Open.** CoreMark in the system checks on the Black Pill: 35 KB free
+after loading (memory 64 KiB, stack 8 KiB), and the run ends with
+"exhaustion: out of memory" while a tail is made.
+
 ### Shorter records for branches, constants and other accesses
 
 **Kept** · 2026-11-21

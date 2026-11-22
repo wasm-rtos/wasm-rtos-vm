@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The translator's state is in the heap, not on the C stack**: it took
+  6 400 bytes of stack on a Cortex-M4, which on an STM32 with STM32duino
+  (1 KiB of stack above the heap) overwrote the heap when it was nearly
+  full and hung the board; now 240 bytes. CI keeps every function under
+  1 KiB of stack.
 - **Frames written ahead of need** (decision 17): `wm_memory_clean`
   writes one more frame of a memory to storage between runs and keeps it
   in RAM, so a memory in one block later leaves RAM with no write (a

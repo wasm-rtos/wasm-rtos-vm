@@ -1,9 +1,10 @@
 /*
- * Experiment (decision 16): the register loop, in place of the fast loop
- * when built with WM_REGISTER. Records name frame slots (wm_fast.c,
- * reg_translate); there is no stack pointer while it runs: a record that
- * works on the stack as the fast loop does gets its top as an operand.
- * Fuel is one a record. Memory in one block only; a paged one traps.
+ * The register loop (decision 16), the loop of predecoded functions.
+ * Records name frame slots (wm_fast.c, reg_translate); there is no stack
+ * pointer while it runs: a record that works on the stack gets its top as
+ * an operand. Fuel is charged by segment (SEG); short of a segment, the
+ * loop in place goes on with what is left. A paged memory is reached
+ * through the TLB; a miss runs the access again once its frame is in.
  */
 #if WM_PREDECODE
 static const uint16_t* g_fast_handlers;

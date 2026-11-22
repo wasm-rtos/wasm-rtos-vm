@@ -39,7 +39,7 @@ while (r == wm_fuel_exhausted)          /* stopped between two instructions */
   still runs fast. Written once to flash or PSRAM as a code image, the
   decoded code runs from there with no RAM at all (CoreMark 3% slower on
   an ESP32), and RAM holds copies of the hot functions only.
-- **Small.** On an ATmega328P (Uno): 34.7 KB of flash and 172 B of static
+- **Small.** On an ATmega328P (Uno): 34.9 KB of flash and 184 B of static
   RAM for the whole standard; less without the parts a program does not
   need. Values live in 32-bit slots, so stacks stay small on 8- and 32-bit
   chips.
@@ -94,10 +94,10 @@ Flash and static RAM on AVR (ATmega328P, `tools/avr-size.sh`):
 
 | Build | Flash | RAM |
 |---|---|---|
-| WebAssembly 2.0 | 34.7 KB | 172 B |
-| without i64 and reference types | 31.5 KB | 172 B |
-| without validation | 30.8 KB | 172 B |
-| without validation, i64 and reference types | 27.5 KB | 172 B |
+| WebAssembly 2.0 | 34.9 KB | 184 B |
+| without i64 and reference types | 31.4 KB | 184 B |
+| without validation | 31.3 KB | 184 B |
+| without validation, i64 and reference types | 27.7 KB | 184 B |
 
 ## Example
 

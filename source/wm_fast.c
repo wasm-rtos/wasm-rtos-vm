@@ -227,14 +227,15 @@ int wm_fast_position(const WmModule* m, const WmCode* code, const WmCell* ip, ui
 
 #if WM_PREDECODE
 /*
- * Experiment (decision 16): a function translated for the register loop.
- * Operands are frame slots (fp-relative: parameters and locals, then the
- * stack at B + depth); a value that is only a local or a constant stays
- * that until something needs it in its slot (copy propagation within a
- * block). Every instruction not done here runs as on the stack, on the
- * slots below the record's top, so the frame at a label, a call or a
- * branch is the stack machine's. Fuel is one a record, and snapshots are
- * not made: an experiment of what the loop could gain, not the engine.
+ * A function translated for the register loop (decision 16). Operands are
+ * frame slots (fp-relative: parameters and locals, then the stack at B +
+ * depth); a value that is only a local or a constant stays that until
+ * something needs it in its slot (copy propagation within a block). Every
+ * instruction not done here runs as on the stack, on the slots below the
+ * record's top, so the frame at a label, a call or a branch is the stack
+ * machine's. Fuel is charged by segment (SEG), exactly; a stop inside a
+ * segment goes on in the loop in place (WmTail), and snapshots are taken
+ * at the stack machine's positions.
  */
 enum
 {
@@ -531,6 +532,8 @@ struct RegFind
     int found;
     uint32_t offset, height, pending;
     RegValue pend[256];
+    /* What was pending before an access, while looking for it: kept here, not on the stack. */
+    RegValue before[256];
 };
 
 static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail, RegFind* find)
@@ -543,22 +546,24 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     uint32_t instructions = 0, label_count = 0, next_label = 0, ordinal = 0;
     RegFixup* fixups = NULL;
     uint32_t fixup_count = 0, fixup_capacity = 0;
-    RegOut o;
+    RegOut* o = (RegOut*)wm_calloc(1, sizeof(RegOut));
     const WmSide* st = side;
     const uint8_t* p;
     int dead = 0;
     /* Segments: from a label, a call's return or a branch's way on to the next; fuel is charged by them. */
     uint32_t seg_cell = UINT32_MAX, seg_count = 0;
     int need_seg = 1;
-    memset(&o, 0, sizeof(o));
-    o.handlers = wm_fast_handlers();
-    o.last = UINT32_MAX;
-    o.base = B;
-    o.scratch = tail != NULL;
-    if (!o.handlers)
-        o.error = WM_ERR_UNSUPPORTED("unsupported: handlers too far apart for predecoding");
+    WmResult error;
+    if (!o)
+        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    o->handlers = wm_fast_handlers();
+    o->last = UINT32_MAX;
+    o->base = B;
+    o->scratch = tail != NULL;
+    if (!o->handlers)
+        o->error = WM_ERR_UNSUPPORTED("unsupported: handlers too far apart for predecoding");
     /* The instructions, and the labels: where branches land, so the frame there must be the stack machine's. */
-    for (p = code->body; !o.error && p <= code->end; ++instructions)
+    for (p = code->body; !o->error && p <= code->end; ++instructions)
     {
         uint32_t n, sides;
         uint8_t op = WM_RD8(p);
@@ -568,10 +573,10 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     }
     heights = (uint16_t*)wm_malloc(((size_t)instructions + 1u) * sizeof(uint16_t));
     labels = (RegLabel*)wm_malloc(((size_t)label_count + 1u) * sizeof(RegLabel));
-    if (!o.error && (!heights || !labels))
-        o.error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    if (!o->error && (!heights || !labels))
+        o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
     label_count = 0;
-    for (p = code->body; !o.error && p <= code->end;)
+    for (p = code->body; !o->error && p <= code->end;)
     {
         uint32_t n, sides;
         uint8_t op = WM_RD8(p);
@@ -581,7 +586,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         st += sides;
     }
     st = side;
-    if (!o.error && label_count)
+    if (!o->error && label_count)
     {
         uint32_t kept = 1;
         qsort(labels, label_count, sizeof(RegLabel), label_order);
@@ -590,10 +595,10 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 labels[kept++] = labels[i];
         label_count = kept;
     }
-    if (!o.error)
-        o.error = wm_code_heights(m, index, heights);
-    if (!o.error && B + code->max_stack > 0xFFF0u)
-        o.error = WM_ERR_UNSUPPORTED("unsupported: a frame too large for the register loop");
+    if (!o->error)
+        o->error = wm_code_heights(m, index, heights);
+    if (!o->error && B + code->max_stack > 0xFFF0u)
+        o->error = WM_ERR_UNSUPPORTED("unsupported: a frame too large for the register loop");
 #define FIXUP_AT(PC, IN_HEAD)                                                                                  \
     do                                                                                                         \
     {                                                                                                          \
@@ -603,21 +608,21 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             RegFixup* g_ = (RegFixup*)wm_realloc(fixups, c_ * sizeof(RegFixup));                               \
             if (!g_)                                                                                           \
             {                                                                                                  \
-                o.error = WM_ERR_EXHAUSTION("exhaustion: out of memory");                                      \
+                o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");                                      \
                 break;                                                                                         \
             }                                                                                                  \
             fixups = g_, fixup_capacity = c_;                                                                  \
         }                                                                                                      \
-        fixups[fixup_count].cell = (IN_HEAD) ? head_cell : o.count;                                            \
+        fixups[fixup_count].cell = (IN_HEAD) ? head_cell : o->count;                                            \
         fixups[fixup_count].head = head_cell;                                                                  \
         fixups[fixup_count].in_head = (IN_HEAD);                                                               \
         fixups[fixup_count++].pc = (PC);                                                                       \
         if (!(IN_HEAD))                                                                                        \
-            reg_put(&o, 0);                                                                                    \
+            reg_put(o, 0);                                                                                    \
     } while (0)
 #define FIXUP(PC) FIXUP_AT(PC, 0)
 #define FIXUP_HEAD(PC) FIXUP_AT(PC, 1)
-    for (p = code->body; !o.error && p <= code->end;)
+    for (p = code->body; !o->error && p <= code->end;)
     {
         const uint8_t* start = p;
         uint32_t pc = (uint32_t)(p - m->bytes);
@@ -637,13 +642,13 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         {
             dead = 1;
             if (is_label)
-                labels[next_label].cell = o.count;
+                labels[next_label].cell = o->count;
             p = next;
             continue;
         }
         if (is_label && !dead)
-            reg_flush(&o);
-        at_cell = o.count;
+            reg_flush(o);
+        at_cell = o->count;
         if (is_label)
             labels[next_label].cell = at_cell;
         hn = next <= code->end ? heights[ordinal] : 0u;
@@ -656,39 +661,39 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             if (seg_cell != UINT32_MAX)
             {
                 if (seg_count > 0xFFFFu)
-                    o.error = WM_ERR_UNSUPPORTED("unsupported: a segment too long for the register loop");
-                o.cells[seg_cell].u32 = (o.cells[seg_cell].u32 & 0xFFFFu) | (seg_count << 16);
+                    o->error = WM_ERR_UNSUPPORTED("unsupported: a segment too long for the register loop");
+                o->cells[seg_cell].u32 = (o->cells[seg_cell].u32 & 0xFFFFu) | (seg_count << 16);
             }
-            reg_flush(&o);
-            seg_cell = o.count;
+            reg_flush(o);
+            seg_cell = o->count;
             seg_count = 0;
             need_seg = 0;
-            reg_entry(tail, (uint32_t)(start - m->bytes), seg_cell, 0, (uint32_t)(mine - side), top, &o.error);
+            reg_entry(tail, (uint32_t)(start - m->bytes), seg_cell, 0, (uint32_t)(mine - side), top, &o->error);
             /* Its offset and top are the tail's: the record is only the fuel. */
-            reg_head(&o, WM_R_SEG, 0);
+            reg_head(o, WM_R_SEG, 0);
         }
         ++seg_count;
-        head_cell = o.count;
+        head_cell = o->count;
         if (op == 0x05u || op == 0x0Bu)
         {
             if (!dead || op == 0x05u)
-                reg_flush(&o);
+                reg_flush(o);
             if (op == 0x05u && !dead)
             {
-                head_cell = o.count;
-                reg_head(&o, WM_R_JUMP, 0);
+                head_cell = o->count;
+                reg_head(o, WM_R_JUMP, 0);
                 FIXUP_HEAD(mine[0].pc);
             }
             if (start == code->end)
             {
-                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o.error);
-                reg_head(&o, WM_R_RETURN, B + type->result_slots);
+                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
+                reg_head(o, WM_R_RETURN, B + type->result_slots);
             }
             else if (op == 0x05u && is_label)
-                labels[next_label].cell = o.count;
+                labels[next_label].cell = o->count;
             dead = 0;
-            o.pending = 0;
-            o.last = UINT32_MAX;
+            o->pending = 0;
+            o->last = UINT32_MAX;
             need_seg |= op == 0x05u;
             p = next;
             continue;
@@ -697,8 +702,8 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         switch (op)
         {
             case 0x00:
-                reg_flush(&o);
-                reg_head(&o, WM_R_UNREACHABLE, 0);
+                reg_flush(o);
+                reg_head(o, WM_R_UNREACHABLE, 0);
                 break;
             case 0x01:
             case 0x02:
@@ -708,36 +713,36 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 RegValue c;
                 uint32_t cs, operands;
                 uint8_t kind;
-                if (reg_fused_compare(&o, 1, &kind, &operands))
+                if (reg_fused_compare(o, 1, &kind, &operands))
                 {
-                    reg_flush(&o);
-                    head_cell = o.count;
-                    reg_head(&o, kind, 0);
-                    reg_put(&o, operands);
+                    reg_flush(o);
+                    head_cell = o->count;
+                    reg_head(o, kind, 0);
+                    reg_put(o, operands);
                     FIXUP_HEAD(mine[0].pc);
                     break;
                 }
-                c = reg_peek(&o, h, 0);
-                reg_pop(&o, 1);
-                cs = reg_slot(&o, c);
-                reg_flush(&o);
-                head_cell = o.count;
-                reg_head(&o, WM_R_BR_UNLESS, cs);
+                c = reg_peek(o, h, 0);
+                reg_pop(o, 1);
+                cs = reg_slot(o, c);
+                reg_flush(o);
+                head_cell = o->count;
+                reg_head(o, WM_R_BR_UNLESS, cs);
                 FIXUP(mine[0].pc);
                 break;
             }
             case 0x0C:
-                reg_flush(&o);
-                head_cell = o.count;
+                reg_flush(o);
+                head_cell = o->count;
                 if (!mine[0].keep || !mine[0].drop)
                 {
-                    reg_head(&o, WM_R_BR0, 0);
+                    reg_head(o, WM_R_BR0, 0);
                     FIXUP_HEAD(mine[0].pc);
                     break;
                 }
-                reg_head(&o, WM_R_BR, top);
+                reg_head(o, WM_R_BR, top);
                 FIXUP(mine[0].pc);
-                reg_put(&o, mine[0].keep | (mine[0].drop << 16));
+                reg_put(o, mine[0].keep | (mine[0].drop << 16));
                 break;
             case 0x0D:
             {
@@ -746,93 +751,93 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 uint8_t kind;
                 /* Values move only when some are kept and some dropped: else the short records. */
                 int moves = mine[0].keep && mine[0].drop;
-                if (!moves && reg_fused_compare(&o, 0, &kind, &operands))
+                if (!moves && reg_fused_compare(o, 0, &kind, &operands))
                 {
-                    reg_flush(&o);
-                    head_cell = o.count;
-                    reg_head(&o, kind, 0);
-                    reg_put(&o, operands);
+                    reg_flush(o);
+                    head_cell = o->count;
+                    reg_head(o, kind, 0);
+                    reg_put(o, operands);
                     FIXUP_HEAD(mine[0].pc);
                     break;
                 }
-                c = reg_peek(&o, h, 0);
-                reg_pop(&o, 1);
-                cs = reg_slot(&o, c);
-                reg_flush(&o);
-                head_cell = o.count;
-                reg_head(&o, moves ? WM_R_BR_IF : WM_R_BR_IF0, cs);
+                c = reg_peek(o, h, 0);
+                reg_pop(o, 1);
+                cs = reg_slot(o, c);
+                reg_flush(o);
+                head_cell = o->count;
+                reg_head(o, moves ? WM_R_BR_IF : WM_R_BR_IF0, cs);
                 FIXUP(mine[0].pc);
                 if (moves)
                 {
-                    reg_put(&o, mine[0].keep | (mine[0].drop << 16));
-                    reg_put(&o, top - 1u);
+                    reg_put(o, mine[0].keep | (mine[0].drop << 16));
+                    reg_put(o, top - 1u);
                 }
                 break;
             }
             case 0x0E:
             {
-                RegValue c = reg_peek(&o, h, 0);
+                RegValue c = reg_peek(o, h, 0);
                 uint32_t cs;
-                reg_pop(&o, 1);
-                cs = reg_slot(&o, c);
-                reg_flush(&o);
-                head_cell = o.count;
-                reg_head(&o, WM_R_BR_TABLE, cs);
-                reg_put(&o, sides - 1u);
-                reg_put(&o, top - 1u);
+                reg_pop(o, 1);
+                cs = reg_slot(o, c);
+                reg_flush(o);
+                head_cell = o->count;
+                reg_head(o, WM_R_BR_TABLE, cs);
+                reg_put(o, sides - 1u);
+                reg_put(o, top - 1u);
                 for (uint32_t i = 0; i < sides; ++i)
                 {
                     FIXUP(mine[i].pc);
-                    reg_put(&o, mine[i].keep | (mine[i].drop << 16));
+                    reg_put(o, mine[i].keep | (mine[i].drop << 16));
                 }
                 break;
             }
             case 0x0F:
-                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o.error);
-                reg_flush(&o);
-                reg_head(&o, WM_R_RETURN, top);
+                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
+                reg_flush(o);
+                reg_head(o, WM_R_RETURN, top);
                 break;
             case 0x10:
-                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o.error);
-                reg_flush(&o);
-                reg_head(&o, WM_R_CALL, leb_u32(&p));
-                reg_put(&o, top);
+                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
+                reg_flush(o);
+                reg_head(o, WM_R_CALL, leb_u32(&p));
+                reg_put(o, top);
                 break;
             case 0x11:
             {
                 uint32_t t = leb_u32(&p);
-                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o.error);
-                reg_flush(&o);
-                reg_head(&o, WM_R_CALL_INDIRECT, m->types[t].canon);
-                reg_put(&o, leb_u32(&p));
-                reg_put(&o, top);
+                reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
+                reg_flush(o);
+                reg_head(o, WM_R_CALL_INDIRECT, m->types[t].canon);
+                reg_put(o, leb_u32(&p));
+                reg_put(o, top);
                 break;
             }
             case 0x1A:
-                if (o.pending && h - hn == 1u)
-                    reg_pop(&o, 1);
+                if (o->pending && h - hn == 1u)
+                    reg_pop(o, 1);
                 else
-                    reg_flush(&o);
+                    reg_flush(o);
                 break;
             case 0x1B:
             case 0x1C:
                 if (h - hn == 2u)
                 {
-                    RegValue c = reg_peek(&o, h, 0), b = reg_peek(&o, h, 1), a = reg_peek(&o, h, 2);
+                    RegValue c = reg_peek(o, h, 0), b = reg_peek(o, h, 1), a = reg_peek(o, h, 2);
                     uint32_t cs, bs, as;
-                    reg_pop(&o, 3);
-                    cs = reg_slot(&o, c), bs = reg_slot(&o, b), as = reg_slot(&o, a);
-                    head_cell = o.count;
-                    reg_head(&o, WM_R_SELECT1, B + hn - 1u);
-                    reg_put(&o, as | (bs << 16));
-                    reg_put(&o, cs);
-                    reg_made(&o, head_cell, B + hn - 1u);
+                    reg_pop(o, 3);
+                    cs = reg_slot(o, c), bs = reg_slot(o, b), as = reg_slot(o, a);
+                    head_cell = o->count;
+                    reg_head(o, WM_R_SELECT1, B + hn - 1u);
+                    reg_put(o, as | (bs << 16));
+                    reg_put(o, cs);
+                    reg_made(o, head_cell, B + hn - 1u);
                 }
                 else
                 {
-                    reg_flush(&o);
-                    reg_head(&o, WM_R_SELECT, h - hn - 1u);
-                    reg_put(&o, top);
+                    reg_flush(o);
+                    reg_head(o, WM_R_SELECT, h - hn - 1u);
+                    reg_put(o, top);
                 }
                 break;
             case 0x20:
@@ -844,49 +849,49 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 uint32_t width = local_width(code, local);
                 if (width != 1u)
                 {
-                    reg_flush(&o);
-                    reg_head(&o, op == 0x20u ? WM_R_LOCAL_GET_W : WM_R_LOCAL_SET_W, slot);
+                    reg_flush(o);
+                    reg_head(o, op == 0x20u ? WM_R_LOCAL_GET_W : WM_R_LOCAL_SET_W, slot);
                     /* get: to the top; set and tee: from the values below it (tee leaves them there). */
-                    reg_put(&o, width);
-                    reg_put(&o, top);
+                    reg_put(o, width);
+                    reg_put(o, top);
                     break;
                 }
                 if (op == 0x20u)
                 {
-                    reg_push(&o, P_LOCAL, slot, top);
-                    o.last = UINT32_MAX;
+                    reg_push(o, P_LOCAL, slot, top);
+                    o->last = UINT32_MAX;
                     break;
                 }
                 {
-                    RegValue v = reg_peek(&o, h, 0);
-                    int was_pending = o.pending > 0;
+                    RegValue v = reg_peek(o, h, 0);
+                    int was_pending = o->pending > 0;
                     if (v.kind == P_LOCAL && v.value == slot)
                     {
                         if (op == 0x21u)
-                            reg_pop(&o, 1);
+                            reg_pop(o, 1);
                         break;
                     }
-                    reg_pop(&o, 1);
+                    reg_pop(o, 1);
                     /* The record that made the value writes the local instead, when nothing pending reads it. */
-                    if (was_pending && v.kind == P_SLOT && o.last != UINT32_MAX && o.last_slot == v.slot)
+                    if (was_pending && v.kind == P_SLOT && o->last != UINT32_MAX && o->last_slot == v.slot)
                     {
                         int read = 0;
-                        for (uint32_t i = 0; i < o.pending; ++i)
-                            read |= o.pend[i].kind == P_LOCAL && o.pend[i].value == slot;
+                        for (uint32_t i = 0; i < o->pending; ++i)
+                            read |= o->pend[i].kind == P_LOCAL && o->pend[i].value == slot;
                         if (!read)
                         {
-                            o.cells[o.last].u32 = (o.cells[o.last].u32 & 0xFFFFu) | (slot << 16);
-                            o.last = UINT32_MAX;
+                            o->cells[o->last].u32 = (o->cells[o->last].u32 & 0xFFFFu) | (slot << 16);
+                            o->last = UINT32_MAX;
                             if (op == 0x22u)
-                                reg_push(&o, P_LOCAL, slot, v.slot);
+                                reg_push(o, P_LOCAL, slot, v.slot);
                             break;
                         }
                     }
-                    reg_before_write(&o, slot);
-                    reg_mov(&o, slot, &v);
-                    o.last = UINT32_MAX;
+                    reg_before_write(o, slot);
+                    reg_mov(o, slot, &v);
+                    o->last = UINT32_MAX;
                     if (op == 0x22u)
-                        reg_push(&o, P_LOCAL, slot, v.slot);
+                        reg_push(o, P_LOCAL, slot, v.slot);
                 }
                 break;
             }
@@ -898,47 +903,47 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 {
                     if (op == 0x23u)
                     {
-                        reg_head(&o, WM_R_GLOBAL_GET1, top);
-                        reg_put(&o, g);
-                        reg_made(&o, head_cell, top);
+                        reg_head(o, WM_R_GLOBAL_GET1, top);
+                        reg_put(o, g);
+                        reg_made(o, head_cell, top);
                     }
                     else
                     {
-                        RegValue v = reg_peek(&o, h, 0);
+                        RegValue v = reg_peek(o, h, 0);
                         uint32_t vs;
-                        reg_pop(&o, 1);
-                        vs = reg_slot(&o, v);
-                        reg_head(&o, WM_R_GLOBAL_SET1, g);
-                        reg_put(&o, vs);
+                        reg_pop(o, 1);
+                        vs = reg_slot(o, v);
+                        reg_head(o, WM_R_GLOBAL_SET1, g);
+                        reg_put(o, vs);
                     }
                     break;
                 }
-                reg_flush(&o);
-                reg_head(&o, op == 0x23u ? WM_R_GLOBAL_GET : WM_R_GLOBAL_SET, g);
-                reg_put(&o, top);
+                reg_flush(o);
+                reg_head(o, op == 0x23u ? WM_R_GLOBAL_GET : WM_R_GLOBAL_SET, g);
+                reg_put(o, top);
                 break;
             }
             case 0x25:
             case 0x26:
-                reg_flush(&o);
-                reg_head(&o, op == 0x25u ? WM_R_TABLE_GET : WM_R_TABLE_SET, leb_u32(&p));
-                reg_put(&o, top);
+                reg_flush(o);
+                reg_head(o, op == 0x25u ? WM_R_TABLE_GET : WM_R_TABLE_SET, leb_u32(&p));
+                reg_put(o, top);
                 break;
             case 0x3F:
-                reg_flush(&o);
+                reg_flush(o);
                 ++p;
-                reg_head(&o, WM_R_MEMORY_SIZE, top);
+                reg_head(o, WM_R_MEMORY_SIZE, top);
                 break;
             case 0x40:
-                reg_flush(&o);
+                reg_flush(o);
                 ++p;
-                reg_head(&o, WM_R_MEMORY_GROW, top - 1u);
+                reg_head(o, WM_R_MEMORY_GROW, top - 1u);
                 break;
             case 0x41:
             {
                 int64_t c = (int64_t)leb_s64(&p);
-                reg_push(&o, P_CONST, (uint32_t)c, top);
-                o.last = UINT32_MAX;
+                reg_push(o, P_CONST, (uint32_t)c, top);
+                o->last = UINT32_MAX;
                 break;
             }
             case 0x43:
@@ -946,8 +951,8 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 uint32_t bits = 0;
                 for (uint32_t i = 0; i < 4u; ++i)
                     bits |= (uint32_t)WM_RD8(p + i) << (8u * i);
-                reg_push(&o, P_CONST, bits, top);
-                o.last = UINT32_MAX;
+                reg_push(o, P_CONST, bits, top);
+                o->last = UINT32_MAX;
                 break;
             }
             case 0x42:
@@ -959,34 +964,34 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 else
                     for (uint32_t i = 0; i < 8u; ++i)
                         bits |= (uint64_t)WM_RD8(p + i) << (8u * i);
-                reg_flush(&o);
-                reg_head(&o, WM_R_MOVC64, top);
-                reg_put(&o, (uint32_t)bits);
-                reg_put(&o, (uint32_t)(bits >> 32));
+                reg_flush(o);
+                reg_head(o, WM_R_MOVC64, top);
+                reg_put(o, (uint32_t)bits);
+                reg_put(o, (uint32_t)(bits >> 32));
                 break;
             }
             case 0xD0:
             case 0xD1:
             case 0xD2:
-                reg_flush(&o);
-                reg_head(&o, op == 0xD0u ? WM_R_REF_NULL : op == 0xD1u ? WM_R_REF_IS_NULL : WM_R_REF_FUNC,
+                reg_flush(o);
+                reg_head(o, op == 0xD0u ? WM_R_REF_NULL : op == 0xD1u ? WM_R_REF_IS_NULL : WM_R_REF_FUNC,
                          op == 0xD2u ? leb_u32(&p) : 0u);
-                reg_put(&o, top);
+                reg_put(o, top);
                 break;
             case 0xFC:
             {
                 uint32_t sub = leb_u32(&p);
-                reg_flush(&o);
+                reg_flush(o);
                 if (sub <= 7u)
                 {
-                    reg_head(&o, WM_R_SAT, sub);
-                    reg_put(&o, top);
+                    reg_head(o, WM_R_SAT, sub);
+                    reg_put(o, top);
                 }
                 else
                 {
-                    reg_head(&o, WM_R_MISC, sub);
-                    reg_put(&o, (uint32_t)(p - m->bytes));
-                    reg_put(&o, top);
+                    reg_head(o, WM_R_MISC, sub);
+                    reg_put(o, (uint32_t)(p - m->bytes));
+                    reg_put(o, top);
                 }
                 break;
             }
@@ -997,10 +1002,9 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 {
                     uint32_t offset;
                     uint8_t load = 0, store = 0;
-                    RegValue before[256];
-                    uint32_t before_pending = o.pending;
+                    uint32_t before_pending = o->pending;
                     if (find && !find->found)
-                        memcpy(before, o.pend, o.pending * sizeof(RegValue));
+                        memcpy(find->before, o->pend, o->pending * sizeof(RegValue));
                     leb_u32(&p);
                     offset = leb_u32(&p);
                     switch (op)
@@ -1017,36 +1021,36 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     }
                     if (load && offset <= 0xFFFFu)
                     {
-                        RegValue a = reg_peek(&o, h, 0);
+                        RegValue a = reg_peek(o, h, 0);
                         uint32_t as;
-                        reg_pop(&o, 1);
-                        as = reg_slot(&o, a);
-                        head_cell = o.count;
-                        reg_head(&o, load, top - 1u);
-                        reg_put(&o, as | (offset << 16));
-                        reg_made(&o, head_cell, top - 1u);
+                        reg_pop(o, 1);
+                        as = reg_slot(o, a);
+                        head_cell = o->count;
+                        reg_head(o, load, top - 1u);
+                        reg_put(o, as | (offset << 16));
+                        reg_made(o, head_cell, top - 1u);
                     }
                     else if (store && offset <= 0xFFFFu)
                     {
-                        RegValue v = reg_peek(&o, h, 0), a = reg_peek(&o, h, 1);
+                        RegValue v = reg_peek(o, h, 0), a = reg_peek(o, h, 1);
                         uint32_t vs, as;
-                        reg_pop(&o, 2);
-                        vs = reg_slot(&o, v), as = reg_slot(&o, a);
-                        head_cell = o.count;
-                        reg_head(&o, store, offset);
-                        reg_put(&o, as | (vs << 16));
-                        o.last = UINT32_MAX;
+                        reg_pop(o, 2);
+                        vs = reg_slot(o, v), as = reg_slot(o, a);
+                        head_cell = o->count;
+                        reg_head(o, store, offset);
+                        reg_put(o, as | (vs << 16));
+                        o->last = UINT32_MAX;
                     }
                     else
                     {
-                        reg_flush(&o);
-                        reg_head(&o, offset <= 0xFFFFu ? WM_R_ACCESS : WM_R_ACCESS_FAR, op);
+                        reg_flush(o);
+                        reg_head(o, offset <= 0xFFFFu ? WM_R_ACCESS : WM_R_ACCESS_FAR, op);
                         if (offset <= 0xFFFFu)
-                            reg_put(&o, top | (offset << 16));
+                            reg_put(o, top | (offset << 16));
                         else
                         {
-                            reg_put(&o, top);
-                            reg_put(&o, offset);
+                            reg_put(o, top);
+                            reg_put(o, offset);
                         }
                     }
                     if (find && !find->found && (load || store) && offset <= 0xFFFFu && head_cell == find->cell)
@@ -1055,14 +1059,14 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                         find->offset = (uint32_t)(start - m->bytes);
                         find->height = h;
                         find->pending = before_pending;
-                        memcpy(find->pend, before, before_pending * sizeof(RegValue));
+                        memcpy(find->pend, find->before, before_pending * sizeof(RegValue));
                     }
                 }
                 else if (op >= 0x45u && op <= 0xC4u && reg_i32(op, &ss, &sc, &arity))
                 {
-                    RegValue b = reg_peek(&o, h, 0), a = arity == 2u ? reg_peek(&o, h, 1) : b;
+                    RegValue b = reg_peek(o, h, 0), a = arity == 2u ? reg_peek(o, h, 1) : b;
                     uint32_t d = B + hn - 1u;
-                    reg_pop(&o, arity);
+                    reg_pop(o, arity);
                     if (arity == 2u && a.kind == P_CONST && b.kind != P_CONST && reg_commutes(op))
                     {
                         RegValue t = a;
@@ -1070,28 +1074,28 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     }
                     if (arity == 2u && b.kind == P_CONST && fits16((int32_t)b.value))
                     {
-                        uint32_t as = reg_slot(&o, a);
-                        head_cell = o.count;
-                        reg_head(&o, sc, d);
-                        reg_put(&o, as | (b.value << 16));
+                        uint32_t as = reg_slot(o, a);
+                        head_cell = o->count;
+                        reg_head(o, sc, d);
+                        reg_put(o, as | (b.value << 16));
                     }
                     else
                     {
-                        uint32_t as = reg_slot(&o, a), bs = arity == 2u ? reg_slot(&o, b) : as;
-                        head_cell = o.count;
-                        reg_head(&o, ss, d);
-                        reg_put(&o, as | (bs << 16));
+                        uint32_t as = reg_slot(o, a), bs = arity == 2u ? reg_slot(o, b) : as;
+                        head_cell = o->count;
+                        reg_head(o, ss, d);
+                        reg_put(o, as | (bs << 16));
                     }
-                    reg_made(&o, head_cell, d);
+                    reg_made(o, head_cell, d);
                 }
                 else if (op >= 0x45u && op <= 0xC4u)
                 {
-                    reg_flush(&o);
-                    reg_head(&o, WM_R_NUMERIC, op);
-                    reg_put(&o, top);
+                    reg_flush(o);
+                    reg_head(o, WM_R_NUMERIC, op);
+                    reg_put(o, top);
                 }
                 else
-                    o.error = WM_ERR_UNSUPPORTED("unsupported: an instruction the register loop does not know");
+                    o->error = WM_ERR_UNSUPPORTED("unsupported: an instruction the register loop does not know");
             }
         }
         /* What ends a segment: the next instruction starts one. */
@@ -1101,43 +1105,45 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
 #undef FIXUP
 #undef FIXUP_HEAD
 #undef FIXUP_AT
-    if (seg_cell != UINT32_MAX && !o.error)
-        o.cells[seg_cell].u32 = (o.cells[seg_cell].u32 & 0xFFFFu) | ((seg_count > 0xFFFFu ? 0xFFFFu : seg_count) << 16);
-    for (uint32_t i = 0; !o.error && i < fixup_count; ++i)
+    if (seg_cell != UINT32_MAX && !o->error)
+        o->cells[seg_cell].u32 = (o->cells[seg_cell].u32 & 0xFFFFu) | ((seg_count > 0xFFFFu ? 0xFFFFu : seg_count) << 16);
+    for (uint32_t i = 0; !o->error && i < fixup_count; ++i)
     {
         const RegLabel* l = reg_label(labels, label_count, fixups[i].pc);
         if (!l || l->cell == UINT32_MAX)
-            o.error = WM_ERR_UNSUPPORTED("unsupported: a branch the register loop cannot place");
+            o->error = WM_ERR_UNSUPPORTED("unsupported: a branch the register loop cannot place");
         else if (fixups[i].in_head)
-            o.cells[fixups[i].cell].u32 = (o.cells[fixups[i].cell].u32 & 0xFFFFu) |
+            o->cells[fixups[i].cell].u32 = (o->cells[fixups[i].cell].u32 & 0xFFFFu) |
                                           ((uint32_t)(uint16_t)(int16_t)((int32_t)l->cell - (int32_t)fixups[i].head) << 16);
         else
-            o.cells[fixups[i].cell].s32 = (int32_t)l->cell - (int32_t)fixups[i].head;
+            o->cells[fixups[i].cell].s32 = (int32_t)l->cell - (int32_t)fixups[i].head;
     }
-    if (!o.error && o.count > 0x7FFFu)
-        o.error = E_DOES_NOT_FIT;
-    if (!o.error && !tail)
+    if (!o->error && o->count > 0x7FFFu)
+        o->error = E_DOES_NOT_FIT;
+    if (!o->error && !tail)
     {
         /* The cells were written in the code cache's memory: they become the records, cut to their size. */
-        WmCell* fit = (WmCell*)wm_code_realloc(o.cells, (size_t)o.count * sizeof(WmCell));
+        WmCell* fit = (WmCell*)wm_code_realloc(o->cells, (size_t)o->count * sizeof(WmCell));
         if (fit)
         {
             code->own = fit;
-            code->fast_cells = (uint16_t)o.count;
+            code->fast_cells = (uint16_t)o->count;
             code->mapped = 0;
-            o.cells = NULL;
+            o->cells = NULL;
         }
         else
-            o.error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
+            o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
     }
-    if (o.scratch)
-        wm_free(o.cells);
+    if (o->scratch)
+        wm_free(o->cells);
     else
-        wm_code_free(o.cells);
+        wm_code_free(o->cells);
     wm_free(fixups);
     wm_free(heights);
     wm_free(labels);
-    return o.error;
+    error = o->error;
+    wm_free(o);
+    return error;
 }
 
 /* Side table entries owned by the instructions of code before offset (in the module). */

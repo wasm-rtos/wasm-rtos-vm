@@ -163,7 +163,7 @@ uint64_t wm_global_get(const WmGlobal* global);
 
 WmTable* wm_table_new(uint8_t type, uint32_t size, uint32_t max);
 void wm_table_free(WmTable* table);
-/* Grow by delta entries (null), delta pages: the old size, or 0xFFFFFFFF when it cannot grow. */
+/* Grow by delta entries (null): the old size, or 0xFFFFFFFF when it cannot grow. */
 uint32_t wm_table_grow(WmTable* table, uint32_t delta);
 
 WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages);

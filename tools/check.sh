@@ -38,6 +38,8 @@ for mode in "" -DWM_PREDECODE=0; do
     cc -std=gnu99 -O1 -g -fsanitize=address $mode source/*.c test/refs.c -lm -o build/refs || exit 1
     build/refs >/dev/null && echo "snapshot refs and checks: ok $mode" || { echo "snapshot refs and checks: FAIL $mode"; build/refs | grep FAIL; fail=1; }
 done
+cc -std=gnu99 -O1 -g -fsanitize=address,undefined source/*.c test/host_objects.c -lm -o build/host_objects || exit 1
+build/host_objects >/dev/null && echo "host globals and tables: ok" || { echo "host globals and tables: FAIL"; build/host_objects | grep FAIL; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/room.c -lm -o build/room || exit 1
 build/room >/dev/null && echo "memory before code: ok" || { echo "memory before code: FAIL"; build/room | grep FAIL; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/pool.c -lm -o build/pool || exit 1
