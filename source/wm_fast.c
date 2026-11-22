@@ -252,11 +252,20 @@ typedef struct
     uint32_t slot;
 } RegValue;
 
+/*
+ * Values a translation keeps pending (copy propagation) before it writes
+ * them to their slots: past this many it writes the oldest; few blocks
+ * of real code keep more.
+ */
+#ifndef WM_REG_PENDING
+#define WM_REG_PENDING 64u
+#endif
+
 typedef struct
 {
     WmCell* cells;
     uint32_t count, capacity;
-    RegValue pend[256];
+    RegValue pend[WM_REG_PENDING];
     uint32_t pending;
     /* The cell of the last record written and the slot its result went to, or UINT32_MAX. */
     uint32_t last;
@@ -559,9 +568,9 @@ struct RegFind
     uint32_t cell;
     int found;
     uint32_t offset, height, pending;
-    RegValue pend[256];
+    RegValue pend[WM_REG_PENDING];
     /* What was pending before an access, while looking for it: kept here, not on the stack. */
-    RegValue before[256];
+    RegValue before[WM_REG_PENDING];
 };
 
 static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail, RegFind* find)
@@ -588,7 +597,8 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     o->last = UINT32_MAX;
     o->base = B;
     o->scratch = tail != NULL;
-    o->hint = (uint32_t)(code->end - code->body) * 4u + 16u;
+    /* About half a cell per byte of the body (CoreMark: 15.3 KB of records for 7.3 KB of code); it grows if not. */
+    o->hint = (uint32_t)(code->end - code->body) / 2u + 16u;
     if (!o->handlers)
         o->error = WM_ERR_UNSUPPORTED("unsupported: handlers too far apart for predecoding");
     /* The instructions, and the labels: where branches land, so the frame there must be the stack machine's. */

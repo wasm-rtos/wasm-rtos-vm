@@ -374,18 +374,22 @@ static void chunk_cut(WmChunk* c)
             span_placed(cut, at);
 }
 
-static WmChunk* chunk_new(uint32_t cells)
+/* A new chunk for at least need cells: half of what the area holds if the heap has it, else just need. */
+static WmChunk* chunk_new(uint32_t need)
 {
     WmChunk* c;
     WmChunk** at = &g_chunks;
     size_t held = 0;
+    uint32_t cells = need;
     for (WmChunk* k = g_chunks; k; k = k->next)
         held += k->size;
     if (cells < held / 2u)
         cells = (uint32_t)(held / 2u);
     if (cells < WM_CODE_SLACK)
         cells = WM_CODE_SLACK;
-    if (!(c = (WmChunk*)wm_code_malloc(chunk_bytes(cells))))
+    if (!(c = (WmChunk*)wm_code_malloc(chunk_bytes(cells))) && cells > need)
+        c = (WmChunk*)wm_code_malloc(chunk_bytes(cells = need));
+    if (!c)
         return NULL;
     c->next = NULL;
     c->size = cells;
