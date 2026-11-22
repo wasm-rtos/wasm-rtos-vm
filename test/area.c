@@ -181,30 +181,29 @@ int main(void)
     drop_all();
     check(g_heap == 0, "all given back");
 
-    /* An allocator that moves every block it shrinks: a chunk with a pinned span is not cut. */
+    /*
+     * Memory before code (what the memory calls when the heap refuses it),
+     * with an allocator that moves every block it shrinks: the area compacts
+     * and cuts its chunks; one with a pinned span is not cut, the others are,
+     * their spans moved.
+     */
     g_move_on_shrink = 1;
     ok = 1;
-    for (int i = 0; i < 40; ++i)
-        ok &= make(i, 10);
+    for (int i = 0; i < 8; ++i)
+        ok &= make(i, 40);
     {
         WmCell* pinned_at = g_owner[0].own;
         g_owner[0].pinned = 1;
-        for (int i = 1; i < 40; ++i)
-            if (i % 4)
-                drop(i);
+        for (int i = 4; i < 8; ++i)
+            drop(i);
         g_moved_blocks = 0;
-        wm_area_settle();
-        check(ok && g_owner[0].own == pinned_at, "the pinned span's chunk is not moved by cutting");
-        check(g_moved_blocks > 0, "chunks without a pinned span were cut (and moved)");
-        check(all_intact(), "spans of chunks cut and moved are whole");
-        g_owner[0].pinned = 0;
-        drop(0);
-        for (int i = 1; i < 40; ++i)
-            if (g_owner[i].own)
-                g_owner[i].pinned = 0;
-        wm_area_settle();
-        check(all_intact(), "after the pin goes, the rest whole");
+        before = wm_code_area_bytes();
+        check(ok && wm_code_drop_one() == 1 && wm_code_area_bytes() < before, "memory before code: the area gives bytes back");
+        check(g_owner[0].own == pinned_at, "the pinned span's chunk is not cut");
+        check(g_moved_blocks > 0, "chunks without a pinned span are cut, moved by the allocator");
+        check(all_intact(), "their spans whole at their new places");
         check(wm_code_area_bytes() == g_heap, "the area's bytes are the heap's");
+        g_owner[0].pinned = 0;
     }
     drop_all();
     g_move_on_shrink = 0;
