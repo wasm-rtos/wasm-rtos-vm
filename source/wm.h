@@ -96,6 +96,8 @@ void wm_set_code_allocator(WmAllocator allocator);
 void wm_code_cache_limit(size_t bytes);
 /* Bytes of records it holds. */
 size_t wm_code_cache_bytes(void);
+/* Bytes the area holding the records takes from the code allocator, holes and unused tops included (decision 18). */
+size_t wm_code_area_bytes(void);
 /*
  * Drop records until at most keep bytes are left, or only those of
  * functions on a call stack; the bytes left. Not from inside the engine's

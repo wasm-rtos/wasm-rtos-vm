@@ -55,7 +55,7 @@ static void wm_code_drop(WmCode* code)
         return;
     if (!code->mapped)
     {
-        wm_code_free(code->own);
+        wm_area_free(code->own);
         g_bytes -= (size_t)code->fast_cells * sizeof(WmCell);
     }
     code->fast = NULL;
@@ -68,6 +68,11 @@ static void wm_code_drop(WmCode* code)
 #endif
 }
 
+#if WM_CHECKS
+static void area_check_owner_gone(const WmModule* m);
+#else
+#define area_check_owner_gone(m) ((void)0)
+#endif
 void wm_code_add_module(WmModule* m)
 {
     m->cached_next = g_modules;
@@ -89,6 +94,7 @@ void wm_code_remove_module(WmModule* m)
     }
     for (uint32_t i = 0; i < defined(m); ++i)
         wm_code_drop(&m->codes[i]);
+    area_check_owner_gone(m);
 }
 
 /* Pinning counts (decision 18): the area compacts inside code that pinned the stacks already. */
@@ -182,25 +188,595 @@ static int make_room(void)
 
 static int is_exhaustion(WmResult result) { return result && !strncmp(result, "exhaustion", 10); }
 
-/* A function's records copied from the image, dropping others for the room; with none, it runs from the image. */
+/*
+ * The area (decision 18): records live in chunks of the code allocator.
+ * A chunk holds spans one after another from its start to its top: a span
+ * is a header (its owner, its cells) and a function's records; a dropped
+ * one stays as a hole (no owner) until compaction slides the spans after
+ * it down, and into earlier chunks, and sets each owner's own; a pinned
+ * span stays. Records need nothing changed to move: handlers are offsets,
+ * branches relative, calls by function index. A chunk is walked from
+ * header to header, so compaction costs the area's size, not the number
+ * of functions.
+ *
+ * At most one span is being written at a time (wm_area_begin ... _end, the
+ * translator's): its owner is BUILD, it lies at its chunk's top, moves
+ * with compaction, and the translator takes its address back each time.
+ */
+typedef struct WmChunk
+{
+    struct WmChunk* next;
+    /* In cells: room, the end of the last span, the cells of spans with their headers. */
+    uint32_t size, top, live;
+} WmChunk;
+
+typedef struct WmSpan
+{
+    WmCode* owner;
+    uint32_t cells;
+} WmSpan;
+
+#define SPAN_CELLS ((uint32_t)((sizeof(WmSpan) + sizeof(WmCell) - 1u) / sizeof(WmCell)))
+#define BUILD ((WmCode*)(uintptr_t)1)
+
+#ifndef WM_CODE_SLACK
+/* Cells a chunk keeps unused at its top before they go back (256 bytes). */
+#define WM_CODE_SLACK 64u
+#endif
+#ifndef WM_CODE_MOVE_ALWAYS
+#define WM_CODE_MOVE_ALWAYS 0
+#endif
+
+static WmChunk* g_chunks;
+static size_t g_area;
+/* The span being written: its chunk (NULL: none) and where its header is. */
+static WmChunk* g_build;
+static uint32_t g_build_at;
+
+size_t wm_code_area_bytes(void) { return g_area; }
+
+#if WM_CHECKS
+#include <stdio.h>
+#include <stdlib.h>
+/* Checking builds: the area walks right, every owner points at its span, the counts agree. */
+static void area_verify(const char* where)
+{
+    for (WmChunk* c = g_chunks; c; c = c->next)
+    {
+        uint32_t at = 0, live = 0;
+        while (at < c->top)
+        {
+            WmSpan* h = (WmSpan*)(void*)((WmCell*)(void*)(c + 1) + at);
+            if (h->cells > 0x8000u || (h->owner && h->owner != BUILD && h->owner->own != (WmCell*)(void*)h + SPAN_CELLS) ||
+                (h->owner == BUILD && (g_build != c || g_build_at != at)))
+            {
+                fprintf(stderr, "wm code area broken (%s): span at %u of %u\n", where, at, c->top);
+                abort();
+            }
+            if (h->owner)
+                live += SPAN_CELLS + h->cells;
+            at += SPAN_CELLS + h->cells;
+        }
+        if (at != c->top || live != c->live || c->top > c->size)
+        {
+            fprintf(stderr, "wm code area broken (%s): walk %u top %u size %u live %u counted %u\n", where, at, c->top,
+                    c->size, c->live, live);
+            abort();
+        }
+    }
+}
+
+/* Checking builds: a module leaving the cache leaves no span. */
+static void area_check_owner_gone(const WmModule* m)
+{
+    for (WmChunk* c = g_chunks; c; c = c->next)
+        for (uint32_t at = 0; at < c->top; at += SPAN_CELLS + ((WmSpan*)(void*)((WmCell*)(void*)(c + 1) + at))->cells)
+        {
+            const WmCode* owner = ((WmSpan*)(void*)((WmCell*)(void*)(c + 1) + at))->owner;
+            if (owner && owner != BUILD && owner >= m->codes && owner < m->codes + defined(m))
+            {
+                fprintf(stderr, "wm code area broken: a span of a module that left\n");
+                abort();
+            }
+        }
+}
+#else
+#define area_verify(where) ((void)0)
+#define area_check_owner_gone(m) ((void)0)
+#endif
+
+static WmCell* chunk_cells(WmChunk* c) { return (WmCell*)(void*)(c + 1); }
+static size_t chunk_bytes(uint32_t cells) { return sizeof(WmChunk) + (size_t)cells * sizeof(WmCell); }
+static WmSpan* span_at(WmChunk* c, uint32_t at) { return (WmSpan*)(void*)(chunk_cells(c) + at); }
+static uint32_t span_len(const WmSpan* h) { return SPAN_CELLS + h->cells; }
+static WmSpan* span_of(WmCell* records) { return (WmSpan*)(void*)(records - SPAN_CELLS); }
+
+static WmChunk* chunk_of(const WmCell* p)
+{
+    for (WmChunk* c = g_chunks; c; c = c->next)
+        if (p >= chunk_cells(c) && p < chunk_cells(c) + c->size)
+            return c;
+    return NULL;
+}
+
+/* The owner of a span takes its new place. */
+static void span_placed(WmChunk* c, uint32_t at)
+{
+    WmSpan* h = span_at(c, at);
+    if (h->owner == BUILD)
+    {
+        g_build = c;
+        g_build_at = at;
+    }
+    else if (h->owner)
+        h->owner->own = chunk_cells(c) + at + SPAN_CELLS;
+}
+
+static int span_stays(const WmSpan* h) { return h->owner && h->owner != BUILD && h->owner->pinned; }
+
+static int chunk_has_pinned(WmChunk* c)
+{
+    for (uint32_t at = 0; at < c->top; at += span_len(span_at(c, at)))
+        if (span_stays(span_at(c, at)))
+            return 1;
+    return 0;
+}
+
+/* The end of the last span with an owner: holes at the top are no span. */
+static void chunk_settle_top(WmChunk* c)
+{
+    uint32_t end = 0;
+    for (uint32_t at = 0; at < c->top; at += span_len(span_at(c, at)))
+        if (span_at(c, at)->owner)
+            end = at + span_len(span_at(c, at));
+    c->top = end;
+}
+
+static void chunk_unlink(WmChunk* c)
+{
+    for (WmChunk** at = &g_chunks; *at; at = &(*at)->next)
+        if (*at == c)
+        {
+            *at = c->next;
+            return;
+        }
+}
+
+static void chunk_free(WmChunk* c)
+{
+    chunk_unlink(c);
+    g_area -= chunk_bytes(c->size);
+    wm_code_free(c);
+}
+
+/*
+ * A chunk's unused top given back, when it is more than a few cells: only
+ * a chunk with no pinned span and not being written into, as the allocator
+ * may answer a smaller size with a new address (then every span's owner
+ * follows). With the stacks pinned.
+ */
+static void chunk_cut(WmChunk* c)
+{
+    WmChunk* cut;
+    WmChunk** link;
+    uint32_t size = c->size, keep = c->top ? c->top : 1u;
+    if (size - c->top <= WM_CODE_SLACK / 4u || c == g_build || chunk_has_pinned(c))
+        return;
+    for (link = &g_chunks; *link != c; link = &(*link)->next)
+        ;
+    if (!(cut = (WmChunk*)wm_code_realloc(c, chunk_bytes(keep))))
+        return;
+    *link = cut;
+    cut->size = keep;
+    g_area -= chunk_bytes(size) - chunk_bytes(keep);
+    if (cut != c)
+        for (uint32_t at = 0; at < cut->top; at += span_len(span_at(cut, at)))
+            span_placed(cut, at);
+}
+
+static WmChunk* chunk_new(uint32_t cells)
+{
+    WmChunk* c;
+    WmChunk** at = &g_chunks;
+    size_t held = 0;
+    for (WmChunk* k = g_chunks; k; k = k->next)
+        held += k->size;
+    if (cells < held / 2u)
+        cells = (uint32_t)(held / 2u);
+    if (cells < WM_CODE_SLACK)
+        cells = WM_CODE_SLACK;
+    if (!(c = (WmChunk*)wm_code_malloc(chunk_bytes(cells))))
+        return NULL;
+    c->next = NULL;
+    c->size = cells;
+    c->top = 0;
+    c->live = 0;
+    while (*at)
+        at = &(*at)->next;
+    *at = c;
+    g_area += chunk_bytes(cells);
+    return c;
+}
+
+/* A span of cells records at the top of a chunk with room (not the one written into): its header, or NULL. */
+static WmSpan* chunk_put(uint32_t cells, WmCode* owner, WmChunk** out_chunk, uint32_t* out_at)
+{
+    uint32_t len = SPAN_CELLS + cells;
+    for (WmChunk* c = g_chunks; c; c = c->next)
+        if (c != g_build && c->size - c->top >= len)
+        {
+            WmSpan* h = span_at(c, c->top);
+            h->owner = owner;
+            h->cells = cells;
+            *out_chunk = c;
+            *out_at = c->top;
+            c->top += len;
+            c->live += len;
+            return h;
+        }
+    return NULL;
+}
+
+/*
+ * Spans slid down over the holes in each chunk (a hole kept before a span
+ * that stays), then the spans of later chunks into earlier ones with room,
+ * so the last ones may empty and go. With the stacks pinned.
+ */
+static void compact(void)
+{
+    for (WmChunk* c = g_chunks; c; c = c->next)
+    {
+        uint32_t cursor = 0, at = 0;
+        while (at < c->top)
+        {
+            WmSpan* h = span_at(c, at);
+            uint32_t len = span_len(h), next = at + len;
+            if (!h->owner)
+            {
+                at = next;
+                continue;
+            }
+            if (span_stays(h))
+            {
+                if (at > cursor)
+                {
+                    /* What could not slide in front of it stays a hole. */
+                    WmSpan* hole = span_at(c, cursor);
+                    hole->owner = NULL;
+                    hole->cells = at - cursor - SPAN_CELLS;
+                }
+                cursor = next;
+            }
+            else
+            {
+                if (at > cursor)
+                {
+                    memmove(chunk_cells(c) + cursor, chunk_cells(c) + at, (size_t)len * sizeof(WmCell));
+                    span_placed(c, cursor);
+                }
+                cursor += len;
+            }
+            at = next;
+        }
+        c->top = cursor;
+    }
+    for (WmChunk* late = g_chunks ? g_chunks->next : NULL; late; late = late->next)
+        for (uint32_t at = 0; at < late->top; at += span_len(span_at(late, at)))
+        {
+            WmSpan* h = span_at(late, at);
+            uint32_t len = span_len(h);
+            if (!h->owner || h->owner == BUILD || h->owner->pinned)
+                continue;
+            for (WmChunk* early = g_chunks; early != late; early = early->next)
+                if (early != g_build && early->size - early->top >= len)
+                {
+                    memcpy(chunk_cells(early) + early->top, h, (size_t)len * sizeof(WmCell));
+                    span_placed(early, early->top);
+                    early->top += len;
+                    early->live += len;
+                    late->live -= len;
+                    h->owner = NULL;
+                    break;
+                }
+        }
+    for (WmChunk* c = g_chunks; c;)
+    {
+        WmChunk* next = c->next;
+        if (!c->live && c != g_build)
+            chunk_free(c);
+        else
+            chunk_settle_top(c);
+        c = next;
+    }
+}
+
+/* Cells the area could give by compacting: room at the tops and in the holes. */
+static size_t area_free_cells(void)
+{
+    size_t free_cells = 0;
+    for (WmChunk* c = g_chunks; c; c = c->next)
+        free_cells += c->size - c->live;
+    return free_cells;
+}
+
+#if WM_CODE_MOVE_ALWAYS
+/* Tests only: every unpinned span, the one written included, to a new chunk; the old places filled with a pattern. */
+static void move_always(void)
+{
+    uint32_t total = 0;
+    WmChunk* fresh;
+    for (WmChunk* c = g_chunks; c; c = c->next)
+        for (uint32_t at = 0; at < c->top; at += span_len(span_at(c, at)))
+            if (span_at(c, at)->owner && !span_stays(span_at(c, at)))
+                total += span_len(span_at(c, at));
+    if (!total || !(fresh = (WmChunk*)wm_code_malloc(chunk_bytes(total))))
+        return;
+    fresh->size = total;
+    fresh->top = 0;
+    fresh->live = 0;
+    fresh->next = NULL;
+    for (WmChunk* c = g_chunks; c; c = c->next)
+        for (uint32_t at = 0; at < c->top; at += span_len(span_at(c, at)))
+        {
+            WmSpan* h = span_at(c, at);
+            uint32_t len = span_len(h);
+            WmCode* owner = h->owner;
+            if (!owner || span_stays(h))
+                continue;
+            memcpy(chunk_cells(fresh) + fresh->top, h, (size_t)len * sizeof(WmCell));
+            memset((WmCell*)(void*)h + SPAN_CELLS, 0xA5, (size_t)h->cells * sizeof(WmCell));
+            h->owner = NULL;
+            c->live -= len;
+            span_placed(fresh, fresh->top);
+            fresh->top += len;
+            fresh->live += len;
+        }
+    fresh->next = g_chunks;
+    g_chunks = fresh;
+    g_area += chunk_bytes(total);
+    for (WmChunk* c = g_chunks; c;)
+    {
+        WmChunk* next = c->next;
+        if (!c->live && c != g_build)
+            chunk_free(c);
+        c = next;
+    }
+}
+#endif
+
+/*
+ * A span of cells records for owner: at a top with room, else after
+ * compaction when the area has the room in holes, else in a new chunk,
+ * else dropping records by CLOCK and trying again. Its header, or NULL when
+ * nothing more can go. The stacks pinned meanwhile.
+ */
+static WmSpan* area_take(uint32_t cells, WmCode* owner, WmChunk** out_chunk, uint32_t* out_at)
+{
+    WmSpan* h = NULL;
+    pin_stacks(1);
+#if WM_CODE_MOVE_ALWAYS
+    move_always();
+#endif
+    for (;;)
+    {
+        if ((h = chunk_put(cells, owner, out_chunk, out_at)))
+            break;
+        if (area_free_cells() >= SPAN_CELLS + cells)
+        {
+            compact();
+            if ((h = chunk_put(cells, owner, out_chunk, out_at)))
+                break;
+        }
+        if (chunk_new(SPAN_CELLS + cells) && (h = chunk_put(cells, owner, out_chunk, out_at)))
+            break;
+        if (!make_room())
+            break;
+    }
+    pin_stacks(0);
+    return h;
+}
+
+WmCell* wm_area_alloc(WmCode* owner, uint32_t cells)
+{
+    area_verify(__func__);
+    WmChunk* c;
+    uint32_t at;
+    WmSpan* h = area_take(cells ? cells : 1u, owner, &c, &at);
+    return h ? (WmCell*)(void*)h + SPAN_CELLS : NULL;
+}
+
+void wm_area_free(WmCell* records)
+{
+    area_verify(__func__);
+    WmChunk* c = records ? chunk_of(records) : NULL;
+    WmSpan* h;
+    if (!c)
+        return;
+    h = span_of(records);
+#if WM_CODE_MOVE_ALWAYS
+    memset(records, 0xA5, (size_t)h->cells * sizeof(WmCell));
+#endif
+    h->owner = NULL;
+    c->live -= span_len(h);
+    if ((WmCell*)(void*)h + span_len(h) == chunk_cells(c) + c->top)
+        chunk_settle_top(c);
+    if (!c->live && c != g_build)
+        chunk_free(c);
+}
+
+WmCell* wm_area_begin(uint32_t cells)
+{
+    area_verify(__func__);
+    WmChunk* c;
+    uint32_t at;
+    if (!area_take(cells, BUILD, &c, &at))
+        return NULL;
+    g_build = c;
+    g_build_at = at;
+    return chunk_cells(c) + at + SPAN_CELLS;
+}
+
+/* The span being written grows in place when it is at its chunk's top and the chunk has room for cells. */
+static int build_grows(uint32_t cells)
+{
+    WmChunk* c = g_build;
+    WmSpan* h = span_at(c, g_build_at);
+    if (g_build_at + span_len(h) != c->top || c->size - g_build_at < SPAN_CELLS + cells)
+        return 0;
+    c->live += cells - h->cells;
+    h->cells = cells;
+    c->top = g_build_at + span_len(h);
+    return 1;
+}
+
+/*
+ * The span being written, with room for cells now: in place, else after
+ * compaction (which may move it), else in a chunk of its own with what was
+ * written copied once, else dropping records and trying again. Its first
+ * cell, or NULL (it stays as it was) when nothing can make room.
+ */
+WmCell* wm_area_grow(uint32_t cells)
+{
+    WmCell* p = NULL;
+    if (!g_build)
+        return NULL;
+    pin_stacks(1);
+#if WM_CODE_MOVE_ALWAYS
+    move_always();
+#endif
+    for (;;)
+    {
+        WmChunk* c;
+        WmChunk* fresh;
+        WmSpan* h;
+        if (build_grows(cells))
+            break;
+        if (area_free_cells() >= cells)
+        {
+            compact();
+            if (build_grows(cells))
+                break;
+        }
+        c = g_build;
+        h = span_at(c, g_build_at);
+        if ((fresh = chunk_new(SPAN_CELLS + cells)))
+        {
+            uint32_t len = span_len(h);
+            memcpy(chunk_cells(fresh), h, (size_t)len * sizeof(WmCell));
+            h->owner = NULL;
+            c->live -= len;
+            chunk_settle_top(c);
+            g_build = fresh;
+            g_build_at = 0;
+            fresh->top = len;
+            fresh->live = len;
+            if (!c->live)
+                chunk_free(c);
+            if (build_grows(cells))
+                break;
+        }
+        if (!make_room())
+        {
+            pin_stacks(0);
+            return NULL;
+        }
+    }
+    p = chunk_cells(g_build) + g_build_at + SPAN_CELLS;
+    pin_stacks(0);
+    return p;
+}
+
+/*
+ * The span written, cut to count cells and given to its owner: its first
+ * cell (NULL: none was begun). It is its chunk's last span, so the top
+ * follows its end.
+ */
+WmCell* wm_area_end(WmCode* owner, uint32_t count)
+{
+    area_verify(__func__);
+    WmChunk* c = g_build;
+    WmSpan* h;
+    if (!c)
+        return NULL;
+    h = span_at(c, g_build_at);
+    c->live -= h->cells - count;
+    h->cells = count;
+    h->owner = owner;
+    c->top = g_build_at + span_len(h);
+    g_build = NULL;
+    return chunk_cells(c) + g_build_at + SPAN_CELLS;
+}
+
+void wm_area_cancel(void)
+{
+    area_verify(__func__);
+    WmChunk* c = g_build;
+    WmSpan* h;
+    if (!c)
+        return;
+    h = span_at(c, g_build_at);
+    c->live -= span_len(h);
+    c->top = g_build_at;
+    g_build = NULL;
+    chunk_settle_top(c);
+    if (!c->live)
+        chunk_free(c);
+}
+
+/* After a span found its owner: a chunk whose unused top is more than a quarter of the area gives it back. */
+void wm_area_settle(void)
+{
+    size_t held = 0;
+    for (WmChunk* k = g_chunks; k; k = k->next)
+        held += k->size;
+    for (WmChunk* c = g_chunks; c;)
+    {
+        WmChunk* next = c->next;
+        if ((size_t)(c->size - c->top) * 4u > held && c->size - c->top > WM_CODE_SLACK)
+        {
+            pin_stacks(1);
+            chunk_cut(c);
+            pin_stacks(0);
+        }
+        c = next;
+    }
+}
+
+/* Every chunk's unused top back to the heap, empty chunks freed (memory before code); 1 when the heap got some. */
+static int area_give_back(void)
+{
+    size_t before = g_area;
+    if (!g_chunks)
+        return 0;
+    pin_stacks(1);
+    compact();
+    for (WmChunk* c = g_chunks; c;)
+    {
+        WmChunk* next = c->next;
+        chunk_cut(c);
+        c = next;
+    }
+    pin_stacks(0);
+    return g_area < before;
+}
+
+/* A function's records copied from the image into the area, dropping others for the room; with none, it runs from the image. */
 static void from_image(WmModule* m, WmCode* code)
 {
     uint32_t i = (uint32_t)(code - m->codes);
     const WmCell* cells = m->image + m->image_index[i];
     uint32_t count = m->image_index[i + 1u] - m->image_index[i];
     WmCell* copy;
-    pin_stacks(1);
     ++code->pinned;
-    while (!(copy = (WmCell*)wm_code_malloc((size_t)count * sizeof(WmCell))) && make_room())
-        ;
+    copy = wm_area_alloc(code, count);
     --code->pinned;
-    pin_stacks(0);
     code->fast_cells = (uint16_t)count;
     code->mapped = !copy;
     if (copy)
     {
         memcpy(copy, cells, (size_t)count * sizeof(WmCell));
         code->own = copy;
+        wm_area_settle();
     }
     else
         code->fast = cells;
@@ -230,6 +806,8 @@ WmResult wm_code_make(WmModule* m, WmCode* code, const WmSide* side)
     } while (is_exhaustion(result) && make_room());
     --code->pinned;
     pin_stacks(0);
+    if (!result)
+        wm_area_settle();
     return result;
 }
 
@@ -260,12 +838,22 @@ WmResult wm_code_load(WmFunc* func)
     return NULL;
 }
 
+/*
+ * Memory before code: the heap is short. The area's unused tops and empty
+ * chunks go back first, keeping every function; else one function's
+ * records (or a tail) go, and what that frees in the area goes back too.
+ * 1 when something went, 0 when nothing could.
+ */
 int wm_code_drop_one(void)
 {
     int dropped;
+    if (area_give_back())
+        return 1;
     pin_stacks(1);
     dropped = make_room();
     pin_stacks(0);
+    if (dropped)
+        (void)area_give_back();
     return dropped;
 }
 
@@ -358,7 +946,7 @@ WmResult wm_code_image_write(WmModule* m, WmSnapshotWrite write, void* context)
         image_put(&o, code->fast, code->fast_cells * (uint32_t)sizeof(WmCell));
         if (made)
         {
-            wm_code_free(code->own);
+            wm_area_free(code->own);
             code->fast = NULL;
             code->fast_cells = 0;
         }
@@ -423,7 +1011,7 @@ WmResult wm_code_image_map(WmModule* m, const void* image, uint32_t size)
         same = code->fast_cells == count && !memcmp(code->fast, words + index[i], (size_t)count * sizeof(WmCell));
         if (made)
         {
-            wm_code_free(code->own);
+            wm_area_free(code->own);
             code->fast = NULL;
             code->fast_cells = 0;
         }
@@ -456,6 +1044,7 @@ int wm_code_drop_one(void) { return 0; }
 void wm_set_code_allocator(WmAllocator allocator) { (void)allocator; }
 void wm_code_cache_limit(size_t bytes) { (void)bytes; }
 size_t wm_code_cache_bytes(void) { return 0; }
+size_t wm_code_area_bytes(void) { return 0; }
 size_t wm_code_cache_trim(size_t keep)
 {
     (void)keep;

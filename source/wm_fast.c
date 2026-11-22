@@ -265,6 +265,8 @@ typedef struct
     uint8_t kind;
     /* Translated again only for its places (WmTail): the cells are not kept. */
     uint8_t scratch;
+    /* Cells to reserve at first: about what the body's bytes become. */
+    uint32_t hint;
     uint32_t base;
     const uint16_t* handlers;
     WmResult error;
@@ -304,10 +306,17 @@ static void reg_put(RegOut* o, uint32_t value)
     }
     if (o->count == o->capacity)
     {
-        uint32_t capacity = o->capacity ? o->capacity * 2u : 256u;
-        /* Records to keep grow in the code cache's memory; a translation only for its places, in the engine's. */
-        WmCell* grown = (WmCell*)(o->scratch ? wm_realloc(o->cells, capacity * sizeof(WmCell))
-                                             : wm_code_realloc(o->cells, capacity * sizeof(WmCell)));
+        /* Records are written straight into the code area (decision 18): first as many as the body suggests. */
+        uint32_t capacity = o->capacity ? o->capacity * 2u : o->hint;
+        WmCell* grown;
+        if (capacity > 0x8000u)
+            capacity = 0x8000u;
+        if (capacity <= o->capacity)
+        {
+            o->error = E_DOES_NOT_FIT;
+            return;
+        }
+        grown = o->cells ? wm_area_grow(capacity) : wm_area_begin(capacity);
         if (!grown)
         {
             o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
@@ -579,6 +588,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     o->last = UINT32_MAX;
     o->base = B;
     o->scratch = tail != NULL;
+    o->hint = (uint32_t)(code->end - code->body) * 4u + 16u;
     if (!o->handlers)
         o->error = WM_ERR_UNSUPPORTED("unsupported: handlers too far apart for predecoding");
     /* The instructions, and the labels: where branches land, so the frame there must be the stack machine's. */
@@ -1140,24 +1150,18 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     }
     if (!o->error && o->count > 0x7FFFu)
         o->error = E_DOES_NOT_FIT;
-    if (!o->error && !tail)
+    if (!o->error && !tail && o->count)
     {
-        /* The cells were written in the code cache's memory: they become the records, cut to their size. */
-        WmCell* fit = (WmCell*)wm_code_realloc(o->cells, (size_t)o->count * sizeof(WmCell));
-        if (fit)
-        {
-            code->own = fit;
-            code->fast_cells = (uint16_t)o->count;
-            code->mapped = 0;
-            o->cells = NULL;
-        }
-        else
-            o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
+        /* The cells were written in the code area: they become the records, cut to their size. */
+        code->own = wm_area_end(code, o->count);
+        code->fast_cells = (uint16_t)o->count;
+        code->mapped = 0;
+        o->cells = NULL;
     }
     if (o->scratch)
         wm_free(o->cells);
-    else
-        wm_code_free(o->cells);
+    else if (o->cells)
+        wm_area_cancel();
     wm_free(fixups);
     wm_free(heights);
     wm_free(labels);
