@@ -47,9 +47,24 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         WmResult result = NULL;
 #endif
 #if WM_PREDECODE
-        /* In a function that runs in place by itself: its side table stayed with it, pinned on the stack. */
+        /*
+         * In a function that runs in place by itself: its side table stayed
+         * with it, pinned on the stack. When the runtime may make records and
+         * they fit, it moves to them on the way (decision 21, as engines with
+         * two tiers replace a running function on its stack): the loop in
+         * place goes on as part of the register loop and hands over at the
+         * next segment, with the side table it has.
+         */
         if (resume && rt->saved.inplace == 2u)
+        {
+            WmFunc* f = rt->saved.func;
+            if (rt->makes_code && !wm_code_load(f) && !wm_reg_tail(f->instance->module, f->code, &tail))
+            {
+                rt->saved.inplace = 1;
+                mixed = 1;
+            }
             goto in_place;
+        }
         if (resume && rt->saved.inplace)
         {
             if ((result = wm_reg_tail(rt->saved.func->instance->module, rt->saved.func->code, &tail)))

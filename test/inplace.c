@@ -5,6 +5,8 @@
  * slices, calls through a host function that calls back in, and slices
  * resumed in a fresh runtime from a snapshot with the other setting.
  * A runtime that makes no records uses those others made and adds none.
+ * A function stopped in place moves to its records when the runtime may
+ * make them again, in the middle of a loop that never calls (test/inplace.wat).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -154,6 +156,26 @@ static WmResult run_sliced(WmRuntime** rt, int mode, int snapshots, WmFunc* f, u
     return r;
 }
 
+/* f(arg) in slices on one runtime, making no records in the first slice and as usual from then on. */
+static WmResult run_turned(WmRuntime* rt, WmFunc* f, uint32_t arg, Run* out, size_t* records_after_first)
+{
+    WmResult r;
+    set_mode(rt, MAKES_NONE);
+    out->slices = 0;
+    wm_set_fuel(rt, SLICE);
+    r = wm_call(rt, f, &arg, &out->result);
+    *records_after_first = wm_code_cache_bytes();
+    while (r == wm_fuel_exhausted)
+    {
+        ++out->slices;
+        set_mode(rt, USUAL);
+        wm_set_fuel(rt, SLICE);
+        r = wm_resume(rt, &out->result);
+    }
+    out->fuel = out->slices * SLICE + (SLICE - wm_get_fuel(rt));
+    return r;
+}
+
 static void same(const Run* a, const Run* b, const char* what)
 {
     char line[160];
@@ -255,6 +277,33 @@ int main(int argc, char** argv)
     wm_instance_free(g_inst);
     wm_module_free(module);
     check(wm_code_cache_bytes() == 0, "a module freed takes its records along");
+
+    /* A loop that never calls, stopped in place: on to its records when the runtime makes them again. */
+    f = fopen(argc > 2 ? argv[2] : "test/inplace.wasm", "rb");
+    size = f ? (uint32_t)fread(bytes, 1, sizeof(bytes), f) : 0;
+    if (f)
+        fclose(f);
+    module = NULL;
+    g_inst = NULL;
+    check(size && !wm_module_load(&module, bytes, size) && !wm_instantiate(&g_inst, module, rt, resolve, NULL),
+          "instantiate the loop");
+    if (g_inst)
+    {
+        WmFunc* sum = export_func("sum");
+        Run usual, run;
+        size_t first;
+        check(!run_sliced(&rt, USUAL, 0, sum, 300, &usual), "sum(300) in slices");
+        wm_code_cache_trim(0);
+        check(!run_sliced(&rt, MAKES_NONE, 0, sum, 300, &run) && wm_code_cache_bytes() == 0,
+              "sum(300) in slices, making none: in place to the end");
+        same(&usual, &run, "sum(300), making none");
+        wm_code_cache_trim(0);
+        check(!run_turned(rt, sum, 300, &run, &first), "sum(300), making none, then records");
+        same(&usual, &run, "sum(300), making none, then records");
+        check(first == 0 && wm_code_cache_bytes() > 0, "the stopped loop moved to its records");
+        wm_instance_free(g_inst);
+        wm_module_free(module);
+    }
     wm_runtime_free(rt);
     wm_host_function_free(g_back);
     printf("%s\n", g_failures ? "FAILED" : "all passed");
