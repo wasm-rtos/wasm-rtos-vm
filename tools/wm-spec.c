@@ -81,6 +81,39 @@ static void map_image(WmModule* module, uint32_t at)
 }
 #endif
 
+#ifdef WM_SPEC_IN_PLACE
+/*
+ * -DWM_SPEC_IN_PLACE (decision 21): 1, the runtime makes no records, so
+ * every function runs in place by itself; 2, each call at random as usual,
+ * making no records, or with every allocation for records refused (after
+ * the module's predecoding was tried), so the records of earlier calls stay
+ * and functions with records and functions in place call each other.
+ */
+static int g_refusing;
+static uint32_t g_random = 12345u;
+
+static void* refusing_allocator(void* ptr, size_t size)
+{
+    if (!size)
+    {
+        free(ptr);
+        return NULL;
+    }
+    return g_refusing ? NULL : realloc(ptr, size);
+}
+
+static void call_mode(void)
+{
+    uint32_t mode;
+    if (WM_SPEC_IN_PLACE != 2)
+        return;
+    g_random = g_random * 1103515245u + 12345u;
+    mode = (g_random >> 16) % 3u;
+    wm_set_makes_code(g_runtime, mode != 1u);
+    g_refusing = mode == 2u;
+}
+#endif
+
 static WmFunc* g_print[8];
 static WmGlobal* g_globals[4];
 static WmTable* g_table;
@@ -366,7 +399,13 @@ static void command(char* line)
                     at += WM_REF_SLOTS;
                 }
             }
+#ifdef WM_SPEC_IN_PLACE
+            call_mode();
+#endif
             result = wm_call(g_runtime, f, args, results);
+#ifdef WM_SPEC_IN_PLACE
+            g_refusing = 0;
+#endif
             if (result)
             {
                 printf("error %s\n", result);
@@ -488,6 +527,12 @@ int main(void)
         wm_code_cache_limit(1);
 #endif
     g_runtime = wm_runtime_new(64u * 1024u, 1000u);
+#ifdef WM_SPEC_IN_PLACE
+    if (WM_SPEC_IN_PLACE == 1)
+        wm_set_makes_code(g_runtime, 0);
+    else
+        wm_set_code_allocator(refusing_allocator);
+#endif
     make_spectest();
     setvbuf(stdout, NULL, _IOLBF, 0);
     while (fgets(line, sizeof(line), stdin))

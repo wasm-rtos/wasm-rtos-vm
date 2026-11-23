@@ -47,6 +47,24 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
         WmResult result = NULL;
 #endif
 #if WM_PREDECODE
+        /*
+         * In a function that runs in place by itself: its side table stayed
+         * with it, pinned on the stack. When the runtime may make records and
+         * they fit, it moves to them on the way (decision 21, as engines with
+         * two tiers replace a running function on its stack): the loop in
+         * place goes on as part of the register loop and hands over at the
+         * next segment, with the side table it has.
+         */
+        if (resume && rt->saved.inplace == 2u)
+        {
+            WmFunc* f = rt->saved.func;
+            if (rt->makes_code && !wm_code_load(f) && !wm_reg_tail(f->instance->module, f->code, &tail))
+            {
+                rt->saved.inplace = 1;
+                mixed = 1;
+            }
+            goto in_place;
+        }
         if (resume && rt->saved.inplace)
         {
             if ((result = wm_reg_tail(rt->saved.func->instance->module, rt->saved.func->code, &tail)))
@@ -55,7 +73,9 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             goto in_place;
         }
 #endif
-        result = resume ? NULL : wm_code_load(func);
+        result = resume ? NULL : code_or_alone(rt, func);
+        if (result == wm_code_alone)
+            goto in_place;
         if (result)
             return result;
         result = run_fast(rt, func, resume);
@@ -77,9 +97,26 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
             }
             else
 #endif
-            if (result == wm_code_stop)
+            if (result == wm_code_back)
             {
-                if ((result = wm_code_load(rt->saved.func)))
+                /* A function of the register loop returned to a caller running in place by itself. */
+                mixed = 0;
+                resume = 1;
+                goto in_place;
+            }
+            else if (result == wm_code_stop)
+            {
+                if ((result = code_or_alone(rt, rt->saved.func)) == wm_code_alone)
+                {
+                    /* Its frame is made, locals zeroed: it runs in place by itself, from its start. */
+                    rt->saved.pc = rt->saved.func->code->body;
+                    rt->saved.st = rt->saved.func->code->tail->side;
+                    rt->saved.inplace = 2;
+                    mixed = 0;
+                    resume = 1;
+                    goto in_place;
+                }
+                if (result)
                 {
                     rt->suspended = 0;
 #if WM_HAS_TRACE
@@ -148,9 +185,12 @@ in_place:;
     uint32_t fuel = fuel_on ? rt->fuel : WM_NONE;
 
 #if WM_PREDECODE
-#define INPLACE_SIDE (mixed ? tail->side : inst->module->side)
+/* In a module that runs predecoded each function has its own side table, from 0, in its tail. */
+#define INPLACE_SIDE (WM_RUNS_FAST(inst->module) ? (code->tail ? code->tail->side : NULL) : inst->module->side)
+#define SIDE_BASE (WM_RUNS_FAST(inst->module) ? 0u : code->side)
 #else
 #define INPLACE_SIDE (inst->module->side)
+#define SIDE_BASE (code->side)
 #endif
 #define REFRESH()                                                                                              \
     do                                                                                                         \
@@ -184,7 +224,7 @@ in_place:;
         sp = fp + func->param_slots;
         REFRESH();
         pc = code->body;
-        st = side + code->side;
+        st = side + SIDE_BASE;
         goto enter;
     }
 
@@ -446,6 +486,25 @@ in_place:;
                     return NULL;
                 }
                 frame = &rt->frames[--rt->depth];
+#if WM_PREDECODE
+                if (!frame->st && WM_RUNS_FAST(frame->func->instance->module))
+                {
+                    /* Back to a caller of the register loop (decision 21): its records stayed, pinned on the stack. */
+                    rt->saved.entry_depth = entry_depth;
+                    rt->saved.func = frame->func;
+                    rt->saved.pc = frame->pc;
+                    rt->saved.st = NULL;
+                    rt->saved.fp = frame->fp;
+                    rt->saved.sp = sp;
+                    rt->saved.inplace = 0;
+                    if (fuel_on)
+                        rt->fuel = fuel;
+                    rt->suspended = 1;
+                    func = frame->func;
+                    result = run_fast(rt, func, 1);
+                    goto fast_checked;
+                }
+#endif
                 pc = frame->pc;
                 st = frame->st;
                 fp = frame->fp;
@@ -628,6 +687,9 @@ in_place:;
                 NEXT;
             CASE(0x40)
                 ++pc;
+#if WM_TRACKS_CALLERS
+                rt->caller = func;
+#endif
                 sp[-1] = wm_memory_grow(inst->memory, sp[-1]);
                 REFRESH();
                 NEXT;
@@ -672,6 +734,9 @@ in_place:;
                     NEXT;
                 }
 #endif
+#if WM_TRACKS_CALLERS
+                rt->caller = func;
+#endif
                 if (!(sp = misc(inst, sub, &pc, sp, &trap)))
                     TRAP(trap);
                 REFRESH();
@@ -707,9 +772,44 @@ in_place:;
                 WM_MEMORY_CHANGES(callee->instance->memory);
             func = callee;
             REFRESH();
-            pc = code->body;
-            st = side + code->side;
             fp = sp - func->param_slots;
+#if WM_PREDECODE
+            if (WM_RUNS_FAST(inst->module))
+            {
+                /*
+                 * A call from a function running in place by itself (decision
+                 * 21): the callee runs on its records when it has them, or
+                 * where making them is safe, outside this loop, it gets them
+                 * or runs in place too (code_or_alone).
+                 */
+                if (sp + code->local_slots + code->max_stack > rt->stack_end)
+                    TRAP(T_STACK);
+                zero_slots(sp, code->local_slots);
+                rt->saved.entry_depth = entry_depth;
+                rt->saved.func = func;
+                rt->saved.st = NULL;
+                rt->saved.fp = fp;
+                rt->saved.sp = sp + code->local_slots;
+                rt->saved.inplace = 0;
+                if (fuel_on)
+                    rt->fuel = fuel;
+                rt->suspended = 1;
+                if (code->fast)
+                {
+                    func->code->used = 1;
+                    rt->saved.pc = (const uint8_t*)(const void*)code->fast;
+                    result = run_fast(rt, func, 1);
+                }
+                else
+                {
+                    rt->saved.pc = NULL;
+                    result = wm_code_stop;
+                }
+                goto fast_checked;
+            }
+#endif
+            pc = code->body;
+            st = side + SIDE_BASE;
         enter:
             if (sp + code->local_slots + code->max_stack > rt->stack_end)
                 TRAP(T_STACK);
@@ -757,7 +857,7 @@ in_place:;
         rt->saved.fp = fp;
         rt->saved.sp = sp;
 #if WM_PREDECODE
-        rt->saved.inplace = (uint8_t)mixed;
+        rt->saved.inplace = (uint8_t)(mixed ? 1u : WM_RUNS_FAST(inst->module) ? 2u : 0u);
 #endif
         if (fuel_on)
             rt->fuel = fuel;

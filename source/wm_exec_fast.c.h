@@ -322,6 +322,21 @@ r_return:
         return NULL;
     }
     frame = &rt->frames[--rt->depth];
+    if (__builtin_expect(frame->st != NULL, 0))
+    {
+        /* The caller runs in place by itself (decision 21): the loop in place goes on in it. */
+        rt->saved.entry_depth = entry_depth;
+        rt->saved.func = frame->func;
+        rt->saved.pc = frame->pc;
+        rt->saved.st = frame->st;
+        rt->saved.fp = frame->fp;
+        rt->saved.sp = fp + n;
+        rt->saved.inplace = 2;
+        if (fuel_on)
+            rt->fuel = fuel;
+        rt->suspended = 1;
+        return wm_code_back;
+    }
     fp = frame->fp;
     func = frame->func;
     REFRESH();

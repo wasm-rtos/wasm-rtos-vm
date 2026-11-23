@@ -382,6 +382,19 @@ uint32_t wm_call_depth(const WmRuntime* runtime);
  * and write it back only where the program can go on.
  */
 void wm_set_fuel(WmRuntime* runtime, uint32_t fuel);
+/*
+ * Whether calls on this runtime may make records (decision 21); 1 by
+ * default. With 0 they use the records other runtimes made and run the
+ * rest in place, taking no memory and no time from the others for code.
+ * The same results and fuel either way. Can change at any time, also from
+ * a host function or between slices of a suspended call; takes effect at
+ * the next call of a function without records. Does nothing in builds
+ * without predecoding, where everything runs in place.
+ *
+ * Whatever this says, a function whose records find no room runs in place
+ * by itself instead of failing the call.
+ */
+void wm_set_makes_code(WmRuntime* runtime, int makes);
 void wm_disable_fuel(WmRuntime* runtime);
 uint32_t wm_get_fuel(const WmRuntime* runtime);
 int wm_is_fuel_enabled(const WmRuntime* runtime);

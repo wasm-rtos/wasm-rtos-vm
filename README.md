@@ -311,6 +311,9 @@ void   wm_set_code_allocator(WmAllocator allocator);    /* for decoded code, sha
 void   wm_code_cache_limit(size_t bytes);               /* 0: as much as memory allows */
 size_t wm_code_cache_bytes(void);
 size_t wm_code_cache_trim(size_t keep);
+/* 0: this runtime's calls use decoded code others made and run the rest in place (an idle task).
+ * A function whose decoded code finds no room runs in place either way, instead of failing. */
+void   wm_set_makes_code(WmRuntime* runtime, int makes);
 
 /* Code images: decoded code in storage the processor reads (flash, PSRAM), for this build only. */
 WmResult wm_code_image_write(WmModule* module, WmSnapshotWrite write, void* context);

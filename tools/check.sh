@@ -35,6 +35,15 @@ for mode in "" "-DWM_SPEC_CODE_LIMIT=1" "-DWM_SPEC_CODE_LIMIT=1 -DWM_MEMORY_ALWA
 done
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/code.c -lm -o build/code || exit 1
 build/code >/dev/null && echo "code cache:    ok" || { echo "code cache:    FAIL"; build/code | grep FAIL; fail=1; }
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c test/inplace.c -lm -o build/inplace || exit 1
+build/inplace >/dev/null && echo "in place:      ok" || { echo "in place:      FAIL"; build/inplace | grep FAIL; fail=1; }
+# Functions in place by themselves (decision 21): every one, and mixed with records at random,
+# also paged and with code always moved. ASan only: under UBSan the interpreter does not predecode.
+for mode in 1 2 "2 -DWM_MEMORY_ALWAYS_PAGED=1 -DWM_CODE_MOVE_ALWAYS=1"; do
+    # shellcheck disable=SC2086
+    cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 -DWM_SPEC_IN_PLACE=$mode source/*.c tools/wm-spec.c -lm -o build/wm-spec-alone || exit 1
+    python3 tools/spec.py build/wm-spec-alone "$SPEC" >/dev/null && echo "spec (in place $mode): ok" || { echo "spec (in place $mode): FAIL"; fail=1; }
+done
 # Code images (decision 15): the spec suite from images only, and copied in through a cache of one byte.
 for mode in 1 2; do
     cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 -DWM_SPEC_IMAGE=$mode source/*.c tools/wm-spec.c -lm -o build/wm-spec-image || exit 1

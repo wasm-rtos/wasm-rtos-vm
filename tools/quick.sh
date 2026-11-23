@@ -15,7 +15,7 @@ fail=0
 python3 tools/check-api.py || fail=1
 cc -std=gnu99 -O2 -Wall -Wextra -Wno-unused-parameter -Wcast-qual -Werror source/*.c tools/wm-spec.c -lm \
     -o build/quick-werror && echo "build:         ok" || { echo "build:         FAIL"; exit 1; }
-for mode in "" "-DWM_FUSE=1" -DWM_PREDECODE=0 -DWM_MEMORY_ALWAYS_PAGED=1 -DWM_SPEC_PAGER=3; do
+for mode in "" "-DWM_FUSE=1" -DWM_PREDECODE=0 -DWM_MEMORY_ALWAYS_PAGED=1 -DWM_SPEC_PAGER=3 -DWM_SPEC_IN_PLACE=2; do
     cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 $mode source/*.c tools/wm-spec.c -lm -o build/quick-spec || exit 1
     python3 tools/spec.py build/quick-spec "$SPEC" > /dev/null && echo "spec:          ok ${mode:-(predecoded)}" ||
         { echo "spec:          FAIL $mode"; fail=1; }
@@ -24,6 +24,8 @@ cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/heap.c -lm -o build/quic
 build/quick-heap >/dev/null && echo "heap:          ok" || { echo "heap:          FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c test/area.c -lm -o build/quick-area || exit 1
 build/quick-area >/dev/null && echo "code area:     ok" || { echo "code area:     FAIL"; fail=1; }
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c test/inplace.c -lm -o build/quick-inplace || exit 1
+build/quick-inplace >/dev/null && echo "in place:      ok" || { echo "in place:      FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c test/image.c -lm -o build/quick-image || exit 1
 build/quick-image > /dev/null && echo "code images:   ok" || { echo "code images:   FAIL"; fail=1; }
 xxd -i test/fuzz/snapshot.wasm > build/snapshot_wasm.h

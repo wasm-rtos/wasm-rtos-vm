@@ -159,8 +159,12 @@ static WmResult place_of(const WmInstance* inst, const WmRuntime* rt, WmFunc* fu
     out->func = func;
     out->fp = (uint32_t)(fp - rt->stack);
 #if WM_PREDECODE
-    /* Stopped in the loop in place inside a function of the register loop: its own side table, from 0. */
-    if (inplace)
+    /*
+     * Stopped in the loop in place in a function of the register loop, or a
+     * frame of a function running in place by itself (decision 21, st not
+     * NULL): its own side table, from 0.
+     */
+    if (inplace || (st && WM_RUNS_FAST(func->instance->module)))
     {
         out->offset = (uint32_t)(pc - inst->module->bytes);
         out->side = func->code->side + (uint32_t)(st - func->code->tail->side);
@@ -348,13 +352,26 @@ static void set_place(const WmInstance* inst, WmRuntime* rt, const Place* p, WmF
  * record. The records are made here, once every frame is on the runtime,
  * so that making some cannot drop others the snapshot stopped in.
  */
-static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, uint8_t* inplace)
+static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, uint8_t* inplace, int makes_code)
 {
     const WmModule* m = func->instance->module;
-    WmResult result;
+    WmResult result = NULL;
     if (!WM_RUNS_FAST(m))
         return NULL;
-    if ((result = wm_code_load(func)))
+    if (func->code->fast || makes_code)
+        result = wm_code_load(func);
+    if (!(func->code->fast || makes_code) || (result && !strncmp(result, "exhaustion", 10)))
+    {
+        /* Without records (decision 21): the function runs in place by itself, here too. */
+        WmTail* tail;
+        if ((result = wm_reg_side((WmModule*)(uintptr_t)m, func->code, &tail)))
+            return result;
+        *st = tail->side + wm_reg_sides_before(m, func->code, (uint32_t)(*pc - m->bytes));
+        if (inplace)
+            *inplace = 2;
+        return NULL;
+    }
+    if (result)
         return result;
 #if WM_PREDECODE
     {
@@ -773,9 +790,9 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
     rt->suspended = 1;
 #if WM_PREDECODE
     saved->inplace = 0;
-    result = to_record(saved->func, &saved->pc, &saved->st, &saved->inplace);
+    result = to_record(saved->func, &saved->pc, &saved->st, &saved->inplace, rt->makes_code);
     for (uint32_t i = 0; !result && i < depth; ++i)
-        result = to_record(rt->frames[i].func, &rt->frames[i].pc, &rt->frames[i].st, NULL);
+        result = to_record(rt->frames[i].func, &rt->frames[i].pc, &rt->frames[i].st, NULL, rt->makes_code);
     if (result)
     {
         rt->depth = 0;

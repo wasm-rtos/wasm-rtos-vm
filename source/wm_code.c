@@ -17,6 +17,8 @@
 #if WM_PREDECODE
 
 const char wm_code_stop[] = "code miss";
+const char wm_code_alone[] = "code in place";
+const char wm_code_back[] = "code back in place";
 
 static WmModule* g_modules;
 static size_t g_bytes;
@@ -51,6 +53,11 @@ void wm_code_free(void* ptr)
 
 static void wm_code_drop(WmCode* code)
 {
+#if WM_PREDECODE
+    /* A function that ran in place by itself has a tail without records (decision 21). */
+    wm_reg_tail_free(code->tail);
+    code->tail = NULL;
+#endif
     if (!code->fast)
         return;
     if (!code->mapped)
@@ -62,10 +69,6 @@ static void wm_code_drop(WmCode* code)
     code->fast_cells = 0;
     code->used = 0;
     code->mapped = 0;
-#if WM_PREDECODE
-    wm_reg_tail_free(code->tail);
-    code->tail = NULL;
-#endif
 }
 
 #if WM_CHECKS
