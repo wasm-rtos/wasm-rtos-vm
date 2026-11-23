@@ -1200,39 +1200,71 @@ uint32_t wm_reg_sides_before(const WmModule* m, const WmCode* code, uint32_t off
  */
 static int out_of_room(WmResult result) { return result && !strncmp(result, "exhaustion", 10); }
 
-static WmResult reg_tail_make(WmModule* m, WmCode* code, WmTail** out)
+/* The function's side table entries, from 0, in a tail without the translator's entries yet. */
+static WmResult reg_side_make(WmModule* m, WmCode* code)
 {
-    uint32_t index = (uint32_t)(code - m->codes);
-    WmTail* tail;
+    WmTail* tail = (WmTail*)wm_calloc(1, sizeof(WmTail));
     WmResult result;
-    tail = (WmTail*)wm_calloc(1, sizeof(WmTail));
     if (!tail)
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
-    if (!(result = wm_code_side(m, index, &tail->side)))
-        result = reg_translate(m, code, tail->side, tail, NULL);
-    if (result)
+    if ((result = wm_code_side(m, (uint32_t)(code - m->codes), &tail->side)))
     {
-        wm_reg_tail_free(tail);
+        wm_free(tail);
         return result;
     }
+    /* A function without branches has no entries: one all the same, so a frame in place never has st NULL (a caller of the register loop). */
+    if (!tail->side && !(tail->side = (WmSide*)wm_calloc(1, sizeof(WmSide))))
+    {
+        wm_free(tail);
+        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    }
     code->tail = tail;
-    *out = tail;
     return NULL;
+}
+
+/* The translator's entries, into the tail: its side table stays where it is, frames running in place point into it. */
+static WmResult reg_entries_make(WmModule* m, WmCode* code)
+{
+    WmTail* tail = code->tail;
+    WmResult result = reg_translate(m, code, tail->side, tail, NULL);
+    if (result)
+    {
+        wm_free(tail->entries);
+        tail->entries = NULL;
+        tail->count = tail->capacity = 0;
+        return result;
+    }
+    tail->translated = 1;
+    return NULL;
+}
+
+/* A tail with its side table at least, then (entries) the translator's entries too; the heap's refusals make room. */
+static WmResult reg_tail_make(WmModule* m, WmCode* code, int entries)
+{
+    WmResult result = NULL;
+    ++code->pinned;
+    while (!code->tail || (entries && !code->tail->translated))
+    {
+        result = code->tail ? reg_entries_make(m, code) : reg_side_make(m, code);
+        if (result && !(out_of_room(result) && wm_code_drop_one()))
+            break;
+    }
+    --code->pinned;
+    return result;
 }
 
 /* What the loop in place needs to run part of a function that runs predecoded: made once, kept with its records. */
 WmResult wm_reg_tail(WmModule* m, WmCode* code, WmTail** out)
 {
-    WmResult result;
-    if (code->tail)
-    {
-        *out = code->tail;
-        return NULL;
-    }
-    ++code->pinned;
-    while (out_of_room(result = reg_tail_make(m, code, out)) && wm_code_drop_one())
-        ;
-    --code->pinned;
+    WmResult result = reg_tail_make(m, code, 1);
+    *out = code->tail;
+    return result;
+}
+
+WmResult wm_reg_side(WmModule* m, WmCode* code, WmTail** out)
+{
+    WmResult result = reg_tail_make(m, code, 0);
+    *out = code->tail;
     return result;
 }
 

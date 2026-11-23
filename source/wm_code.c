@@ -17,6 +17,8 @@
 #if WM_PREDECODE
 
 const char wm_code_stop[] = "code miss";
+const char wm_code_alone[] = "code in place";
+const char wm_code_back[] = "code back in place";
 
 static WmModule* g_modules;
 static size_t g_bytes;

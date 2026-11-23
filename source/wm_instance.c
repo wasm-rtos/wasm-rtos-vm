@@ -599,6 +599,17 @@ static WmRuntime* g_runtimes;
 WmRuntime* wm_runtimes(void) { return g_runtimes; }
 #endif
 
+void wm_set_makes_code(WmRuntime* runtime, int makes)
+{
+#if WM_PREDECODE
+    runtime->makes_code = makes != 0;
+#else
+    /* Everything runs in place here. */
+    (void)runtime;
+    (void)makes;
+#endif
+}
+
 WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames)
 {
     WmRuntime* rt = (WmRuntime*)wm_calloc(1, sizeof(WmRuntime));
@@ -621,6 +632,9 @@ WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames)
     rt->stack_end = rt->stack + slots;
     rt->sp = rt->stack;
     rt->max_frames = max_frames;
+#if WM_PREDECODE
+    rt->makes_code = 1;
+#endif
 #if WM_TRACKS_CALLERS
     rt->next = g_runtimes;
     g_runtimes = rt;

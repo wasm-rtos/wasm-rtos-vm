@@ -403,6 +403,12 @@ typedef struct WmTail
     WmSide* side;
     WmTailEntry* entries;
     uint32_t count, capacity;
+    /*
+     * The entries are made: a function that ran in place by itself (decision
+     * 21) has its side table alone, until part of it runs in place inside
+     * the register loop; the side table stays where it is.
+     */
+    uint8_t translated;
 } WmTail;
 
 typedef struct WmCode
@@ -751,7 +757,11 @@ typedef struct WmSuspended
     const WmSide* st;
     uint32_t* fp;
     uint32_t* sp;
-    /* Stopped in the loop in place, inside a function of the register loop. */
+    /*
+     * Stopped in the loop in place in a module that runs predecoded: 1 inside
+     * a function of the register loop (part of it), 2 in a function that runs
+     * in place by itself (decision 21). Its frames' st is not NULL.
+     */
     uint8_t inplace;
 } WmSuspended;
 
@@ -781,6 +791,10 @@ struct WmRuntime
     uint8_t suspended;
     /* Calls in progress: only the outermost one stops for fuel. */
     uint8_t nesting;
+#if WM_PREDECODE
+    /* Calls may make records (wm_set_makes_code, decision 21); otherwise a function without them runs in place. */
+    uint8_t makes_code;
+#endif
     WmSuspended saved;
 #if WM_TRACKS_CALLERS
     /* Every runtime, for the code cache and the frame pool to see what is on the call stacks. */
@@ -844,6 +858,8 @@ WmResult wm_code_heights(const WmModule* module, uint32_t index, uint16_t* heigh
 uint32_t wm_reg_sides_before(const WmModule* module, const WmCode* code, uint32_t offset);
 /* The function's tail (WmCode.tail), made if it has none. */
 WmResult wm_reg_tail(WmModule* module, WmCode* code, WmTail** out);
+/* What the loop in place needs to run all of a function by itself (decision 21): its side table, in its tail. */
+WmResult wm_reg_side(WmModule* module, WmCode* code, WmTail** out);
 void wm_reg_tail_free(WmTail* tail);
 const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset);
 /* The segment start whose SEG is the record at ip of func (its tail made if need be), or NULL. */
@@ -892,6 +908,13 @@ void wm_code_add_module(WmModule* module);
 void wm_code_remove_module(WmModule* module);
 /* The fast loop stopped at a call into a function without records: the frame is made, the records are not. */
 extern const char wm_code_stop[];
+/*
+ * Decision 21: the function runs in place by itself, its side table made
+ * (wm_code_alone); a function of the register loop returned to a caller
+ * running in place (wm_code_back). Inside wm_execute only.
+ */
+extern const char wm_code_alone[];
+extern const char wm_code_back[];
 int wm_fast_position(const WmModule* module, const WmCode* code, const WmCell* ip, uint32_t* offset, uint32_t* side);
 
 /* Shared helpers. */

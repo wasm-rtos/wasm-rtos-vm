@@ -92,6 +92,7 @@ wm_set_allocator
 wm_set_code_allocator
 wm_set_frame_pool
 wm_set_fuel
+wm_set_makes_code
 wm_set_pager
 wm_snapshot_read
 wm_snapshot_write

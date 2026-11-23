@@ -825,5 +825,29 @@ static void profile_start(void)
 #define WM_PROFILE_RECORD(offset) ((void)0)
 #endif
 
+#if WM_PREDECODE
+/*
+ * Records for a function about to run, in a module that runs predecoded
+ * (decision 21): NULL when it has them; wm_code_alone when it runs in place
+ * by itself, its side table made, because the runtime makes no code or its
+ * records found no room after the cache let go what it could. Any other
+ * error ends the call.
+ */
+static WmResult code_or_alone(WmRuntime* rt, WmFunc* func)
+{
+    WmTail* tail;
+    WmResult result;
+    if (func->code->fast || rt->makes_code)
+    {
+        result = wm_code_load(func);
+        if (!result || strncmp(result, "exhaustion", 10) != 0)
+            return result;
+    }
+    if ((result = wm_reg_side(func->instance->module, func->code, &tail)))
+        return result;
+    return wm_code_alone;
+}
+#endif
+
 #include "wm_exec_fast.c.h"
 #include "wm_exec_inplace.c.h"
