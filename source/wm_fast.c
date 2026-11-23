@@ -90,23 +90,23 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
     uint8_t op = WM_RD8(p++);
     *sides = 0;
     *cells = 1;
-    if (op >= 0x45u && op <= 0xC4u)
+    if (op >= WM_OP_I32_EQZ && op <= WM_OP_I64_EXTEND32_S)
         return p;
     switch (op)
     {
-        case 0x02:
-        case 0x03: skip_block_type(&p); break;
-        case 0x04:
+        case WM_OP_BLOCK:
+        case WM_OP_LOOP: skip_block_type(&p); break;
+        case WM_OP_IF:
             skip_block_type(&p);
             *sides = 1;
             break;
-        case 0x05: *sides = 1; break;
-        case 0x0C:
-        case 0x0D:
+        case WM_OP_ELSE: *sides = 1; break;
+        case WM_OP_BR:
+        case WM_OP_BR_IF:
             leb_u32(&p);
             *cells = 2, *sides = 1;
             break;
-        case 0x0E:
+        case WM_OP_BR_TABLE:
         {
             uint32_t count = leb_u32(&p);
             for (uint32_t i = 0; i <= count; ++i)
@@ -114,41 +114,41 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
             *cells = 1u + 2u * (count + 1u), *sides = count + 1u;
             break;
         }
-        case 0x10:
-        case 0x23:
-        case 0x24:
-        case 0x25:
-        case 0x26:
-        case 0xD2: leb_u32(&p); break;
-        case 0x11:
+        case WM_OP_CALL:
+        case WM_OP_GLOBAL_GET:
+        case WM_OP_GLOBAL_SET:
+        case WM_OP_TABLE_GET:
+        case WM_OP_TABLE_SET:
+        case WM_OP_REF_FUNC: leb_u32(&p); break;
+        case WM_OP_CALL_INDIRECT:
             leb_u32(&p);
             leb_u32(&p);
             *cells = 2;
             break;
-        case 0x1A:
-        case 0x1B: *sides = 1; break;
-        case 0x1C:
+        case WM_OP_DROP:
+        case WM_OP_SELECT: *sides = 1; break;
+        case WM_OP_SELECT_T:
         {
             uint32_t count = leb_u32(&p);
             p += count;
             break;
         }
-        case 0x20:
-        case 0x21:
-        case 0x22:
+        case WM_OP_LOCAL_GET:
+        case WM_OP_LOCAL_SET:
+        case WM_OP_LOCAL_TEE:
             *cells = local_width(code, leb_u32(&p)) == 1u ? 1u : 2u;
             break;
-        case 0x3F:
-        case 0x40:
-        case 0xD0: ++p; break;
-        case 0x41:
+        case WM_OP_MEMORY_SIZE:
+        case WM_OP_MEMORY_GROW:
+        case WM_OP_REF_NULL: ++p; break;
+        case WM_OP_I32_CONST:
             *cells = fits16((int64_t)leb_s64(&p)) ? 1u : 2u;
             break;
-        case 0x42:
+        case WM_OP_I64_CONST:
             leb_s64(&p);
             *cells = 3;
             break;
-        case 0x43:
+        case WM_OP_F32_CONST:
         {
             uint32_t bits = 0;
             for (uint32_t i = 0; i < 4u; ++i)
@@ -157,11 +157,11 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
             *cells = fits16((int32_t)bits) ? 1u : 2u;
             break;
         }
-        case 0x44:
+        case WM_OP_F64_CONST:
             p += 8;
             *cells = 3;
             break;
-        case 0xFC:
+        case WM_OP_PREFIX_FC:
         {
             uint32_t sub = leb_u32(&p);
             if (sub <= 7u)
@@ -180,7 +180,7 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
             break;
         }
         default:
-            if (op >= 0x28u && op <= 0x3Eu)
+            if (op >= WM_OP_I32_LOAD && op <= WM_OP_I64_STORE32)
             {
                 uint32_t offset;
                 leb_u32(&p);
@@ -195,7 +195,7 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
 
 static int is_branch(uint8_t op)
 {
-    return op == 0x04u || op == 0x05u || op == 0x0Cu || op == 0x0Du || op == 0x0Eu;
+    return op == WM_OP_IF || op == WM_OP_ELSE || op == WM_OP_BR || op == WM_OP_BR_IF || op == WM_OP_BR_TABLE;
 }
 
 #if WM_PREDECODE
@@ -497,7 +497,7 @@ static int reg_i32(uint8_t op, uint8_t* ss, uint8_t* sc, uint8_t* arity)
 
 static int reg_commutes(uint8_t op)
 {
-    return op == 0x46u || op == 0x47u || op == 0x6Au || op == 0x6Cu || op == 0x71u || op == 0x72u || op == 0x73u;
+    return op == WM_OP_I32_EQ || op == WM_OP_I32_NE || op == WM_OP_I32_ADD || op == WM_OP_I32_MUL || op == WM_OP_I32_AND || op == WM_OP_I32_OR || op == WM_OP_I32_XOR;
 }
 
 /* A place the register loop can be entered from the stack machine's frame: its offset in the module and its record. */
@@ -677,7 +677,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         while (next_label < label_count && labels[next_label].pc < pc)
             ++next_label;
         is_label = next_label < label_count && labels[next_label].pc == pc;
-        if (h == 0xFFFFu && op != 0x05u && op != 0x0Bu)
+        if (h == 0xFFFFu && op != WM_OP_ELSE && op != WM_OP_END)
         {
             dead = 1;
             if (is_label)
@@ -714,11 +714,11 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         }
         ++seg_count;
         head_cell = o->count;
-        if (op == 0x05u || op == 0x0Bu)
+        if (op == WM_OP_ELSE || op == WM_OP_END)
         {
-            if (!dead || op == 0x05u)
+            if (!dead || op == WM_OP_ELSE)
                 reg_flush(o);
-            if (op == 0x05u && !dead)
+            if (op == WM_OP_ELSE && !dead)
             {
                 head_cell = o->count;
                 reg_head(o, WM_R_JUMP, 0);
@@ -729,26 +729,26 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
                 reg_head(o, WM_R_RETURN, B + type->result_slots);
             }
-            else if (op == 0x05u && is_label)
+            else if (op == WM_OP_ELSE && is_label)
                 labels[next_label].cell = o->count;
             dead = 0;
             o->pending = 0;
             o->last = UINT32_MAX;
-            need_seg |= op == 0x05u;
+            need_seg |= op == WM_OP_ELSE;
             p = next;
             continue;
         }
         dead = 0;
         switch (op)
         {
-            case 0x00:
+            case WM_OP_UNREACHABLE:
                 reg_flush(o);
                 reg_head(o, WM_R_UNREACHABLE, 0);
                 break;
-            case 0x01:
-            case 0x02:
-            case 0x03: break;
-            case 0x04:
+            case WM_OP_NOP:
+            case WM_OP_BLOCK:
+            case WM_OP_LOOP: break;
+            case WM_OP_IF:
             {
                 RegValue c;
                 uint32_t cs, operands;
@@ -771,7 +771,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 FIXUP(mine[0].pc);
                 break;
             }
-            case 0x0C:
+            case WM_OP_BR:
                 reg_flush(o);
                 head_cell = o->count;
                 if (!mine[0].keep || !mine[0].drop)
@@ -784,7 +784,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 FIXUP(mine[0].pc);
                 reg_put(o, mine[0].keep | (mine[0].drop << 16));
                 break;
-            case 0x0D:
+            case WM_OP_BR_IF:
             {
                 RegValue c;
                 uint32_t cs, operands;
@@ -814,7 +814,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 }
                 break;
             }
-            case 0x0E:
+            case WM_OP_BR_TABLE:
             {
                 RegValue c = reg_peek(o, h, 0);
                 uint32_t cs;
@@ -832,18 +832,18 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 }
                 break;
             }
-            case 0x0F:
+            case WM_OP_RETURN:
                 reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
                 reg_flush(o);
                 reg_head(o, WM_R_RETURN, top);
                 break;
-            case 0x10:
+            case WM_OP_CALL:
                 reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
                 reg_flush(o);
                 reg_head(o, WM_R_CALL, leb_u32(&p));
                 reg_put(o, top);
                 break;
-            case 0x11:
+            case WM_OP_CALL_INDIRECT:
             {
                 uint32_t t = leb_u32(&p);
                 reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
@@ -853,14 +853,14 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 reg_put(o, top);
                 break;
             }
-            case 0x1A:
+            case WM_OP_DROP:
                 if (o->pending && h - hn == 1u)
                     reg_pop(o, 1);
                 else
                     reg_flush(o);
                 break;
-            case 0x1B:
-            case 0x1C:
+            case WM_OP_SELECT:
+            case WM_OP_SELECT_T:
                 if (h - hn == 2u)
                 {
                     RegValue c = reg_peek(o, h, 0), b = reg_peek(o, h, 1), a = reg_peek(o, h, 2);
@@ -880,9 +880,9 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     reg_put(o, top);
                 }
                 break;
-            case 0x20:
-            case 0x21:
-            case 0x22:
+            case WM_OP_LOCAL_GET:
+            case WM_OP_LOCAL_SET:
+            case WM_OP_LOCAL_TEE:
             {
                 uint32_t local = leb_u32(&p);
                 uint32_t slot = code->local_offsets ? code->local_offsets[local] : local;
@@ -890,13 +890,13 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 if (width != 1u)
                 {
                     reg_flush(o);
-                    reg_head(o, op == 0x20u ? WM_R_LOCAL_GET_W : WM_R_LOCAL_SET_W, slot);
+                    reg_head(o, op == WM_OP_LOCAL_GET ? WM_R_LOCAL_GET_W : WM_R_LOCAL_SET_W, slot);
                     /* get: to the top; set and tee: from the values below it (tee leaves them there). */
                     reg_put(o, width);
                     reg_put(o, top);
                     break;
                 }
-                if (op == 0x20u)
+                if (op == WM_OP_LOCAL_GET)
                 {
                     reg_push(o, P_LOCAL, slot, top);
                     o->last = UINT32_MAX;
@@ -907,7 +907,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     int was_pending = o->pending > 0;
                     if (v.kind == P_LOCAL && v.value == slot)
                     {
-                        if (op == 0x21u)
+                        if (op == WM_OP_LOCAL_SET)
                             reg_pop(o, 1);
                         break;
                     }
@@ -922,7 +922,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                         {
                             REG_CELL(o, o->last).u32 = (REG_CELL(o, o->last).u32 & 0xFFFFu) | (slot << 16);
                             o->last = UINT32_MAX;
-                            if (op == 0x22u)
+                            if (op == WM_OP_LOCAL_TEE)
                                 reg_push(o, P_LOCAL, slot, v.slot);
                             break;
                         }
@@ -930,18 +930,18 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     reg_before_write(o, slot);
                     reg_mov(o, slot, &v);
                     o->last = UINT32_MAX;
-                    if (op == 0x22u)
+                    if (op == WM_OP_LOCAL_TEE)
                         reg_push(o, P_LOCAL, slot, v.slot);
                 }
                 break;
             }
-            case 0x23:
-            case 0x24:
+            case WM_OP_GLOBAL_GET:
+            case WM_OP_GLOBAL_SET:
             {
                 uint32_t g = leb_u32(&p);
                 if (wm_type_slots(m->globals[g].type) == 1u)
                 {
-                    if (op == 0x23u)
+                    if (op == WM_OP_GLOBAL_GET)
                     {
                         reg_head(o, WM_R_GLOBAL_GET1, top);
                         reg_put(o, g);
@@ -959,34 +959,34 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     break;
                 }
                 reg_flush(o);
-                reg_head(o, op == 0x23u ? WM_R_GLOBAL_GET : WM_R_GLOBAL_SET, g);
+                reg_head(o, op == WM_OP_GLOBAL_GET ? WM_R_GLOBAL_GET : WM_R_GLOBAL_SET, g);
                 reg_put(o, top);
                 break;
             }
-            case 0x25:
-            case 0x26:
+            case WM_OP_TABLE_GET:
+            case WM_OP_TABLE_SET:
                 reg_flush(o);
-                reg_head(o, op == 0x25u ? WM_R_TABLE_GET : WM_R_TABLE_SET, leb_u32(&p));
+                reg_head(o, op == WM_OP_TABLE_GET ? WM_R_TABLE_GET : WM_R_TABLE_SET, leb_u32(&p));
                 reg_put(o, top);
                 break;
-            case 0x3F:
+            case WM_OP_MEMORY_SIZE:
                 reg_flush(o);
                 ++p;
                 reg_head(o, WM_R_MEMORY_SIZE, top);
                 break;
-            case 0x40:
+            case WM_OP_MEMORY_GROW:
                 reg_flush(o);
                 ++p;
                 reg_head(o, WM_R_MEMORY_GROW, top - 1u);
                 break;
-            case 0x41:
+            case WM_OP_I32_CONST:
             {
                 int64_t c = (int64_t)leb_s64(&p);
                 reg_push(o, P_CONST, (uint32_t)c, top);
                 o->last = UINT32_MAX;
                 break;
             }
-            case 0x43:
+            case WM_OP_F32_CONST:
             {
                 uint32_t bits = 0;
                 for (uint32_t i = 0; i < 4u; ++i)
@@ -995,11 +995,11 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 o->last = UINT32_MAX;
                 break;
             }
-            case 0x42:
-            case 0x44:
+            case WM_OP_I64_CONST:
+            case WM_OP_F64_CONST:
             {
                 uint64_t bits = 0;
-                if (op == 0x42u)
+                if (op == WM_OP_I64_CONST)
                     bits = leb_s64(&p);
                 else
                     for (uint32_t i = 0; i < 8u; ++i)
@@ -1010,15 +1010,15 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 reg_put(o, (uint32_t)(bits >> 32));
                 break;
             }
-            case 0xD0:
-            case 0xD1:
-            case 0xD2:
+            case WM_OP_REF_NULL:
+            case WM_OP_REF_IS_NULL:
+            case WM_OP_REF_FUNC:
                 reg_flush(o);
-                reg_head(o, op == 0xD0u ? WM_R_REF_NULL : op == 0xD1u ? WM_R_REF_IS_NULL : WM_R_REF_FUNC,
-                         op == 0xD2u ? leb_u32(&p) : 0u);
+                reg_head(o, op == WM_OP_REF_NULL ? WM_R_REF_NULL : op == WM_OP_REF_IS_NULL ? WM_R_REF_IS_NULL : WM_R_REF_FUNC,
+                         op == WM_OP_REF_FUNC ? leb_u32(&p) : 0u);
                 reg_put(o, top);
                 break;
-            case 0xFC:
+            case WM_OP_PREFIX_FC:
             {
                 uint32_t sub = leb_u32(&p);
                 reg_flush(o);
@@ -1038,7 +1038,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             default:
             {
                 uint8_t ss, sc, arity;
-                if (op >= 0x28u && op <= 0x3Eu)
+                if (op >= WM_OP_I32_LOAD && op <= WM_OP_I64_STORE32)
                 {
                     uint32_t offset;
                     uint8_t load = 0, store = 0;
@@ -1101,7 +1101,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                         memcpy(find->pend, find->before, before_pending * sizeof(RegValue));
                     }
                 }
-                else if (op >= 0x45u && op <= 0xC4u && reg_i32(op, &ss, &sc, &arity))
+                else if (op >= WM_OP_I32_EQZ && op <= WM_OP_I64_EXTEND32_S && reg_i32(op, &ss, &sc, &arity))
                 {
                     RegValue b = reg_peek(o, h, 0), a = arity == 2u ? reg_peek(o, h, 1) : b;
                     uint32_t d = B + hn - 1u;
@@ -1127,7 +1127,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     }
                     reg_made(o, head_cell, d);
                 }
-                else if (op >= 0x45u && op <= 0xC4u)
+                else if (op >= WM_OP_I32_EQZ && op <= WM_OP_I64_EXTEND32_S)
                 {
                     reg_flush(o);
                     reg_head(o, WM_R_NUMERIC, op);
@@ -1138,7 +1138,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             }
         }
         /* What ends a segment: the next instruction starts one. */
-        need_seg |= op == 0x00u || op == 0x04u || (op >= 0x0Cu && op <= 0x11u);
+        need_seg |= op == WM_OP_UNREACHABLE || op == WM_OP_IF || (op >= WM_OP_BR && op <= WM_OP_CALL_INDIRECT);
         p = next;
     }
 #undef FIXUP

@@ -6,9 +6,11 @@
  *
  * WebAssembly:
  *   WM_WASM(OP, NAME, name)                          any other instruction
- *   WM_WASM_ACCESS(OP, NAME, name, VALUE, ALIGN, STORE) a memory access: the value's
- *                                                  type, log2 of its natural
- *                                                  alignment, 1 for a store
+ *   WM_WASM_ACCESS(OP, NAME, name, VALUE, SIZE, STORE, SIGNED)  a memory access: the
+ *                                                  value's type, log2 of the bytes
+ *                                                  it moves (its natural alignment),
+ *                                                  1 for a store, 1 for a load that
+ *                                                  sign-extends
  *   WM_WASM_NUM(OP, NAME, name, OPERAND, ARITY, RESULT) a numeric instruction (0x45-0xC4):
  *                                                  operands' type, how many, result's type
  *   WM_WASM_FC(SUB, NAME, name)                      an instruction after the 0xFC prefix
@@ -75,7 +77,7 @@
 #define WM_WASM(OP, NAME, name)
 #endif
 #ifndef WM_WASM_ACCESS
-#define WM_WASM_ACCESS(OP, NAME, name, VALUE, ALIGN, STORE)
+#define WM_WASM_ACCESS(OP, NAME, name, VALUE, SIZE, STORE, SIGNED)
 #endif
 #ifndef WM_WASM_NUM
 #define WM_WASM_NUM(OP, NAME, name, OPERAND, ARITY, RESULT)
@@ -137,29 +139,29 @@ WM_WASM(0x25, TABLE_GET, table_get)
 WM_WASM(0x26, TABLE_SET, table_set)
 
 /* Memory */
-WM_WASM_ACCESS(0x28, I32_LOAD, i32_load, I32, 2, 0)
-WM_WASM_ACCESS(0x29, I64_LOAD, i64_load, I64, 3, 0)
-WM_WASM_ACCESS(0x2A, F32_LOAD, f32_load, F32, 2, 0)
-WM_WASM_ACCESS(0x2B, F64_LOAD, f64_load, F64, 3, 0)
-WM_WASM_ACCESS(0x2C, I32_LOAD8_S, i32_load8_s, I32, 0, 0)
-WM_WASM_ACCESS(0x2D, I32_LOAD8_U, i32_load8_u, I32, 0, 0)
-WM_WASM_ACCESS(0x2E, I32_LOAD16_S, i32_load16_s, I32, 1, 0)
-WM_WASM_ACCESS(0x2F, I32_LOAD16_U, i32_load16_u, I32, 1, 0)
-WM_WASM_ACCESS(0x30, I64_LOAD8_S, i64_load8_s, I64, 0, 0)
-WM_WASM_ACCESS(0x31, I64_LOAD8_U, i64_load8_u, I64, 0, 0)
-WM_WASM_ACCESS(0x32, I64_LOAD16_S, i64_load16_s, I64, 1, 0)
-WM_WASM_ACCESS(0x33, I64_LOAD16_U, i64_load16_u, I64, 1, 0)
-WM_WASM_ACCESS(0x34, I64_LOAD32_S, i64_load32_s, I64, 2, 0)
-WM_WASM_ACCESS(0x35, I64_LOAD32_U, i64_load32_u, I64, 2, 0)
-WM_WASM_ACCESS(0x36, I32_STORE, i32_store, I32, 2, 1)
-WM_WASM_ACCESS(0x37, I64_STORE, i64_store, I64, 3, 1)
-WM_WASM_ACCESS(0x38, F32_STORE, f32_store, F32, 2, 1)
-WM_WASM_ACCESS(0x39, F64_STORE, f64_store, F64, 3, 1)
-WM_WASM_ACCESS(0x3A, I32_STORE8, i32_store8, I32, 0, 1)
-WM_WASM_ACCESS(0x3B, I32_STORE16, i32_store16, I32, 1, 1)
-WM_WASM_ACCESS(0x3C, I64_STORE8, i64_store8, I64, 0, 1)
-WM_WASM_ACCESS(0x3D, I64_STORE16, i64_store16, I64, 1, 1)
-WM_WASM_ACCESS(0x3E, I64_STORE32, i64_store32, I64, 2, 1)
+WM_WASM_ACCESS(0x28, I32_LOAD, i32_load, I32, 2, 0, 0)
+WM_WASM_ACCESS(0x29, I64_LOAD, i64_load, I64, 3, 0, 0)
+WM_WASM_ACCESS(0x2A, F32_LOAD, f32_load, F32, 2, 0, 0)
+WM_WASM_ACCESS(0x2B, F64_LOAD, f64_load, F64, 3, 0, 0)
+WM_WASM_ACCESS(0x2C, I32_LOAD8_S, i32_load8_s, I32, 0, 0, 1)
+WM_WASM_ACCESS(0x2D, I32_LOAD8_U, i32_load8_u, I32, 0, 0, 0)
+WM_WASM_ACCESS(0x2E, I32_LOAD16_S, i32_load16_s, I32, 1, 0, 1)
+WM_WASM_ACCESS(0x2F, I32_LOAD16_U, i32_load16_u, I32, 1, 0, 0)
+WM_WASM_ACCESS(0x30, I64_LOAD8_S, i64_load8_s, I64, 0, 0, 1)
+WM_WASM_ACCESS(0x31, I64_LOAD8_U, i64_load8_u, I64, 0, 0, 0)
+WM_WASM_ACCESS(0x32, I64_LOAD16_S, i64_load16_s, I64, 1, 0, 1)
+WM_WASM_ACCESS(0x33, I64_LOAD16_U, i64_load16_u, I64, 1, 0, 0)
+WM_WASM_ACCESS(0x34, I64_LOAD32_S, i64_load32_s, I64, 2, 0, 1)
+WM_WASM_ACCESS(0x35, I64_LOAD32_U, i64_load32_u, I64, 2, 0, 0)
+WM_WASM_ACCESS(0x36, I32_STORE, i32_store, I32, 2, 1, 0)
+WM_WASM_ACCESS(0x37, I64_STORE, i64_store, I64, 3, 1, 0)
+WM_WASM_ACCESS(0x38, F32_STORE, f32_store, F32, 2, 1, 0)
+WM_WASM_ACCESS(0x39, F64_STORE, f64_store, F64, 3, 1, 0)
+WM_WASM_ACCESS(0x3A, I32_STORE8, i32_store8, I32, 0, 1, 0)
+WM_WASM_ACCESS(0x3B, I32_STORE16, i32_store16, I32, 1, 1, 0)
+WM_WASM_ACCESS(0x3C, I64_STORE8, i64_store8, I64, 0, 1, 0)
+WM_WASM_ACCESS(0x3D, I64_STORE16, i64_store16, I64, 1, 1, 0)
+WM_WASM_ACCESS(0x3E, I64_STORE32, i64_store32, I64, 2, 1, 0)
 WM_WASM(0x3F, MEMORY_SIZE, memory_size)
 WM_WASM(0x40, MEMORY_GROW, memory_grow)
 WM_SHARED_ACCESSES(WM_RECORD_ACCESS)

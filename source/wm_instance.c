@@ -55,10 +55,10 @@ static WmResult wm_eval_const(WmInstance* instance, const uint8_t* expr, uint64_
         uint8_t op = WM_RD8(p++);
         switch (op)
         {
-            case 0x0B: *out = value; return NULL;
-            case 0x41: value = (uint32_t)(int32_t)read_signed(&p); break;
-            case 0x42: value = (uint64_t)read_signed(&p); break;
-            case 0x43:
+            case WM_OP_END: *out = value; return NULL;
+            case WM_OP_I32_CONST: value = (uint32_t)(int32_t)read_signed(&p); break;
+            case WM_OP_I64_CONST: value = (uint64_t)read_signed(&p); break;
+            case WM_OP_F32_CONST:
             {
                 uint32_t bits = 0;
                 for (uint32_t i = 0; i < 4u; ++i)
@@ -66,17 +66,17 @@ static WmResult wm_eval_const(WmInstance* instance, const uint8_t* expr, uint64_
                 value = bits;
                 break;
             }
-            case 0x44:
+            case WM_OP_F64_CONST:
                 value = 0;
                 for (uint32_t i = 0; i < 8u; ++i)
                     value |= (uint64_t)WM_RD8(p++) << (8u * i);
                 break;
-            case 0xD0:
+            case WM_OP_REF_NULL:
                 ++p;
                 value = 0;
                 break;
-            case 0xD2: value = (uintptr_t)instance->funcs[read_u32(&p)]; break;
-            case 0x23: value = instance->globals[read_u32(&p)]->value; break;
+            case WM_OP_REF_FUNC: value = (uintptr_t)instance->funcs[read_u32(&p)]; break;
+            case WM_OP_GLOBAL_GET: value = instance->globals[read_u32(&p)]->value; break;
             default: return WM_ERR_INVALID("invalid: constant expression required");
         }
     }
@@ -190,10 +190,10 @@ static uintptr_t elem_item(WmInstance* inst, const WmElemSegment* s, const uint8
         const uint8_t* start = *p;
         wm_eval_const(inst, start, &value);
         /* Skip the expression: one instruction and its end. */
-        while (WM_RD8((*p)++) != 0x0Bu)
+        while (WM_RD8((*p)++) != WM_OP_END)
         {
             uint8_t op = WM_RD8(*p - 1);
-            if (op == 0xD0u)
+            if (op == WM_OP_REF_NULL)
                 ++*p;
             else
                 read_u32(p);

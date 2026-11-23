@@ -357,9 +357,9 @@ static const uint8_t* read_const(Loader* l, Reader* r, uint8_t expected)
     /* Trusted: one instruction and its end. */
     switch (read_u8(r))
     {
-        case 0x43: skip(r, 4u); break;
-        case 0x44: skip(r, 8u); break;
-        case 0xD0: read_u8(r); break;
+        case WM_OP_F32_CONST: skip(r, 4u); break;
+        case WM_OP_F64_CONST: skip(r, 8u); break;
+        case WM_OP_REF_NULL: read_u8(r); break;
         default: read_leb(r, 64u, 1);
     }
     read_u8(r);
@@ -369,18 +369,18 @@ static const uint8_t* read_const(Loader* l, Reader* r, uint8_t expected)
     for (;;)
     {
         uint8_t op = read_u8(r);
-        if (r->error || op == 0x0Bu)
+        if (r->error || op == WM_OP_END)
             break;
         ++count;
         switch (op)
         {
-            case 0x41: read_leb(r, 32u, 1); type = WM_I32; break;
-            case 0x42: read_leb(r, 64u, 1); type = WM_I64; break;
-            case 0x43: skip(r, 4u); type = WM_F32; break;
-            case 0x44: skip(r, 8u); type = WM_F64; break;
-            case 0xD0: type = read_ref_type(r); break;
-            case 0xD2: declare(l, r, read_func_index(l, r)); type = WM_FUNCREF; break;
-            case 0x23:
+            case WM_OP_I32_CONST: read_leb(r, 32u, 1); type = WM_I32; break;
+            case WM_OP_I64_CONST: read_leb(r, 64u, 1); type = WM_I64; break;
+            case WM_OP_F32_CONST: skip(r, 4u); type = WM_F32; break;
+            case WM_OP_F64_CONST: skip(r, 8u); type = WM_F64; break;
+            case WM_OP_REF_NULL: type = read_ref_type(r); break;
+            case WM_OP_REF_FUNC: declare(l, r, read_func_index(l, r)); type = WM_FUNCREF; break;
+            case WM_OP_GLOBAL_GET:
             {
                 uint32_t global = read_u32(r);
                 if (global >= m->global_imports)
@@ -684,8 +684,8 @@ static const uint8_t WM_ROM VALUE_TYPES[4] = {WM_I32, WM_I64, WM_F32, WM_F64};
  * value type (as in wm_numeric), bit 4 a store.
  */
 static const uint8_t WM_ROM ACCESS_TYPES[WM_OP_I64_STORE32 - WM_OP_I32_LOAD + 1] = {
-#define WM_WASM_ACCESS(OP, NAME, name, VALUE, ALIGN, STORE)                                                    \
-    [(OP) - WM_OP_I32_LOAD] = (ALIGN) | (WM_NUM_##VALUE << 2) | ((STORE) << 4),
+#define WM_WASM_ACCESS(OP, NAME, name, VALUE, SIZE, STORE, SIGNED)                                            \
+    [(OP) - WM_OP_I32_LOAD] = (SIZE) | (WM_NUM_##VALUE << 2) | ((STORE) << 4),
 #include "wm_defs.def"
 };
 
@@ -819,7 +819,7 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                  * A branch lands on its block's end, reached or not by the code
                  * before it: there the stack is the block's and its results.
                  */
-                if (WM_RD8(at) == 0x0Bu)
+                if (WM_RD8(at) == WM_OP_END)
                 {
                     v->val_count = c->height;
                     v->slots = c->slots;
@@ -835,14 +835,14 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
             v->prev = at;
         }
         op = read_u8(r);
-        if (op >= 0x45u && op <= 0xC4u)
+        if (op >= WM_OP_I32_EQZ && op <= WM_OP_I64_EXTEND32_S)
         {
-            apply_numeric(v, WM_ROM8(wm_numeric + (op - 0x45u)));
+            apply_numeric(v, WM_ROM8(wm_numeric + (op - WM_FIRST_NUMERIC)));
             continue;
         }
-        if (op >= 0x28u && op <= 0x3Eu)
+        if (op >= WM_OP_I32_LOAD && op <= WM_OP_I64_STORE32)
         {
-            uint8_t d = WM_ROM8(ACCESS_TYPES + (op - 0x28u));
+            uint8_t d = WM_ROM8(ACCESS_TYPES + (op - WM_FIRST_ACCESS));
             uint8_t value = WM_ROM8(VALUE_TYPES + ((d >> 2) & 3u));
             if (read_u32(r) > (d & 3u))
                 REJECT(r, WM_ERR_INVALID("invalid: alignment must not be larger than natural"));
@@ -855,15 +855,15 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                 push(v, value);
             continue;
         }
-        if (!WM_HAS_REF_TYPES && (op == 0x25u || op == 0x26u || (op >= 0xD0u && op <= 0xD2u)))
+        if (!WM_HAS_REF_TYPES && (op == WM_OP_TABLE_GET || op == WM_OP_TABLE_SET || (op >= WM_OP_REF_NULL && op <= WM_OP_REF_FUNC)))
             fail(r, E_REFS);
         switch (op)
         {
-            case 0x00: set_unreachable(v); break;
-            case 0x01: break;
-            case 0x02:
-            case 0x03:
-            case 0x04:
+            case WM_OP_UNREACHABLE: set_unreachable(v); break;
+            case WM_OP_NOP: break;
+            case WM_OP_BLOCK:
+            case WM_OP_LOOP:
+            case WM_OP_IF:
             {
                 Control block;
                 read_block_type(v, &block);
@@ -878,7 +878,7 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                     c->if_entry = new_side(v, 0);
                 break;
             }
-            case 0x05:
+            case WM_OP_ELSE:
                 if (c->kind != WM_IF)
                 {
                     fail(r, WM_ERR_MALFORMED("malformed: else without if"));
@@ -902,7 +902,7 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                 v->slots = c->slots;
                 push_types(v, c->params, c->param_count);
                 break;
-            case 0x0B:
+            case WM_OP_END:
             {
                 Control done = *c;
                 uint32_t target = (uint32_t)(at - base);
@@ -924,26 +924,26 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                     code->end = at;
                 break;
             }
-            case 0x0C:
-            case 0x0D:
+            case WM_OP_BR:
+            case WM_OP_BR_IF:
             {
                 uint32_t count;
                 const uint8_t* types;
                 Control* target = label(v, read_u32(r));
-                if (op == 0x0Du)
+                if (op == WM_OP_BR_IF)
                     pop_expect(v, WM_I32);
                 if (!target)
                     break;
                 branch_entry(v, target, v->slots);
                 types = label_types(target, &count);
                 pop_types(v, types, count);
-                if (op == 0x0Cu)
+                if (op == WM_OP_BR)
                     set_unreachable(v);
                 else
                     push_types(v, types, count);
                 break;
             }
-            case 0x0E:
+            case WM_OP_BR_TABLE:
             {
                 uint32_t count = read_u32(r);
                 uint32_t arity = WM_NONE;
@@ -988,15 +988,15 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                 set_unreachable(v);
                 break;
             }
-            case 0x0F:
+            case WM_OP_RETURN:
                 pop_types(v, type->results, type->result_count);
                 set_unreachable(v);
                 break;
-            case 0x10:
-            case 0x11:
+            case WM_OP_CALL:
+            case WM_OP_CALL_INDIRECT:
             {
                 const WmType* callee;
-                if (op == 0x10u)
+                if (op == WM_OP_CALL)
                 {
                     index = read_func_index(v->l, r);
                     if (r->error)
@@ -1021,14 +1021,14 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                 push_types(v, callee->results, callee->result_count);
                 break;
             }
-            case 0x1A:
+            case WM_OP_DROP:
                 new_side(v, wm_type_slots(pop(v)));
                 break;
-            case 0x1B:
-            case 0x1C:
+            case WM_OP_SELECT:
+            case WM_OP_SELECT_T:
             {
                 uint8_t t1, t2;
-                if (op == 0x1Cu)
+                if (op == WM_OP_SELECT_T)
                 {
                     if (read_u32(r) != 1u)
                         REJECT(r, WM_ERR_INVALID("invalid: invalid result arity"));
@@ -1049,9 +1049,9 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                 push(v, t1);
                 break;
             }
-            case 0x20:
-            case 0x21:
-            case 0x22:
+            case WM_OP_LOCAL_GET:
+            case WM_OP_LOCAL_SET:
+            case WM_OP_LOCAL_TEE:
             {
                 uint8_t t;
                 index = read_u32(r);
@@ -1061,52 +1061,52 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                     break;
                 }
                 t = v->locals[index];
-                if (op != 0x20u)
+                if (op != WM_OP_LOCAL_GET)
                     pop_expect(v, t);
-                if (op != 0x21u)
+                if (op != WM_OP_LOCAL_SET)
                     push(v, t);
                 break;
             }
-            case 0x23:
-            case 0x24:
+            case WM_OP_GLOBAL_GET:
+            case WM_OP_GLOBAL_SET:
                 index = read_u32(r);
                 if (index >= m->global_count)
                 {
                     fail(r, E_UNKNOWN_GLOBAL);
                     break;
                 }
-                if (op == 0x23u)
+                if (op == WM_OP_GLOBAL_GET)
                     push(v, m->globals[index].type);
                 else if (!m->globals[index].mutable_)
                     REJECT(r, WM_ERR_INVALID("invalid: global is immutable"));
                 else
                     pop_expect(v, m->globals[index].type);
                 break;
-            case 0x25:
-            case 0x26:
+            case WM_OP_TABLE_GET:
+            case WM_OP_TABLE_SET:
             {
                 uint8_t t = table_type(v, read_table_index(v));
-                if (op == 0x26u)
+                if (op == WM_OP_TABLE_SET)
                     pop_expect(v, t);
                 pop_expect(v, WM_I32);
-                if (op == 0x25u)
+                if (op == WM_OP_TABLE_GET)
                     push(v, t);
                 break;
             }
-            case 0x3F:
-            case 0x40:
+            case WM_OP_MEMORY_SIZE:
+            case WM_OP_MEMORY_GROW:
                 read_zero(r);
                 need_memory(v);
-                if (op == 0x40u)
+                if (op == WM_OP_MEMORY_GROW)
                     pop_expect(v, WM_I32);
                 push(v, WM_I32);
                 break;
-            case 0x41: read_leb(r, 32u, 1); push(v, WM_I32); break;
-            case 0x42: read_leb(r, 64u, 1); push(v, WM_I64); break;
-            case 0x43: skip(r, 4u); push(v, WM_F32); break;
-            case 0x44: skip(r, 8u); push(v, WM_F64); break;
-            case 0xD0: push(v, read_ref_type(r)); break;
-            case 0xD1:
+            case WM_OP_I32_CONST: read_leb(r, 32u, 1); push(v, WM_I32); break;
+            case WM_OP_I64_CONST: read_leb(r, 64u, 1); push(v, WM_I64); break;
+            case WM_OP_F32_CONST: skip(r, 4u); push(v, WM_F32); break;
+            case WM_OP_F64_CONST: skip(r, 8u); push(v, WM_F64); break;
+            case WM_OP_REF_NULL: push(v, read_ref_type(r)); break;
+            case WM_OP_REF_IS_NULL:
             {
                 uint8_t t = pop(v);
                 if (t != UNKNOWN && !is_ref(t))
@@ -1114,13 +1114,13 @@ static void validate_body(Validator* v, const WmType* type, WmCode* code)
                 push(v, WM_I32);
                 break;
             }
-            case 0xD2:
+            case WM_OP_REF_FUNC:
                 index = read_func_index(v->l, r);
                 if (!r->error && !is_declared(v->l, index))
                     REJECT(r, WM_ERR_INVALID("invalid: undeclared function reference"));
                 push(v, WM_FUNCREF);
                 break;
-            case 0xFC: validate_misc(v); break;
+            case WM_OP_PREFIX_FC: validate_misc(v); break;
             default: fail(r, WM_ERR_MALFORMED("malformed: illegal opcode"));
         }
     }

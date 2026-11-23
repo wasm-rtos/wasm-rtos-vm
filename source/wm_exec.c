@@ -30,10 +30,11 @@ WmResult wm_table_init(WmInstance* inst, uint32_t segment, WmTable* table, uint3
 #define T_OVERFLOW WM_ERR_TRAP("trap: integer overflow")
 #define T_STACK WM_ERR_EXHAUSTION("exhaustion: call stack exhausted")
 
-/* Memory accesses 0x28-0x3E: log2 of the size, 4 sign-extends, 8 is a 64-bit value. */
-static const uint8_t WM_ROM ACCESS[] = {
-    0x02, 0x0B, 0x02, 0x0B, 0x04, 0x00, 0x05, 0x01, 0x0C, 0x08, 0x0D, 0x09, 0x0E, 0x0A, /* loads */
-    0x02, 0x0B, 0x02, 0x0B, 0x00, 0x01, 0x08, 0x09, 0x0A,                               /* stores */
+/* Memory accesses 0x28-0x3E: log2 of the size, 4 sign-extends, 8 is a 64-bit value (i64 and f64 are odd). */
+static const uint8_t WM_ROM ACCESS[WM_OP_I64_STORE32 - WM_OP_I32_LOAD + 1] = {
+#define WM_WASM_ACCESS(OP, NAME, name, VALUE, SIZE, STORE, SIGNED)                                            \
+    [(OP) - WM_OP_I32_LOAD] = (SIZE) | ((SIGNED) << 2) | ((WM_NUM_##VALUE & 1u) << 3),
+#include "wm_defs.def"
 };
 
 /* Immediates of a validated module: no checks needed. Most fit in one byte, so that case comes first. */
@@ -204,12 +205,12 @@ static WM_IMM void store_bytes(uint8_t* p, uint64_t v, uint8_t size)
  */
 static uint32_t* paged_access(WmMemory* memory, uint8_t op, uint32_t offset, uint32_t* sp, WmResult* trap)
 {
-    uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
+    uint8_t d = WM_ROM8(ACCESS + (op - WM_FIRST_ACCESS));
     uint8_t size = (uint8_t)(1u << (d & 3u));
     uint8_t bytes[8];
     uint64_t value = 0;
     uint64_t ea;
-    if (op >= 0x36u)
+    if (op >= WM_OP_I32_STORE)
     {
         if (d & 8u)
         {
@@ -225,7 +226,7 @@ static uint32_t* paged_access(WmMemory* memory, uint8_t op, uint32_t offset, uin
         *trap = T_OOB_MEMORY;
         return NULL;
     }
-    if (op >= 0x36u)
+    if (op >= WM_OP_I32_STORE)
     {
         for (uint32_t i = 0; i < size; ++i)
             bytes[i] = (uint8_t)(value >> (8u * i));
@@ -273,51 +274,51 @@ WM_OP uint32_t* op_i32(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)                                                             \
     case OP: r = i32_##name(a, b); break;
 #include "wm_defs.def"
-        case 0x67: r = clz32(a); break;
-        case 0x68: r = ctz32(a); break;
-        case 0x69: r = (uint32_t)__builtin_popcountl(a); break;
-        case 0x6D:
-        case 0x6E:
-        case 0x6F:
-        case 0x70:
+        case WM_OP_I32_CLZ: r = clz32(a); break;
+        case WM_OP_I32_CTZ: r = ctz32(a); break;
+        case WM_OP_I32_POPCNT: r = (uint32_t)__builtin_popcountl(a); break;
+        case WM_OP_I32_DIV_S:
+        case WM_OP_I32_DIV_U:
+        case WM_OP_I32_REM_S:
+        case WM_OP_I32_REM_U:
             if (b == 0)
             {
                 *trap = T_DIVIDE;
                 return NULL;
             }
-            if (op == 0x6Du && a == 0x80000000u && b == 0xFFFFFFFFu)
+            if (op == WM_OP_I32_DIV_S && a == 0x80000000u && b == 0xFFFFFFFFu)
             {
                 *trap = T_OVERFLOW;
                 return NULL;
             }
-            if (op == 0x6Du)
+            if (op == WM_OP_I32_DIV_S)
                 r = (uint32_t)((int32_t)a / (int32_t)b);
-            else if (op == 0x6Eu)
+            else if (op == WM_OP_I32_DIV_U)
                 r = a / b;
-            else if (op == 0x6Fu)
+            else if (op == WM_OP_I32_REM_S)
                 r = b == 0xFFFFFFFFu ? 0 : (uint32_t)((int32_t)a % (int32_t)b);
             else
                 r = a % b;
             break;
-        case 0x77: r = (uint32_t)(a << n) | (n ? a >> (32u - n) : 0); break;
-        case 0x78: r = (uint32_t)(a >> n) | (n ? a << (32u - n) : 0); break;
-        case 0xAC: r = (uint64_t)(int64_t)(int32_t)a; break;
-        case 0xC0: r = (uint32_t)(int32_t)(int8_t)a; break;
-        case 0xC1: r = (uint32_t)(int32_t)(int16_t)a; break;
+        case WM_OP_I32_ROTL: r = (uint32_t)(a << n) | (n ? a >> (32u - n) : 0); break;
+        case WM_OP_I32_ROTR: r = (uint32_t)(a >> n) | (n ? a << (32u - n) : 0); break;
+        case WM_OP_I64_EXTEND_I32_S: r = (uint64_t)(int64_t)(int32_t)a; break;
+        case WM_OP_I32_EXTEND8_S: r = (uint32_t)(int32_t)(int8_t)a; break;
+        case WM_OP_I32_EXTEND16_S: r = (uint32_t)(int32_t)(int16_t)a; break;
 #if WM_HAS_FLOAT
-        case 0xB2:
-        case 0xB3:
+        case WM_OP_F32_CONVERT_I32_S:
+        case WM_OP_F32_CONVERT_I32_U:
         {
-            float f = op == 0xB2u ? (float)(int32_t)a : (float)a;
+            float f = op == WM_OP_F32_CONVERT_I32_S ? (float)(int32_t)a : (float)a;
             uint32_t bits;
             __builtin_memcpy(&bits, &f, 4);
             r = bits;
             break;
         }
-        case 0xB7:
-        case 0xB8:
+        case WM_OP_F64_CONVERT_I32_S:
+        case WM_OP_F64_CONVERT_I32_U:
         {
-            double f = op == 0xB7u ? (double)(int32_t)a : (double)a;
+            double f = op == WM_OP_F64_CONVERT_I32_S ? (double)(int32_t)a : (double)a;
             __builtin_memcpy(&r, &f, 8);
             break;
         }
@@ -351,71 +352,71 @@ WM_OP uint32_t* op_i64(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
     n = (uint8_t)(b & 63u);
     switch (op)
     {
-        case 0x50: r = a == 0; break;
-        case 0x51: r = a == b; break;
-        case 0x52: r = a != b; break;
-        case 0x53: r = (int64_t)a < (int64_t)b; break;
-        case 0x54: r = a < b; break;
-        case 0x55: r = (int64_t)a > (int64_t)b; break;
-        case 0x56: r = a > b; break;
-        case 0x57: r = (int64_t)a <= (int64_t)b; break;
-        case 0x58: r = a <= b; break;
-        case 0x59: r = (int64_t)a >= (int64_t)b; break;
-        case 0x5A: r = a >= b; break;
-        case 0x79: r = a ? (uint64_t)__builtin_clzll(a) : 64u; break;
-        case 0x7A: r = a ? (uint64_t)__builtin_ctzll(a) : 64u; break;
-        case 0x7B: r = (uint64_t)__builtin_popcountll(a); break;
-        case 0x7C: r = a + b; break;
-        case 0x7D: r = a - b; break;
-        case 0x7E: r = a * b; break;
-        case 0x7F:
-        case 0x80:
-        case 0x81:
-        case 0x82:
+        case WM_OP_I64_EQZ: r = a == 0; break;
+        case WM_OP_I64_EQ: r = a == b; break;
+        case WM_OP_I64_NE: r = a != b; break;
+        case WM_OP_I64_LT_S: r = (int64_t)a < (int64_t)b; break;
+        case WM_OP_I64_LT_U: r = a < b; break;
+        case WM_OP_I64_GT_S: r = (int64_t)a > (int64_t)b; break;
+        case WM_OP_I64_GT_U: r = a > b; break;
+        case WM_OP_I64_LE_S: r = (int64_t)a <= (int64_t)b; break;
+        case WM_OP_I64_LE_U: r = a <= b; break;
+        case WM_OP_I64_GE_S: r = (int64_t)a >= (int64_t)b; break;
+        case WM_OP_I64_GE_U: r = a >= b; break;
+        case WM_OP_I64_CLZ: r = a ? (uint64_t)__builtin_clzll(a) : 64u; break;
+        case WM_OP_I64_CTZ: r = a ? (uint64_t)__builtin_ctzll(a) : 64u; break;
+        case WM_OP_I64_POPCNT: r = (uint64_t)__builtin_popcountll(a); break;
+        case WM_OP_I64_ADD: r = a + b; break;
+        case WM_OP_I64_SUB: r = a - b; break;
+        case WM_OP_I64_MUL: r = a * b; break;
+        case WM_OP_I64_DIV_S:
+        case WM_OP_I64_DIV_U:
+        case WM_OP_I64_REM_S:
+        case WM_OP_I64_REM_U:
             if (b == 0)
             {
                 *trap = T_DIVIDE;
                 return NULL;
             }
-            if (op == 0x7Fu && a == 0x8000000000000000u && b == UINT64_MAX)
+            if (op == WM_OP_I64_DIV_S && a == 0x8000000000000000u && b == UINT64_MAX)
             {
                 *trap = T_OVERFLOW;
                 return NULL;
             }
-            if (op == 0x7Fu)
+            if (op == WM_OP_I64_DIV_S)
                 r = (uint64_t)((int64_t)a / (int64_t)b);
-            else if (op == 0x80u)
+            else if (op == WM_OP_I64_DIV_U)
                 r = a / b;
-            else if (op == 0x81u)
+            else if (op == WM_OP_I64_REM_S)
                 r = b == UINT64_MAX ? 0 : (uint64_t)((int64_t)a % (int64_t)b);
             else
                 r = a % b;
             break;
-        case 0x83: r = a & b; break;
-        case 0x84: r = a | b; break;
-        case 0x85: r = a ^ b; break;
-        case 0x86: r = a << n; break;
-        case 0x87: r = (uint64_t)((int64_t)a >> n); break;
-        case 0x88: r = a >> n; break;
-        case 0x89: r = (a << n) | (n ? a >> (64u - n) : 0); break;
-        case 0x8A: r = (a >> n) | (n ? a << (64u - n) : 0); break;
-        case 0xC2: r = (uint64_t)(int64_t)(int8_t)a; break;
-        case 0xC3: r = (uint64_t)(int64_t)(int16_t)a; break;
-        case 0xC4: r = (uint64_t)(int64_t)(int32_t)a; break;
+        case WM_OP_I64_AND: r = a & b; break;
+        case WM_OP_I64_OR: r = a | b; break;
+        case WM_OP_I64_XOR: r = a ^ b; break;
+        case WM_OP_I64_SHL: r = a << n; break;
+        case WM_OP_I64_SHR_S: r = (uint64_t)((int64_t)a >> n); break;
+        case WM_OP_I64_SHR_U: r = a >> n; break;
+        case WM_OP_I64_ROTL: r = (a << n) | (n ? a >> (64u - n) : 0); break;
+        case WM_OP_I64_ROTR: r = (a >> n) | (n ? a << (64u - n) : 0); break;
+        case WM_OP_I64_EXTEND8_S: r = (uint64_t)(int64_t)(int8_t)a; break;
+        case WM_OP_I64_EXTEND16_S: r = (uint64_t)(int64_t)(int16_t)a; break;
+        case WM_OP_I64_EXTEND32_S: r = (uint64_t)(int64_t)(int32_t)a; break;
 #if WM_HAS_FLOAT
-        case 0xB4:
-        case 0xB5:
+        case WM_OP_F32_CONVERT_I64_S:
+        case WM_OP_F32_CONVERT_I64_U:
         {
-            float f = op == 0xB4u ? (float)(int64_t)a : (float)a;
+            float f = op == WM_OP_F32_CONVERT_I64_S ? (float)(int64_t)a : (float)a;
             uint32_t bits;
             __builtin_memcpy(&bits, &f, 4);
             r = bits;
             break;
         }
-        case 0xB9:
-        case 0xBA:
+        case WM_OP_F64_CONVERT_I64_S:
+        case WM_OP_F64_CONVERT_I64_U:
         {
-            double f = op == 0xB9u ? (double)(int64_t)a : (double)a;
+            double f = op == WM_OP_F64_CONVERT_I64_S ? (double)(int64_t)a : (double)a;
             __builtin_memcpy(&r, &f, 8);
             break;
         }
@@ -522,43 +523,43 @@ WM_OP uint32_t* op_float(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
         b = fb;
     }
     /* f64 compares and arithmetic sit a fixed distance after f32's. */
-    switch (wide && op >= 0x61u && op <= 0x66u ? op - 6u : wide && op >= 0x99u && op <= 0xA6u ? op - 14u : op)
+    switch (wide && op >= WM_OP_F64_EQ && op <= WM_OP_F64_GE ? op - 6u : wide && op >= WM_OP_F64_ABS && op <= WM_OP_F64_COPYSIGN ? op - 14u : op)
     {
-        case 0x5B: r = a == b; break;
-        case 0x5C: r = a != b; break;
-        case 0x5D: r = a < b; break;
-        case 0x5E: r = a > b; break;
-        case 0x5F: r = a <= b; break;
-        case 0x60: r = a >= b; break;
-        case 0x8B: r = aa & (wide ? 0x7FFFFFFFFFFFFFFFu : 0x7FFFFFFFu); break;
-        case 0x8C: r = aa ^ (wide ? 0x8000000000000000u : 0x80000000u); break;
-        case 0x98:
+        case WM_OP_F32_EQ: r = a == b; break;
+        case WM_OP_F32_NE: r = a != b; break;
+        case WM_OP_F32_LT: r = a < b; break;
+        case WM_OP_F32_GT: r = a > b; break;
+        case WM_OP_F32_LE: r = a <= b; break;
+        case WM_OP_F32_GE: r = a >= b; break;
+        case WM_OP_F32_ABS: r = aa & (wide ? 0x7FFFFFFFFFFFFFFFu : 0x7FFFFFFFu); break;
+        case WM_OP_F32_NEG: r = aa ^ (wide ? 0x8000000000000000u : 0x80000000u); break;
+        case WM_OP_F32_COPYSIGN:
         {
             uint64_t sign = wide ? 0x8000000000000000u : 0x80000000u;
             r = (aa & ~sign) | (ab & sign);
             break;
         }
-        case 0x8D: f = wide ? ceil(a) : ceilf((float)a), is_float = 1; break;
-        case 0x8E: f = wide ? floor(a) : floorf((float)a), is_float = 1; break;
-        case 0x8F: f = wide ? trunc(a) : truncf((float)a), is_float = 1; break;
-        case 0x90: f = wide ? nearbyint(a) : nearbyintf((float)a), is_float = 1; break;
-        case 0x91: f = wide ? sqrt(a) : sqrtf((float)a), is_float = 1; break;
-        case 0x92: f = wide ? a + b : (double)((float)a + (float)b), is_float = 1; break;
-        case 0x93: f = wide ? a - b : (double)((float)a - (float)b), is_float = 1; break;
-        case 0x94: f = wide ? a * b : (double)((float)a * (float)b), is_float = 1; break;
-        case 0x95: f = wide ? a / b : (double)((float)a / (float)b), is_float = 1; break;
-        case 0x96: f = min_max(a, b, 0), is_float = 1; break;
-        case 0x97: f = min_max(a, b, 1), is_float = 1; break;
-        case 0xA8: case 0xAA: kind = 0; goto convert;
-        case 0xA9: case 0xAB: kind = 1; goto convert;
-        case 0xAE: case 0xB0: kind = 2; goto convert;
-        case 0xAF: case 0xB1: kind = 3; goto convert;
+        case WM_OP_F32_CEIL: f = wide ? ceil(a) : ceilf((float)a), is_float = 1; break;
+        case WM_OP_F32_FLOOR: f = wide ? floor(a) : floorf((float)a), is_float = 1; break;
+        case WM_OP_F32_TRUNC: f = wide ? trunc(a) : truncf((float)a), is_float = 1; break;
+        case WM_OP_F32_NEAREST: f = wide ? nearbyint(a) : nearbyintf((float)a), is_float = 1; break;
+        case WM_OP_F32_SQRT: f = wide ? sqrt(a) : sqrtf((float)a), is_float = 1; break;
+        case WM_OP_F32_ADD: f = wide ? a + b : (double)((float)a + (float)b), is_float = 1; break;
+        case WM_OP_F32_SUB: f = wide ? a - b : (double)((float)a - (float)b), is_float = 1; break;
+        case WM_OP_F32_MUL: f = wide ? a * b : (double)((float)a * (float)b), is_float = 1; break;
+        case WM_OP_F32_DIV: f = wide ? a / b : (double)((float)a / (float)b), is_float = 1; break;
+        case WM_OP_F32_MIN: f = min_max(a, b, 0), is_float = 1; break;
+        case WM_OP_F32_MAX: f = min_max(a, b, 1), is_float = 1; break;
+        case WM_OP_I32_TRUNC_F32_S: case WM_OP_I32_TRUNC_F64_S: kind = 0; goto convert;
+        case WM_OP_I32_TRUNC_F32_U: case WM_OP_I32_TRUNC_F64_U: kind = 1; goto convert;
+        case WM_OP_I64_TRUNC_F32_S: case WM_OP_I64_TRUNC_F64_S: kind = 2; goto convert;
+        case WM_OP_I64_TRUNC_F32_U: case WM_OP_I64_TRUNC_F64_U: kind = 3; goto convert;
         case 0xE0: case 0xE2: kind = 0, saturate = 1; goto convert;
         case 0xE1: case 0xE3: kind = 1, saturate = 1; goto convert;
         case 0xE4: case 0xE6: kind = 2, saturate = 1; goto convert;
         case 0xE5: case 0xE7: kind = 3, saturate = 1; goto convert;
-        case 0xB6: /* f32.demote_f64 */
-        case 0xBB: /* f64.promote_f32 */
+        case WM_OP_F32_DEMOTE_F64: /* f32.demote_f64 */
+        case WM_OP_F64_PROMOTE_F32: /* f64.promote_f32 */
             f = a, is_float = 1;
             break;
         default: r = aa; /* reinterpret */

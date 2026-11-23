@@ -254,7 +254,7 @@ extern const char wm_error_unsupported[];
 enum
 {
 #define WM_WASM(OP, NAME, name) WM_OP_##NAME = OP,
-#define WM_WASM_ACCESS(OP, NAME, name, VALUE, ALIGN, STORE) WM_OP_##NAME = OP,
+#define WM_WASM_ACCESS(OP, NAME, name, VALUE, SIZE, STORE, SIGNED) WM_OP_##NAME = OP,
 #define WM_WASM_NUM(OP, NAME, name, OPERAND, ARITY, RESULT) WM_OP_##NAME = OP,
 #include "wm_defs.def"
 };
@@ -263,6 +263,9 @@ enum
 #define WM_WASM_FC(SUB, NAME, name) WM_FC_##NAME = SUB,
 #include "wm_defs.def"
 };
+/* Where the memory accesses and the numeric instructions start, unsigned as an index from an opcode is. */
+#define WM_FIRST_ACCESS ((uint32_t)WM_OP_I32_LOAD)
+#define WM_FIRST_NUMERIC ((uint32_t)WM_OP_I32_EQZ)
 
 /* Block kinds while validating. */
 #define WM_BLOCK 0x02
