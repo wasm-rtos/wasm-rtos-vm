@@ -6,7 +6,7 @@
  * CPython's ceval.c includes its cases: the compiler inlines the helpers
  * where it should (WM_INLINE_OPS) and keeps one copy where it should not.
  *
- * - wm_exec_fast.c.h: the fast loop over predecoded records (wm_fast.c).
+ * - wm_exec_fast.c.h: the fast loop over predecoded records (wm_translate.c).
  * - wm_exec_inplace.c.h: the loop over the module's own bytes.
  *
  * Numeric instructions share one path: wm_numeric says what each takes and
@@ -838,7 +838,7 @@ static WmResult code_or_alone(WmRuntime* rt, WmFunc* func)
 {
     WmTail* tail;
     WmResult result;
-    if (func->code->fast || rt->makes_code)
+    if (func->code->records || rt->makes_code)
     {
         result = wm_code_load(func);
         if (!result || strncmp(result, "exhaustion", 10) != 0)

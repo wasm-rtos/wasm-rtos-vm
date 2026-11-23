@@ -125,7 +125,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
 #endif
                     return result;
                 }
-                rt->saved.pc = (const uint8_t*)(const void*)rt->saved.func->code->fast;
+                rt->saved.pc = (const uint8_t*)(const void*)rt->saved.func->code->records;
             }
 #if WM_PREDECODE
             else if (result == wm_fuel_short)
@@ -141,7 +141,7 @@ WM_HOT WmResult wm_execute(WmRuntime* rt, WmFunc* func, int resume)
                     rt->suspended = 0;
                     return result;
                 }
-                e = wm_reg_at_cell(tail, (uint32_t)((const WmCell*)(const void*)rt->saved.pc - c->fast));
+                e = wm_reg_at_cell(tail, (uint32_t)((const WmCell*)(const void*)rt->saved.pc - c->records));
                 rt->saved.pc = m->bytes + e->offset;
                 rt->saved.sp = rt->saved.fp + e->top;
                 rt->saved.st = tail->side + e->sides;
@@ -257,7 +257,7 @@ in_place:;
                 }
                 rt->saved.entry_depth = entry_depth;
                 rt->saved.func = func;
-                rt->saved.pc = (const uint8_t*)(const void*)(code->fast + e->cell);
+                rt->saved.pc = (const uint8_t*)(const void*)(code->records + e->cell);
                 rt->saved.st = NULL;
                 rt->saved.fp = fp;
                 rt->saved.sp = sp;
@@ -794,10 +794,10 @@ in_place:;
                 if (fuel_on)
                     rt->fuel = fuel;
                 rt->suspended = 1;
-                if (code->fast)
+                if (code->records)
                 {
                     func->code->used = 1;
-                    rt->saved.pc = (const uint8_t*)(const void*)code->fast;
+                    rt->saved.pc = (const uint8_t*)(const void*)code->records;
                     result = run_fast(rt, func, 1);
                 }
                 else

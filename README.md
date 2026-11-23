@@ -78,6 +78,7 @@ Defaults are chosen per processor; set any of them with `-D`.
 
 | Option | Default | Effect |
 |---|---|---|
+| `WM_TINY` | off | the smallest engine for chips like an Uno's: `WM_HAS_VALIDATION`, `WM_HAS_I64` and `WM_HAS_REF_TYPES` 0 unless given |
 | `WM_HAS_FLOAT` | 1 where `double` has 64 bits (not AVR) | f32 and f64; 0 refuses modules that use them |
 | `WM_HAS_I64` | 1 | 64-bit integers |
 | `WM_HAS_REF_TYPES` | 1 | reference types and table instructions (`call_indirect` stays) |
@@ -97,10 +98,10 @@ Flash and static RAM on AVR (ATmega328P, `tools/avr-size.sh`):
 
 | Build | Flash | RAM |
 |---|---|---|
-| WebAssembly 2.0 | 34.9 KB | 184 B |
-| without i64 and reference types | 31.4 KB | 184 B |
-| without validation | 31.3 KB | 184 B |
-| without validation, i64 and reference types | 27.7 KB | 184 B |
+| WebAssembly 2.0 | 34.8 KB | 184 B |
+| without i64 and reference types | 31.3 KB | 184 B |
+| without validation | 31.2 KB | 184 B |
+| `WM_TINY`: without validation, i64 and reference types | 27.7 KB | 184 B |
 
 ## Example
 

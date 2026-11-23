@@ -33,6 +33,24 @@ static inline int wm_out_of_bounds(uint32_t start, uint32_t count, wm_size size)
 }
 
 /*
+ * WM_TINY: the smallest engine that runs most programs, for chips like an
+ * Uno's (32 KiB of flash): modules checked before they reach the chip (no
+ * validation), no 64-bit integers, no references. 28 KiB on an ATmega328P
+ * against 35 KiB. Each setting it implies can still be given.
+ */
+#ifdef WM_TINY
+#ifndef WM_HAS_VALIDATION
+#define WM_HAS_VALIDATION 0
+#endif
+#ifndef WM_HAS_I64
+#define WM_HAS_I64 0
+#endif
+#ifndef WM_HAS_REF_TYPES
+#define WM_HAS_REF_TYPES 0
+#endif
+#endif
+
+/*
  * Floating point: 1 computes f32 and f64 with the compiler's float and
  * double, which must be IEEE 754 binary32 and binary64. 0 rejects modules
  * that use them. The default is 1 where double has 64 bits (not on AVR).
@@ -446,11 +464,11 @@ typedef struct WmCode
      */
     union
     {
-        const WmCell* fast;
+        const WmCell* records;
         WmCell* own;
     };
     /* At most 0x7FFF: a longer function is not predecoded. */
-    uint16_t fast_cells;
+    uint16_t record_cells;
     /* For the code cache's CLOCK: called since the hand last passed; pinned (a count): on a call stack, or being made. */
     uint8_t used;
     uint8_t pinned;

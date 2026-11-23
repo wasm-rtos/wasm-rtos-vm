@@ -28,7 +28,7 @@ so the three are one unit for the compiler.
   only one.
 - **Predecoded** (`run_fast`, `source/wm_exec_fast.c.h`, with
   `WM_PREDECODE`, the default where labels can be values): the register
-  loop (decision 16). A function is translated (`source/wm_fast.c`) into
+  loop (decision 16). A function is translated (`source/wm_translate.c`) into
   records of 32-bit cells whose operands are slots of the frame:
   parameters and locals, then the operand stack at slots fixed by its
   depth, which validation knows at every instruction

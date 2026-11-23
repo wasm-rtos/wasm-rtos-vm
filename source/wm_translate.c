@@ -215,7 +215,7 @@ int wm_fast_position(const WmModule* m, const WmCode* code, const WmCell* ip, ui
     const WmTailEntry* e;
     if (!ip || (ip->u32 & 0xFFFFu) != wm_fast_handlers()[WM_R_SEG] ||
         wm_reg_tail((WmModule*)(uintptr_t)m, (WmCode*)(uintptr_t)code, &tail) ||
-        !(e = wm_reg_at_cell(tail, (uint32_t)(ip - code->fast))))
+        !(e = wm_reg_at_cell(tail, (uint32_t)(ip - code->records))))
         return 0;
     *offset = e->offset;
     *side = code->side + e->sides;
@@ -577,7 +577,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
 {
     uint32_t index = (uint32_t)(code - m->codes);
     const WmType* type = &m->types[m->func_types[m->func_imports + index]];
-    uint32_t B = type->param_slots + code->local_slots;
+    uint32_t frame_base = type->param_slots + code->local_slots;
     uint16_t* heights = NULL;
     RegLabel* labels = NULL;
     uint32_t instructions = 0, label_count = 0, next_label = 0, ordinal = 0;
@@ -595,7 +595,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
     o->handlers = wm_fast_handlers();
     o->last = UINT32_MAX;
-    o->base = B;
+    o->base = frame_base;
     o->scratch = tail != NULL;
     /* About half a cell per byte of the body (CoreMark: 15.3 KB of records for 7.3 KB of code); it grows if not. */
     o->hint = (uint32_t)(code->end - code->body) / 2u + 16u;
@@ -636,7 +636,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     }
     if (!o->error)
         o->error = wm_code_heights(m, index, heights);
-    if (!o->error && B + code->max_stack > 0xFFF0u)
+    if (!o->error && frame_base + code->max_stack > 0xFFF0u)
         o->error = WM_ERR_UNSUPPORTED("unsupported: a frame too large for the register loop");
 #define FIXUP_AT(PC, IN_HEAD)                                                                                  \
     do                                                                                                         \
@@ -694,7 +694,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
         /* An else or end after code that cannot be reached: branches arrive with the height after it. */
         if (h == 0xFFFFu)
             h = start == code->end ? type->result_slots : hn;
-        top = B + h;
+        top = frame_base + h;
         if (is_label || need_seg)
         {
             if (seg_cell != UINT32_MAX)
@@ -727,7 +727,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             if (start == code->end)
             {
                 reg_entry(tail, (uint32_t)(start - m->bytes), at_cell, 1, (uint32_t)(mine - side), top, &o->error);
-                reg_head(o, WM_R_RETURN, B + type->result_slots);
+                reg_head(o, WM_R_RETURN, frame_base + type->result_slots);
             }
             else if (op == WM_OP_ELSE && is_label)
                 labels[next_label].cell = o->count;
@@ -868,10 +868,10 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     reg_pop(o, 3);
                     cs = reg_slot(o, c), bs = reg_slot(o, b), as = reg_slot(o, a);
                     head_cell = o->count;
-                    reg_head(o, WM_R_SELECT1, B + hn - 1u);
+                    reg_head(o, WM_R_SELECT1, frame_base + hn - 1u);
                     reg_put(o, as | (bs << 16));
                     reg_put(o, cs);
-                    reg_made(o, head_cell, B + hn - 1u);
+                    reg_made(o, head_cell, frame_base + hn - 1u);
                 }
                 else
                 {
@@ -1104,7 +1104,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                 else if (op >= WM_OP_I32_EQZ && op <= WM_OP_I64_EXTEND32_S && reg_i32(op, &ss, &sc, &arity))
                 {
                     RegValue b = reg_peek(o, h, 0), a = arity == 2u ? reg_peek(o, h, 1) : b;
-                    uint32_t d = B + hn - 1u;
+                    uint32_t d = frame_base + hn - 1u;
                     reg_pop(o, arity);
                     if (arity == 2u && a.kind == P_CONST && b.kind != P_CONST && reg_commutes(op))
                     {
@@ -1163,7 +1163,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     {
         /* The cells were written in the code area: they become the records, cut to their size. */
         code->own = wm_area_end(code, o->count);
-        code->fast_cells = (uint16_t)o->count;
+        code->record_cells = (uint16_t)o->count;
         code->mapped = 0;
         o->cells = NULL;
     }
@@ -1352,6 +1352,6 @@ const WmTailEntry* wm_reg_segment(WmFunc* func, const WmCell* ip)
     if (!ip || (ip->u32 & 0xFFFFu) != wm_fast_handlers()[WM_R_SEG] ||
         wm_reg_tail(func->instance->module, func->code, &tail))
         return NULL;
-    return wm_reg_at_cell(tail, (uint32_t)(ip - func->code->fast));
+    return wm_reg_at_cell(tail, (uint32_t)(ip - func->code->records));
 }
 #endif

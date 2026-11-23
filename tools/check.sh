@@ -133,6 +133,11 @@ for t in load run diff snapshot; do
         -o build/replay-$t || exit 1
     build/replay-$t test/fuzz/regress/$t/* 2>/dev/null && echo "fuzz finds ($t): ok" || { echo "fuzz finds ($t): FAIL"; fail=1; }
 done
+# The Uno's budget: WM_TINY with the size test's host fits 30 KiB, leaving the bootloader and a host program room.
+if [ -x "${AVR_BIN:-$HOME/.platformio/packages/toolchain-atmelavr/bin}/avr-gcc" ]; then
+    tiny=$(tools/avr-size.sh atmega328p -DWM_TINY | awk '{print $2}')
+    [ "$tiny" -le 30720 ] && echo "Uno budget:    ok ($tiny of 30720 bytes, WM_TINY)" || { echo "Uno budget:    FAIL ($tiny > 30720 bytes, WM_TINY)"; fail=1; }
+fi
 test/snapshot.sh >/dev/null && echo "snapshots:     ok (between builds)" || { echo "snapshots:     FAIL"; fail=1; }
 out="$(tools/kernel-tests.sh)" || fail=1
 echo "kernel tests:  $(tail -1 <<<"$out")"
