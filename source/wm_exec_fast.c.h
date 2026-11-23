@@ -91,7 +91,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 {
     static const void* const labels[WM_R_COUNT] = {
 #define WM_REC(NAME, name) [WM_R_##NAME] = &&r_##name,
-#include "wm_records.def"
+#include "wm_defs.def"
     };
     uint32_t entry_depth;
     WmCode* code;
@@ -504,7 +504,7 @@ access:
         __builtin_memcpy(host, &value, sizeof(TYPE));                                                          \
         NEXT();                                                                                                \
     }
-#include "wm_records.def"
+#include "wm_defs.def"
 r_memory_size:
     fp[IMM] = inst->memory->pages;
     NEXT();
@@ -588,7 +588,7 @@ r_ref_func:
         NEXT();                                                                                                \
     }
 #define WM_REC(NAME, name)
-#include "wm_records.def"
+#include "wm_defs.def"
 #define WM_REC_CMP(NAME, name)                                                                                 \
     r_brif_ss_##name:                                                                                          \
     {                                                                                                          \
@@ -605,7 +605,7 @@ r_ref_func:
         ENTER(ip - 1 + SIMM);                                                                                  \
     }
 #define WM_REC(NAME, name)
-#include "wm_records.def"
+#include "wm_defs.def"
 
 call:
     if (callee->code)

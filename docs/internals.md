@@ -46,11 +46,12 @@ runs as on the stack, on the slots below the record's top, through the
 helpers both loops share. At a label, a call and a branch every value is
 in its slot, so there the frame is the stack machine's.
 
-The records are listed in `source/wm_records.def`; the i32 instructions
-and accesses both loops run are described once in `source/wm_ops.def`
-(decision 9), and the register records of i32 operations (a slot and a
-slot, or a slot and a constant) and of compares with branches are made
-from them.
+Every instruction is described once in `source/wm_defs.def` (decision
+22): WebAssembly's, one line each in opcode order with its types, then
+the records. The i32 instructions and accesses both loops run are lists
+there (decision 9), and the register records of i32 operations (a slot
+and a slot, or a slot and a constant) and of compares with branches are
+made from them.
 
 Records do not follow instructions one to one (decision 2 as amended by
 16). The register loop stops only where the frame is the stack machine's:

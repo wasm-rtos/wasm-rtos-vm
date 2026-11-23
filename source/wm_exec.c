@@ -252,14 +252,14 @@ static uint32_t* paged_access(WmMemory* memory, uint8_t op, uint32_t offset, uin
 static uint32_t clz32(uint32_t x) { return x ? (uint32_t)__builtin_clzl(x) - (uint32_t)(sizeof(long) * 8u - 32u) : 32u; }
 static uint32_t ctz32(uint32_t x) { return x ? (uint32_t)__builtin_ctzl(x) : 32u; }
 
-/* The i32 instructions with records of their own (wm_ops.def): the one definition both loops run. */
+/* The i32 instructions with records of their own (wm_defs.def): the one definition both loops run. */
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)                                                             \
     static WM_ALWAYS_INLINE uint32_t i32_##name(uint32_t a, uint32_t b)                                        \
     {                                                                                                          \
         (void)b;                                                                                               \
         return (uint32_t)(EXPR);                                                                               \
     }
-#include "wm_ops.def"
+#include "wm_defs.def"
 
 /* Ops whose operands are i32: results by wm_numeric. */
 WM_OP uint32_t* op_i32(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
@@ -272,7 +272,7 @@ WM_OP uint32_t* op_i32(uint8_t op, uint8_t d, uint32_t* sp, WmResult* trap)
     {
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)                                                             \
     case OP: r = i32_##name(a, b); break;
-#include "wm_ops.def"
+#include "wm_defs.def"
         case 0x67: r = clz32(a); break;
         case 0x68: r = ctz32(a); break;
         case 0x69: r = (uint32_t)__builtin_popcountl(a); break;
@@ -753,7 +753,7 @@ static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32
 #if WM_PREDECODE
 static const char* const g_record_names[WM_R_COUNT] = {
 #define WM_REC(NAME, name) #name,
-#include "wm_records.def"
+#include "wm_defs.def"
 };
 #endif
 #if WM_PREDECODE

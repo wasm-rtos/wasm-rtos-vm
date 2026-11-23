@@ -56,14 +56,14 @@ static void skip_block_type(const uint8_t** p)
         leb_s64(p);
 }
 
-/* The i32 memory accesses of wm_ops.def: their offset fits a record's operand. */
+/* The i32 memory accesses of wm_defs.def: their offset fits a record's operand. */
 static int fast_access(uint8_t op)
 {
     switch (op)
     {
 #define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)                                                                  \
     case OP: return 1;
-#include "wm_ops.def"
+#include "wm_defs.def"
         default: return 0;
     }
 }
@@ -490,7 +490,7 @@ static int reg_i32(uint8_t op, uint8_t* ss, uint8_t* sc, uint8_t* arity)
     {
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)                                                                    \
     case OP: *ss = WM_R_SS_##NAME, *sc = WM_R_SC_##NAME, *arity = (ARITY); return 1;
-#include "wm_ops.def"
+#include "wm_defs.def"
         default: return 0;
     }
 }
@@ -1049,14 +1049,13 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                     offset = leb_u32(&p);
                     switch (op)
                     {
-                        case 0x28: load = WM_R_LOAD32; break;
-                        case 0x2C: load = WM_R_LOAD8_S; break;
-                        case 0x2D: load = WM_R_LOAD8_U; break;
-                        case 0x2E: load = WM_R_LOAD16_S; break;
-                        case 0x2F: load = WM_R_LOAD16_U; break;
-                        case 0x36: store = WM_R_STORE32; break;
-                        case 0x3A: store = WM_R_STORE8; break;
-                        case 0x3B: store = WM_R_STORE16; break;
+#define WM_ACCESS_LOAD(NAME) load = WM_R_##NAME
+#define WM_ACCESS_STORE(NAME) store = WM_R_##NAME
+#define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)                                                                  \
+    case OP: WM_ACCESS_##KIND(NAME); break;
+#include "wm_defs.def"
+#undef WM_ACCESS_LOAD
+#undef WM_ACCESS_STORE
                         default: break;
                     }
                     if (load && offset <= 0xFFFFu)

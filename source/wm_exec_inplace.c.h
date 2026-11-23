@@ -299,7 +299,7 @@ in_place:;
 #endif
                 /* The short paths last, so they win over the general code of the same opcodes. */
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) [OP] = &&l_i32_##name,
-#include "wm_ops.def"
+#include "wm_defs.def"
                 [0x28] = &&f_0x28, [0x36] = &&f_0x36, [0x20] = &&f_0x20, [0x21] = &&f_0x21, [0x41] = &&f_0x41,};
 #pragma GCC diagnostic pop
             goto *dispatch[op];
@@ -327,7 +327,7 @@ in_place:;
 #if WM_COMPUTED_GOTO
         /*
          * The most common instructions each with a short path, past the shared
-         * numeric code: the i32 ones of wm_ops.def, then memory accesses.
+         * numeric code: the i32 ones of wm_defs.def, then memory accesses.
          */
 #define INPLACE_I32(name, ARITY)                                                                               \
     l_i32_##name:                                                                                              \
@@ -339,7 +339,7 @@ in_place:;
         continue;                                                                                              \
     }
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) INPLACE_I32(name, ARITY)
-#include "wm_ops.def"
+#include "wm_defs.def"
 #undef INPLACE_I32
         /*
          * The commonest pairs run without a dispatch in between: the next

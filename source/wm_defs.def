@@ -1,0 +1,376 @@
+/*
+ * Everything the engine says about instructions, in one place (decision 22):
+ * WebAssembly's own, one line each in opcode order, then the register
+ * loop's records made from them. Include it with the kinds you need
+ * defined; a kind left undefined is nothing. Every include starts afresh.
+ *
+ * WebAssembly:
+ *   WM_WASM(OP, NAME, name)                          any other instruction
+ *   WM_WASM_ACCESS(OP, NAME, name, VALUE, ALIGN, STORE) a memory access: the value's
+ *                                                  type, log2 of its natural
+ *                                                  alignment, 1 for a store
+ *   WM_WASM_NUM(OP, NAME, name, OPERAND, ARITY, RESULT) a numeric instruction (0x45-0xC4):
+ *                                                  operands' type, how many, result's type
+ *   WM_WASM_FC(SUB, NAME, name)                      an instruction after the 0xFC prefix
+ * Types are WM_NUM_I32, WM_NUM_I64, WM_NUM_F32, WM_NUM_F64 (wm_internal.h), written I32 ...
+ *
+ * What both loops run the same way, from one description each:
+ *   WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)   an i32 access, TYPE its C
+ *                                                  type, KIND LOAD or STORE
+ *   WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)     an i32 instruction: EXPR of
+ *                                                  a and, for two operands, b
+ *
+ * The register loop's records (decision 16). Operands are slots of the
+ * frame (fp-relative: parameters, locals, then the stack by depth), so a
+ * record names where its values are instead of taking them from a stack
+ * pointer:
+ *   WM_REC(NAME, name)                             a record, its handler r_name
+ *   WM_REC_LOAD / WM_REC_STORE(NAME, name, TYPE, OP)   an i32 access's record
+ *   WM_REC_I32(NAME, name)                         an i32 instruction's two records:
+ *                                                  slots, or a slot and a constant
+ *   WM_REC_CMP(NAME, name)                         an i32 compare and a branch
+ * The record kinds default to WM_REC, so defining WM_REC alone lists them all.
+ */
+
+/* The lists more than one part is made from, written once. */
+#ifndef WM_DEFS_LISTS
+#define WM_DEFS_LISTS
+#define WM_SHARED_ACCESSES(X)                                                                                  \
+    X(I32_LOAD, i32_load, 0x28, uint32_t, LOAD)                                                                \
+    X(I32_LOAD8_S, i32_load8_s, 0x2C, int8_t, LOAD)                                                            \
+    X(I32_LOAD8_U, i32_load8_u, 0x2D, uint8_t, LOAD)                                                           \
+    X(I32_LOAD16_S, i32_load16_s, 0x2E, int16_t, LOAD)                                                         \
+    X(I32_LOAD16_U, i32_load16_u, 0x2F, uint16_t, LOAD)                                                        \
+    X(I32_STORE, i32_store, 0x36, uint32_t, STORE)                                                             \
+    X(I32_STORE8, i32_store8, 0x3A, uint8_t, STORE)                                                            \
+    X(I32_STORE16, i32_store16, 0x3B, uint16_t, STORE)
+#define WM_SHARED_I32(X)                                                                                       \
+    X(EQZ, eqz, 0x45, 1, a == 0)                                                                               \
+    X(EQ, eq, 0x46, 2, a == b)                                                                                 \
+    X(NE, ne, 0x47, 2, a != b)                                                                                 \
+    X(LT_S, lt_s, 0x48, 2, (int32_t)a < (int32_t)b)                                                            \
+    X(LT_U, lt_u, 0x49, 2, a < b)                                                                              \
+    X(GT_S, gt_s, 0x4A, 2, (int32_t)a > (int32_t)b)                                                            \
+    X(GT_U, gt_u, 0x4B, 2, a > b)                                                                              \
+    X(LE_S, le_s, 0x4C, 2, (int32_t)a <= (int32_t)b)                                                           \
+    X(LE_U, le_u, 0x4D, 2, a <= b)                                                                             \
+    X(GE_S, ge_s, 0x4E, 2, (int32_t)a >= (int32_t)b)                                                           \
+    X(GE_U, ge_u, 0x4F, 2, a >= b)                                                                             \
+    X(ADD, add, 0x6A, 2, a + b)                                                                                \
+    X(SUB, sub, 0x6B, 2, a - b)                                                                                \
+    X(MUL, mul, 0x6C, 2, a * b)                                                                                \
+    X(AND, and, 0x71, 2, a & b)                                                                                \
+    X(OR, or, 0x72, 2, a | b)                                                                                  \
+    X(XOR, xor, 0x73, 2, a ^ b)                                                                                \
+    X(SHL, shl, 0x74, 2, a << (b & 31u))                                                                       \
+    X(SHR_S, shr_s, 0x75, 2, (uint32_t)((int32_t)a >> (b & 31u)))                                              \
+    X(SHR_U, shr_u, 0x76, 2, a >> (b & 31u))
+/* Turning the shared lists into the kinds below. */
+#define WM_DEFS_NUM_OF_I32(NAME, name, OP, ARITY, EXPR) WM_WASM_NUM(OP, I32_##NAME, i32_##name, I32, ARITY, I32)
+#define WM_DEFS_REC_OF_I32(NAME, name, OP, ARITY, EXPR) WM_REC_I32(NAME, name)
+#define WM_DEFS_REC_OF_ACCESS(NAME, name, OP, TYPE, KIND) WM_REC_##KIND(NAME, name, TYPE, OP##u)
+#endif
+
+#ifndef WM_WASM
+#define WM_WASM(OP, NAME, name)
+#endif
+#ifndef WM_WASM_ACCESS
+#define WM_WASM_ACCESS(OP, NAME, name, VALUE, ALIGN, STORE)
+#endif
+#ifndef WM_WASM_NUM
+#define WM_WASM_NUM(OP, NAME, name, OPERAND, ARITY, RESULT)
+#endif
+#ifndef WM_WASM_FC
+#define WM_WASM_FC(SUB, NAME, name)
+#endif
+#ifndef WM_RECORD_ACCESS
+#define WM_RECORD_ACCESS(NAME, name, OP, TYPE, KIND)
+#endif
+#ifndef WM_RECORD_I32
+#define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR)
+#endif
+#ifndef WM_REC
+#define WM_REC(NAME, name)
+#endif
+#ifndef WM_REC_LOAD
+#define WM_REC_LOAD(NAME, name, TYPE, OP) WM_REC(NAME, name)
+#endif
+#ifndef WM_REC_STORE
+#define WM_REC_STORE(NAME, name, TYPE, OP) WM_REC(NAME, name)
+#endif
+#ifndef WM_REC_I32
+#define WM_REC_I32(NAME, name) WM_REC(SS_##NAME, ss_##name) WM_REC(SC_##NAME, sc_##name)
+#endif
+#ifndef WM_REC_CMP
+#define WM_REC_CMP(NAME, name) WM_REC(BRIF_SS_##NAME, brif_ss_##name) WM_REC(BRIF_SC_##NAME, brif_sc_##name)
+#endif
+
+/* ---- WebAssembly 2.0 without SIMD ---- */
+
+/* Control */
+WM_WASM(0x00, UNREACHABLE, unreachable)
+WM_WASM(0x01, NOP, nop)
+WM_WASM(0x02, BLOCK, block)
+WM_WASM(0x03, LOOP, loop)
+WM_WASM(0x04, IF, if)
+WM_WASM(0x05, ELSE, else)
+WM_WASM(0x0B, END, end)
+WM_WASM(0x0C, BR, br)
+WM_WASM(0x0D, BR_IF, br_if)
+WM_WASM(0x0E, BR_TABLE, br_table)
+WM_WASM(0x0F, RETURN, return)
+WM_WASM(0x10, CALL, call)
+WM_WASM(0x11, CALL_INDIRECT, call_indirect)
+
+/* Parametric */
+WM_WASM(0x1A, DROP, drop)
+WM_WASM(0x1B, SELECT, select)
+WM_WASM(0x1C, SELECT_T, select_t)
+
+/* Variables and tables */
+WM_WASM(0x20, LOCAL_GET, local_get)
+WM_WASM(0x21, LOCAL_SET, local_set)
+WM_WASM(0x22, LOCAL_TEE, local_tee)
+WM_WASM(0x23, GLOBAL_GET, global_get)
+WM_WASM(0x24, GLOBAL_SET, global_set)
+WM_WASM(0x25, TABLE_GET, table_get)
+WM_WASM(0x26, TABLE_SET, table_set)
+
+/* Memory */
+WM_WASM_ACCESS(0x28, I32_LOAD, i32_load, I32, 2, 0)
+WM_WASM_ACCESS(0x29, I64_LOAD, i64_load, I64, 3, 0)
+WM_WASM_ACCESS(0x2A, F32_LOAD, f32_load, F32, 2, 0)
+WM_WASM_ACCESS(0x2B, F64_LOAD, f64_load, F64, 3, 0)
+WM_WASM_ACCESS(0x2C, I32_LOAD8_S, i32_load8_s, I32, 0, 0)
+WM_WASM_ACCESS(0x2D, I32_LOAD8_U, i32_load8_u, I32, 0, 0)
+WM_WASM_ACCESS(0x2E, I32_LOAD16_S, i32_load16_s, I32, 1, 0)
+WM_WASM_ACCESS(0x2F, I32_LOAD16_U, i32_load16_u, I32, 1, 0)
+WM_WASM_ACCESS(0x30, I64_LOAD8_S, i64_load8_s, I64, 0, 0)
+WM_WASM_ACCESS(0x31, I64_LOAD8_U, i64_load8_u, I64, 0, 0)
+WM_WASM_ACCESS(0x32, I64_LOAD16_S, i64_load16_s, I64, 1, 0)
+WM_WASM_ACCESS(0x33, I64_LOAD16_U, i64_load16_u, I64, 1, 0)
+WM_WASM_ACCESS(0x34, I64_LOAD32_S, i64_load32_s, I64, 2, 0)
+WM_WASM_ACCESS(0x35, I64_LOAD32_U, i64_load32_u, I64, 2, 0)
+WM_WASM_ACCESS(0x36, I32_STORE, i32_store, I32, 2, 1)
+WM_WASM_ACCESS(0x37, I64_STORE, i64_store, I64, 3, 1)
+WM_WASM_ACCESS(0x38, F32_STORE, f32_store, F32, 2, 1)
+WM_WASM_ACCESS(0x39, F64_STORE, f64_store, F64, 3, 1)
+WM_WASM_ACCESS(0x3A, I32_STORE8, i32_store8, I32, 0, 1)
+WM_WASM_ACCESS(0x3B, I32_STORE16, i32_store16, I32, 1, 1)
+WM_WASM_ACCESS(0x3C, I64_STORE8, i64_store8, I64, 0, 1)
+WM_WASM_ACCESS(0x3D, I64_STORE16, i64_store16, I64, 1, 1)
+WM_WASM_ACCESS(0x3E, I64_STORE32, i64_store32, I64, 2, 1)
+WM_WASM(0x3F, MEMORY_SIZE, memory_size)
+WM_WASM(0x40, MEMORY_GROW, memory_grow)
+WM_SHARED_ACCESSES(WM_RECORD_ACCESS)
+
+/* Constants */
+WM_WASM(0x41, I32_CONST, i32_const)
+WM_WASM(0x42, I64_CONST, i64_const)
+WM_WASM(0x43, F32_CONST, f32_const)
+WM_WASM(0x44, F64_CONST, f64_const)
+
+/* Numeric: the i32 compares and arithmetic both loops share (WM_SHARED_I32 above), then the rest */
+WM_SHARED_I32(WM_DEFS_NUM_OF_I32)
+WM_SHARED_I32(WM_RECORD_I32)
+WM_WASM_NUM(0x50, I64_EQZ, i64_eqz, I64, 1, I32)
+WM_WASM_NUM(0x51, I64_EQ, i64_eq, I64, 2, I32)
+WM_WASM_NUM(0x52, I64_NE, i64_ne, I64, 2, I32)
+WM_WASM_NUM(0x53, I64_LT_S, i64_lt_s, I64, 2, I32)
+WM_WASM_NUM(0x54, I64_LT_U, i64_lt_u, I64, 2, I32)
+WM_WASM_NUM(0x55, I64_GT_S, i64_gt_s, I64, 2, I32)
+WM_WASM_NUM(0x56, I64_GT_U, i64_gt_u, I64, 2, I32)
+WM_WASM_NUM(0x57, I64_LE_S, i64_le_s, I64, 2, I32)
+WM_WASM_NUM(0x58, I64_LE_U, i64_le_u, I64, 2, I32)
+WM_WASM_NUM(0x59, I64_GE_S, i64_ge_s, I64, 2, I32)
+WM_WASM_NUM(0x5A, I64_GE_U, i64_ge_u, I64, 2, I32)
+WM_WASM_NUM(0x5B, F32_EQ, f32_eq, F32, 2, I32)
+WM_WASM_NUM(0x5C, F32_NE, f32_ne, F32, 2, I32)
+WM_WASM_NUM(0x5D, F32_LT, f32_lt, F32, 2, I32)
+WM_WASM_NUM(0x5E, F32_GT, f32_gt, F32, 2, I32)
+WM_WASM_NUM(0x5F, F32_LE, f32_le, F32, 2, I32)
+WM_WASM_NUM(0x60, F32_GE, f32_ge, F32, 2, I32)
+WM_WASM_NUM(0x61, F64_EQ, f64_eq, F64, 2, I32)
+WM_WASM_NUM(0x62, F64_NE, f64_ne, F64, 2, I32)
+WM_WASM_NUM(0x63, F64_LT, f64_lt, F64, 2, I32)
+WM_WASM_NUM(0x64, F64_GT, f64_gt, F64, 2, I32)
+WM_WASM_NUM(0x65, F64_LE, f64_le, F64, 2, I32)
+WM_WASM_NUM(0x66, F64_GE, f64_ge, F64, 2, I32)
+WM_WASM_NUM(0x67, I32_CLZ, i32_clz, I32, 1, I32)
+WM_WASM_NUM(0x68, I32_CTZ, i32_ctz, I32, 1, I32)
+WM_WASM_NUM(0x69, I32_POPCNT, i32_popcnt, I32, 1, I32)
+WM_WASM_NUM(0x6D, I32_DIV_S, i32_div_s, I32, 2, I32)
+WM_WASM_NUM(0x6E, I32_DIV_U, i32_div_u, I32, 2, I32)
+WM_WASM_NUM(0x6F, I32_REM_S, i32_rem_s, I32, 2, I32)
+WM_WASM_NUM(0x70, I32_REM_U, i32_rem_u, I32, 2, I32)
+WM_WASM_NUM(0x77, I32_ROTL, i32_rotl, I32, 2, I32)
+WM_WASM_NUM(0x78, I32_ROTR, i32_rotr, I32, 2, I32)
+WM_WASM_NUM(0x79, I64_CLZ, i64_clz, I64, 1, I64)
+WM_WASM_NUM(0x7A, I64_CTZ, i64_ctz, I64, 1, I64)
+WM_WASM_NUM(0x7B, I64_POPCNT, i64_popcnt, I64, 1, I64)
+WM_WASM_NUM(0x7C, I64_ADD, i64_add, I64, 2, I64)
+WM_WASM_NUM(0x7D, I64_SUB, i64_sub, I64, 2, I64)
+WM_WASM_NUM(0x7E, I64_MUL, i64_mul, I64, 2, I64)
+WM_WASM_NUM(0x7F, I64_DIV_S, i64_div_s, I64, 2, I64)
+WM_WASM_NUM(0x80, I64_DIV_U, i64_div_u, I64, 2, I64)
+WM_WASM_NUM(0x81, I64_REM_S, i64_rem_s, I64, 2, I64)
+WM_WASM_NUM(0x82, I64_REM_U, i64_rem_u, I64, 2, I64)
+WM_WASM_NUM(0x83, I64_AND, i64_and, I64, 2, I64)
+WM_WASM_NUM(0x84, I64_OR, i64_or, I64, 2, I64)
+WM_WASM_NUM(0x85, I64_XOR, i64_xor, I64, 2, I64)
+WM_WASM_NUM(0x86, I64_SHL, i64_shl, I64, 2, I64)
+WM_WASM_NUM(0x87, I64_SHR_S, i64_shr_s, I64, 2, I64)
+WM_WASM_NUM(0x88, I64_SHR_U, i64_shr_u, I64, 2, I64)
+WM_WASM_NUM(0x89, I64_ROTL, i64_rotl, I64, 2, I64)
+WM_WASM_NUM(0x8A, I64_ROTR, i64_rotr, I64, 2, I64)
+WM_WASM_NUM(0x8B, F32_ABS, f32_abs, F32, 1, F32)
+WM_WASM_NUM(0x8C, F32_NEG, f32_neg, F32, 1, F32)
+WM_WASM_NUM(0x8D, F32_CEIL, f32_ceil, F32, 1, F32)
+WM_WASM_NUM(0x8E, F32_FLOOR, f32_floor, F32, 1, F32)
+WM_WASM_NUM(0x8F, F32_TRUNC, f32_trunc, F32, 1, F32)
+WM_WASM_NUM(0x90, F32_NEAREST, f32_nearest, F32, 1, F32)
+WM_WASM_NUM(0x91, F32_SQRT, f32_sqrt, F32, 1, F32)
+WM_WASM_NUM(0x92, F32_ADD, f32_add, F32, 2, F32)
+WM_WASM_NUM(0x93, F32_SUB, f32_sub, F32, 2, F32)
+WM_WASM_NUM(0x94, F32_MUL, f32_mul, F32, 2, F32)
+WM_WASM_NUM(0x95, F32_DIV, f32_div, F32, 2, F32)
+WM_WASM_NUM(0x96, F32_MIN, f32_min, F32, 2, F32)
+WM_WASM_NUM(0x97, F32_MAX, f32_max, F32, 2, F32)
+WM_WASM_NUM(0x98, F32_COPYSIGN, f32_copysign, F32, 2, F32)
+WM_WASM_NUM(0x99, F64_ABS, f64_abs, F64, 1, F64)
+WM_WASM_NUM(0x9A, F64_NEG, f64_neg, F64, 1, F64)
+WM_WASM_NUM(0x9B, F64_CEIL, f64_ceil, F64, 1, F64)
+WM_WASM_NUM(0x9C, F64_FLOOR, f64_floor, F64, 1, F64)
+WM_WASM_NUM(0x9D, F64_TRUNC, f64_trunc, F64, 1, F64)
+WM_WASM_NUM(0x9E, F64_NEAREST, f64_nearest, F64, 1, F64)
+WM_WASM_NUM(0x9F, F64_SQRT, f64_sqrt, F64, 1, F64)
+WM_WASM_NUM(0xA0, F64_ADD, f64_add, F64, 2, F64)
+WM_WASM_NUM(0xA1, F64_SUB, f64_sub, F64, 2, F64)
+WM_WASM_NUM(0xA2, F64_MUL, f64_mul, F64, 2, F64)
+WM_WASM_NUM(0xA3, F64_DIV, f64_div, F64, 2, F64)
+WM_WASM_NUM(0xA4, F64_MIN, f64_min, F64, 2, F64)
+WM_WASM_NUM(0xA5, F64_MAX, f64_max, F64, 2, F64)
+WM_WASM_NUM(0xA6, F64_COPYSIGN, f64_copysign, F64, 2, F64)
+WM_WASM_NUM(0xA7, I32_WRAP_I64, i32_wrap_i64, I64, 1, I32)
+WM_WASM_NUM(0xA8, I32_TRUNC_F32_S, i32_trunc_f32_s, F32, 1, I32)
+WM_WASM_NUM(0xA9, I32_TRUNC_F32_U, i32_trunc_f32_u, F32, 1, I32)
+WM_WASM_NUM(0xAA, I32_TRUNC_F64_S, i32_trunc_f64_s, F64, 1, I32)
+WM_WASM_NUM(0xAB, I32_TRUNC_F64_U, i32_trunc_f64_u, F64, 1, I32)
+WM_WASM_NUM(0xAC, I64_EXTEND_I32_S, i64_extend_i32_s, I32, 1, I64)
+WM_WASM_NUM(0xAD, I64_EXTEND_I32_U, i64_extend_i32_u, I32, 1, I64)
+WM_WASM_NUM(0xAE, I64_TRUNC_F32_S, i64_trunc_f32_s, F32, 1, I64)
+WM_WASM_NUM(0xAF, I64_TRUNC_F32_U, i64_trunc_f32_u, F32, 1, I64)
+WM_WASM_NUM(0xB0, I64_TRUNC_F64_S, i64_trunc_f64_s, F64, 1, I64)
+WM_WASM_NUM(0xB1, I64_TRUNC_F64_U, i64_trunc_f64_u, F64, 1, I64)
+WM_WASM_NUM(0xB2, F32_CONVERT_I32_S, f32_convert_i32_s, I32, 1, F32)
+WM_WASM_NUM(0xB3, F32_CONVERT_I32_U, f32_convert_i32_u, I32, 1, F32)
+WM_WASM_NUM(0xB4, F32_CONVERT_I64_S, f32_convert_i64_s, I64, 1, F32)
+WM_WASM_NUM(0xB5, F32_CONVERT_I64_U, f32_convert_i64_u, I64, 1, F32)
+WM_WASM_NUM(0xB6, F32_DEMOTE_F64, f32_demote_f64, F64, 1, F32)
+WM_WASM_NUM(0xB7, F64_CONVERT_I32_S, f64_convert_i32_s, I32, 1, F64)
+WM_WASM_NUM(0xB8, F64_CONVERT_I32_U, f64_convert_i32_u, I32, 1, F64)
+WM_WASM_NUM(0xB9, F64_CONVERT_I64_S, f64_convert_i64_s, I64, 1, F64)
+WM_WASM_NUM(0xBA, F64_CONVERT_I64_U, f64_convert_i64_u, I64, 1, F64)
+WM_WASM_NUM(0xBB, F64_PROMOTE_F32, f64_promote_f32, F32, 1, F64)
+WM_WASM_NUM(0xBC, I32_REINTERPRET_F32, i32_reinterpret_f32, F32, 1, I32)
+WM_WASM_NUM(0xBD, I64_REINTERPRET_F64, i64_reinterpret_f64, F64, 1, I64)
+WM_WASM_NUM(0xBE, F32_REINTERPRET_I32, f32_reinterpret_i32, I32, 1, F32)
+WM_WASM_NUM(0xBF, F64_REINTERPRET_I64, f64_reinterpret_i64, I64, 1, F64)
+WM_WASM_NUM(0xC0, I32_EXTEND8_S, i32_extend8_s, I32, 1, I32)
+WM_WASM_NUM(0xC1, I32_EXTEND16_S, i32_extend16_s, I32, 1, I32)
+WM_WASM_NUM(0xC2, I64_EXTEND8_S, i64_extend8_s, I64, 1, I64)
+WM_WASM_NUM(0xC3, I64_EXTEND16_S, i64_extend16_s, I64, 1, I64)
+WM_WASM_NUM(0xC4, I64_EXTEND32_S, i64_extend32_s, I64, 1, I64)
+
+/* References */
+WM_WASM(0xD0, REF_NULL, ref_null)
+WM_WASM(0xD1, REF_IS_NULL, ref_is_null)
+WM_WASM(0xD2, REF_FUNC, ref_func)
+
+/* After 0xFC: saturating conversions, bulk memory and tables */
+WM_WASM(0xFC, PREFIX_FC, prefix_fc)
+WM_WASM_FC(0, I32_TRUNC_SAT_F32_S, i32_trunc_sat_f32_s)
+WM_WASM_FC(1, I32_TRUNC_SAT_F32_U, i32_trunc_sat_f32_u)
+WM_WASM_FC(2, I32_TRUNC_SAT_F64_S, i32_trunc_sat_f64_s)
+WM_WASM_FC(3, I32_TRUNC_SAT_F64_U, i32_trunc_sat_f64_u)
+WM_WASM_FC(4, I64_TRUNC_SAT_F32_S, i64_trunc_sat_f32_s)
+WM_WASM_FC(5, I64_TRUNC_SAT_F32_U, i64_trunc_sat_f32_u)
+WM_WASM_FC(6, I64_TRUNC_SAT_F64_S, i64_trunc_sat_f64_s)
+WM_WASM_FC(7, I64_TRUNC_SAT_F64_U, i64_trunc_sat_f64_u)
+WM_WASM_FC(8, MEMORY_INIT, memory_init)
+WM_WASM_FC(9, DATA_DROP, data_drop)
+WM_WASM_FC(10, MEMORY_COPY, memory_copy)
+WM_WASM_FC(11, MEMORY_FILL, memory_fill)
+WM_WASM_FC(12, TABLE_INIT, table_init)
+WM_WASM_FC(13, ELEM_DROP, elem_drop)
+WM_WASM_FC(14, TABLE_COPY, table_copy)
+WM_WASM_FC(15, TABLE_GROW, table_grow)
+WM_WASM_FC(16, TABLE_SIZE, table_size)
+WM_WASM_FC(17, TABLE_FILL, table_fill)
+
+/* ---- The register loop's records ---- */
+
+WM_REC(UNREACHABLE, unreachable)
+/* A segment's start: the fuel of all its instructions, its offset in the module and its top. */
+WM_REC(SEG, seg)
+WM_REC(MOV, mov)
+WM_REC(MOVC, movc)
+WM_REC(MOVC64, movc64)
+WM_REC(JUMP, jump)
+/* Branches: the distance in the head when no values move, else in cells with the slots to keep and drop. */
+WM_REC(BR0, br0)
+WM_REC(BR, br)
+WM_REC(BR_IF0, br_if0)
+WM_REC(BR_IF, br_if)
+WM_REC(BR_UNLESS, br_unless)
+WM_REC(BR_TABLE, br_table)
+WM_REC(RETURN, return)
+WM_REC(CALL, call)
+WM_REC(CALL_INDIRECT, call_indirect)
+WM_REC(SELECT1, select1)
+WM_REC(SELECT, select)
+WM_REC(LOCAL_GET_W, local_get_w)
+WM_REC(LOCAL_SET_W, local_set_w)
+WM_REC(GLOBAL_GET1, global_get1)
+WM_REC(GLOBAL_SET1, global_set1)
+WM_REC(GLOBAL_GET, global_get)
+WM_REC(GLOBAL_SET, global_set)
+WM_REC(TABLE_GET, table_get)
+WM_REC(TABLE_SET, table_set)
+/* Any other access on the slots below its top: the offset beside the top when it fits 16 bits, else a cell of its own. */
+WM_REC(ACCESS, access)
+WM_REC(ACCESS_FAR, access_far)
+WM_SHARED_ACCESSES(WM_DEFS_REC_OF_ACCESS)
+WM_REC(MEMORY_SIZE, memory_size)
+WM_REC(MEMORY_GROW, memory_grow)
+WM_REC(NUMERIC, numeric)
+WM_REC(SAT, sat)
+WM_REC(MISC, misc)
+WM_REC(REF_NULL, ref_null)
+WM_REC(REF_IS_NULL, ref_is_null)
+WM_REC(REF_FUNC, ref_func)
+WM_SHARED_I32(WM_DEFS_REC_OF_I32)
+/* An i32 compare and a branch taken when it holds, no values moving: slots, or a slot and a constant; the distance in the head. */
+WM_REC_CMP(EQZ, eqz)
+WM_REC_CMP(EQ, eq)
+WM_REC_CMP(NE, ne)
+WM_REC_CMP(LT_S, lt_s)
+WM_REC_CMP(LT_U, lt_u)
+WM_REC_CMP(GT_S, gt_s)
+WM_REC_CMP(GT_U, gt_u)
+WM_REC_CMP(LE_S, le_s)
+WM_REC_CMP(LE_U, le_u)
+WM_REC_CMP(GE_S, ge_s)
+WM_REC_CMP(GE_U, ge_u)
+
+#undef WM_WASM
+#undef WM_WASM_ACCESS
+#undef WM_WASM_NUM
+#undef WM_WASM_FC
+#undef WM_RECORD_ACCESS
+#undef WM_RECORD_I32
+#undef WM_REC
+#undef WM_REC_LOAD
+#undef WM_REC_STORE
+#undef WM_REC_I32
+#undef WM_REC_CMP

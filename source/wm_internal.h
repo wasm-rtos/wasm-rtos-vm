@@ -849,7 +849,7 @@ WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
 enum
 {
 #define WM_REC(NAME, name) WM_R_##NAME,
-#include "wm_records.def"
+#include "wm_defs.def"
     WM_R_COUNT
 };
 /* The register loop (decision 16): the stack's height in slots before each instruction, in their order. */
