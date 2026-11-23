@@ -32,7 +32,7 @@ the build before the experiment; ±0 is within noise.
 | [The translator's memory by the byte](#the-translators-memory-by-the-byte) | rejected | | peak 34.8 → 19.1 KB | |
 | [Shorter records for branches, constants and other accesses](#shorter-records-for-branches-constants-and-other-accesses) | kept | +2.5% | ±0 | |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
-| [A function in place by itself](#a-function-in-place-by-itself) | kept, as decision 21 | | ±0 | to measure |
+| [A function in place by itself](#a-function-in-place-by-itself) | kept, as decision 21 | −0.7% bare | ±0 | CoreMark still short |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
 | [`misc` taking the stack pointer's address](#misc-taking-the-stack-pointers-address) | fixed | +6.6% | ±0 | |
@@ -853,7 +853,18 @@ records; a return looks at its caller's frame to pick the loop.
 | spec, every function in place / at random | — | 27437 / 27437 |
 | `fib(15)` sliced by 37: fuel, slices (records, none made, refused) | — | 22686, 613 in all three |
 
-**Found.** The extra test per return costs nothing measurable on a Mac.
-Black Pill CoreMark at 104 KB (out of memory before) and ESP32 still to
-measure.
+| ESP32 CoreMark bare (records in RAM) | 24.18 | 24.00 |
+| ESP32 board checks (CoreMark from code images in flash) | 22.38 | 21.16–21.37 |
+
+**Found.** The extra test per return costs nothing measurable on a Mac
+and 0.7% on an ESP32, kept: a trampoline frame would take it out of the
+return at the price of snapshots, traces and call depth knowing about it.
+In the board checks CoreMark runs from code images in flash, through the
+cache its hot code shares; a bisection put the rest of the difference on
+`wm_snapshot.c`, whose changed code never runs there (counted): the
+layout, not the work. On the Black Pill at 104 KB CoreMark still runs out
+of memory, not for records (no function went in place) but where a
+slice's fuel ends inside a segment and the translator needs memory for
+the function's tail: a program with 64 KB of memory and an 8 KB stack is
+at that board's limit.
 
