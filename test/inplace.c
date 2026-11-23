@@ -54,15 +54,27 @@ static WmResult resolve(void* c, const char* mo, uint32_t ml, const char* name, 
     return NULL;
 }
 
-/* Records from the C library, or none at all while refusing. */
-static void* code_allocator(void* ptr, size_t size)
+/* Every block the engine holds, counted, so the test sees a leak on any platform. */
+static long g_blocks;
+
+static void* counted(void* ptr, size_t size)
 {
+    void* moved;
     if (!size)
     {
+        g_blocks -= ptr != NULL;
         free(ptr);
         return NULL;
     }
-    return g_refusing ? NULL : realloc(ptr, size);
+    moved = realloc(ptr, size);
+    g_blocks += moved && !ptr;
+    return moved;
+}
+
+/* Records counted too, or none at all while refusing. */
+static void* code_allocator(void* ptr, size_t size)
+{
+    return size && g_refusing ? NULL : counted(ptr, size);
 }
 
 static WmResult put(void* context, const void* data, uint32_t size)
@@ -197,7 +209,9 @@ int main(int argc, char** argv)
     FILE* f = fopen(argc > 1 ? argv[1] : "test/code.wasm", "rb");
     uint32_t size = f ? (uint32_t)fread(bytes, 1, sizeof(bytes), f) : 0;
     WmModule* module = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt;
+    wm_set_allocator(counted);
+    rt = wm_runtime_new(64u * 1024u, 100u);
     if (f)
         fclose(f);
     g_back = wm_host_function_new(i32, 1, i32, 1, host_back, NULL);
@@ -306,6 +320,11 @@ int main(int argc, char** argv)
     }
     wm_runtime_free(rt);
     wm_host_function_free(g_back);
+    {
+        char line[64];
+        snprintf(line, sizeof(line), "everything given back (%ld blocks held)", g_blocks);
+        check(g_blocks == 0, line);
+    }
     printf("%s\n", g_failures ? "FAILED" : "all passed");
     return g_failures != 0;
 }
