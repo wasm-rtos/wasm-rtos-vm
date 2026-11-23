@@ -633,15 +633,15 @@ static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32
     uint32_t b;
     WmTable* t = NULL;
 #endif
-    if (sub == 8u || sub == 9u || sub == 12u || sub == 13u)
+    if (sub == WM_FC_MEMORY_INIT || sub == WM_FC_DATA_DROP || sub == WM_FC_TABLE_INIT || sub == WM_FC_ELEM_DROP)
         a = imm_u32(pc);
 #if WM_HAS_REF_TYPES
-    if (sub >= 12u && sub != 13u)
+    if (sub >= WM_FC_TABLE_INIT && sub != WM_FC_ELEM_DROP)
         t = inst->tables[imm_u32(pc)];
 #endif
     switch (sub)
     {
-        case 8: /* memory.init */
+        case WM_FC_MEMORY_INIT:
         {
             const WmDataSegment* s = &inst->module->datas[a];
             uint32_t n = sp[-1], src = sp[-2], dst = sp[-3];
@@ -659,20 +659,20 @@ static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32
 #endif
             break;
         }
-        case 9: inst->data_dropped[a] = 1; break;
-        case 10: /* memory.copy */
-        case 11: /* memory.fill */
+        case WM_FC_DATA_DROP: inst->data_dropped[a] = 1; break;
+        case WM_FC_MEMORY_COPY:
+        case WM_FC_MEMORY_FILL:
         {
             uint32_t n = sp[-1], src = sp[-2], dst = sp[-3];
-            *pc += sub == 10u ? 2 : 1;
+            *pc += sub == WM_FC_MEMORY_COPY ? 2 : 1;
             sp -= 3;
-            if (wm_out_of_bounds(dst, n, mem_size) || (sub == 10u && wm_out_of_bounds(src, n, mem_size)))
+            if (wm_out_of_bounds(dst, n, mem_size) || (sub == WM_FC_MEMORY_COPY && wm_out_of_bounds(src, n, mem_size)))
                 return trapped(trap, T_OOB_MEMORY);
 #if WM_HAS_MMU
-            if ((result = sub == 10u ? wm_memory_copy(memory, dst, src, n) : wm_memory_fill(memory, dst, (uint8_t)src, n)))
+            if ((result = sub == WM_FC_MEMORY_COPY ? wm_memory_copy(memory, dst, src, n) : wm_memory_fill(memory, dst, (uint8_t)src, n)))
                 return trapped(trap, result);
 #else
-            if (sub == 10u)
+            if (sub == WM_FC_MEMORY_COPY)
                 memmove(memory->data + dst, memory->data + src, n);
             else
                 memset(memory->data + dst, (int)(uint8_t)src, n);
@@ -680,12 +680,12 @@ static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32
             break;
         }
 #if WM_HAS_REF_TYPES
-        case 12: /* table.init */
+        case WM_FC_TABLE_INIT:
             sp -= 3;
             result = wm_table_init(inst, a, t, sp[0], sp[1], sp[2]);
             break;
-        case 13: inst->elem_dropped[a] = 1; break;
-        case 14: /* table.copy */
+        case WM_FC_ELEM_DROP: inst->elem_dropped[a] = 1; break;
+        case WM_FC_TABLE_COPY:
         {
             WmTable* src_table = inst->tables[imm_u32(pc)];
             uint32_t n = sp[-1], src = sp[-2], dst = sp[-3];
@@ -695,14 +695,14 @@ static uint32_t* misc(WmInstance* inst, uint32_t sub, const uint8_t** pc, uint32
             memmove(t->elems + dst, src_table->elems + src, (size_t)n * sizeof(uintptr_t));
             break;
         }
-        case 15: /* table.grow */
+        case WM_FC_TABLE_GROW:
             b = *--sp;
             sp -= WM_REF_SLOTS;
             *sp = grow_table(t, b, get_ref(sp));
             ++sp;
             break;
-        case 16: *sp++ = t->size; break;
-        case 17: /* table.fill */
+        case WM_FC_TABLE_SIZE: *sp++ = t->size; break;
+        case WM_FC_TABLE_FILL:
         {
             uintptr_t value;
             b = *--sp;

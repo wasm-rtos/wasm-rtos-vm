@@ -164,17 +164,17 @@ static const uint8_t* step(const WmCode* code, const uint8_t* p, uint32_t* cells
         case WM_OP_PREFIX_FC:
         {
             uint32_t sub = leb_u32(&p);
-            if (sub <= 7u)
+            if (sub <= WM_FC_I64_TRUNC_SAT_F64_U)
                 break;
             /* The rest keep their immediates in the module: a record of the opcode and where they are. */
             *cells = 2;
             switch (sub)
             {
-                case 8: leb_u32(&p); ++p; break;
-                case 10: p += 2; break;
-                case 11: ++p; break;
-                case 12:
-                case 14: leb_u32(&p); leb_u32(&p); break;
+                case WM_FC_MEMORY_INIT: leb_u32(&p); ++p; break;
+                case WM_FC_MEMORY_COPY: p += 2; break;
+                case WM_FC_MEMORY_FILL: ++p; break;
+                case WM_FC_TABLE_INIT:
+                case WM_FC_TABLE_COPY: leb_u32(&p); leb_u32(&p); break;
                 default: leb_u32(&p);
             }
             break;
@@ -1022,7 +1022,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             {
                 uint32_t sub = leb_u32(&p);
                 reg_flush(o);
-                if (sub <= 7u)
+                if (sub <= WM_FC_I64_TRUNC_SAT_F64_U)
                 {
                     reg_head(o, WM_R_SAT, sub);
                     reg_put(o, top);

@@ -730,8 +730,8 @@ static void validate_misc(Validator* v)
     }
     switch (op)
     {
-        case 8: /* memory.init */
-        case 9: /* data.drop */
+        case WM_FC_MEMORY_INIT:
+        case WM_FC_DATA_DROP:
             a = read_u32(r);
             if (op == 8u)
             {
@@ -744,15 +744,15 @@ static void validate_misc(Validator* v)
                 fail(r, WM_ERR_INVALID("invalid: unknown data segment"));
             three = op == 8u;
             break;
-        case 10: /* memory.copy */
+        case WM_FC_MEMORY_COPY:
             read_zero(r);
             /* fall through */
-        case 11: /* memory.fill */
+        case WM_FC_MEMORY_FILL:
             read_zero(r);
             need_memory(v);
             break;
-        case 12: /* table.init */
-        case 13: /* elem.drop */
+        case WM_FC_TABLE_INIT:
+        case WM_FC_ELEM_DROP:
             a = read_u32(r);
             b = op == 12u ? read_table_index(v) : WM_NONE;
             if (a >= m->elem_count)
@@ -761,23 +761,23 @@ static void validate_misc(Validator* v)
                 REJECT(r, E_MISMATCH);
             three = op == 12u;
             break;
-        case 14: /* table.copy */
+        case WM_FC_TABLE_COPY:
             a = read_table_index(v);
             b = read_table_index(v);
             if (table_type(v, a) != table_type(v, b))
                 REJECT(r, E_MISMATCH);
             break;
-        case 15: /* table.grow */
+        case WM_FC_TABLE_GROW:
             a = read_table_index(v);
             pop_expect(v, WM_I32);
             pop_expect(v, table_type(v, a));
             push(v, WM_I32);
             return;
-        case 16: /* table.size */
+        case WM_FC_TABLE_SIZE:
             read_table_index(v);
             push(v, WM_I32);
             return;
-        case 17: /* table.fill */
+        case WM_FC_TABLE_FILL:
             a = read_table_index(v);
             pop_expect(v, WM_I32);
             pop_expect(v, table_type(v, a));
