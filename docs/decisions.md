@@ -1438,3 +1438,145 @@ in it. Larger tests later (fuzzing the allocator, every platform).
 | 4 | The kernel takes code from the high end when the heap is in use | wasm-rtos |
 | 5 | Black Pill on `wm_heap`, CoreMark measured, experiments.md | port |
 
+
+## 21. A function runs in place by itself: when its records find no room, and when the host asks
+
+**Proposed (2026-11-23).** The user asked for the second case: «чтобы
+если задача была типа не важной или idle подобной ее можно было чисто
+так выполнять», with one API the same on every board, the Uno included,
+changeable while the program runs.
+
+### Problem
+
+1. **A call fails for want of records.** On the Black Pill with
+   `wm_heap` at 104 KB (decision 20, docs/experiments.md "The engine's
+   heap on the Black Pill"), CoreMark is predecoded at load, and during
+   the run a function's records find no room once the program's 64 KB
+   memory, its 8 KB stack and the other functions' records are in. The
+   code cache drops what it can (`wm_code_drop_one`, on every allocation
+   path already), but the code left belongs to the functions on the call
+   stack, so `wm_code_load` returns "exhaustion" and the call fails. The
+   choice between the register loop and the loop in place is made per
+   module at load, not per function when room runs out.
+2. **Every task's code costs the same.** A task of no importance (a
+   kernel's idle task, a background job) makes records like any other:
+   it takes memory from the code cache and time to translate, and can
+   push out the records of tasks that matter.
+
+### Decision
+
+**1. A function whose records find no room runs in place, by itself.**
+`wm_code_load` failing with "exhaustion" is no longer the call's end:
+the function runs in the loop in place, over the module's bytes, with
+the side table entries of that function only (`wm_code_side`), while the
+other functions keep their records. The two loops already meet inside
+one function (`mixed`: fuel ending inside a segment, a page still being
+read, a snapshot); this adds the whole function as the unit. A call out
+of it goes to the register loop when the callee has records, and back.
+Only when even the side table entries find no room does the call fail.
+
+**2. One bit on the runtime: whether its calls may make records.**
+
+```c
+/*
+ * Whether calls on this runtime may make records (decision 21); 1 by
+ * default. With 0 they use the records other runtimes made and run the
+ * rest in place, taking no memory and no time from the others for code.
+ * The same results and fuel either way. Can change at any time, also
+ * from a host function or between slices of a suspended call; takes
+ * effect at the next call of a function without records. Does nothing
+ * in builds without predecoding, where everything runs in place.
+ */
+void wm_set_makes_code(WmRuntime* runtime, int makes);
+```
+
+The bit is read in one place, where a function without records is about
+to get them (`wm_code_load`): there, "not allowed" and "no room" take
+the same branch to the loop in place, except that "not allowed" never
+drops others' code to make room. The name may change before the API
+list is frozen (the user: «оставим как есть пока»).
+
+**3. Back to records on resume (second step).** A function running in
+place when the bit turns to 1 keeps running in place until it returns;
+a task whose `main` is an endless loop would stay slow. On resume after
+a slice, the engine moves the stopped function to its records when the
+bit is 1 and they fit, with the position mapping snapshots already use
+(`to_record`, wm_snapshot.c). Same fuel, same results.
+
+**4. The kernel: idle does not make code.** One line where the
+scheduler starts a slice (sched.c, beside `wm_set_fuel`):
+
+```c
+wm_set_makes_code(task->wasm_runtime, task->priority > OS_TASK_PRIORITY_IDLE);
+```
+
+There it follows every change of priority by itself: `os_task_set_priority`,
+priority inherited through a mutex (an idle task holding a mutex a high
+task waits for gets records while it holds it, which is what inheritance
+is for), and a restored snapshot.
+
+**Uno.** `WM_PREDECODE 0`: the same function with an empty body; the
+kernel's line is the same. Nothing else changes there.
+
+### Why
+
+Engines with two tiers run each function in one of them and move
+between them: the JVM and .NET run a method interpreted until it earns
+compiled code, can be told to stay interpreted (`-Xint`, per method in
+.NET), and move a running method between tiers in the middle (on-stack
+replacement, as JavaScript engines do too). Our register loop is the
+upper tier; the loop in place is the lower one, which also needs almost
+no memory. What is new here is only who decides: memory (case 1) and
+the host (case 2), with mechanism in the engine and policy in the
+kernel, as everywhere else.
+
+### Instead
+
+- **A mode with three values** (fast / shared / in place, with a getter):
+  "fast" is just the default, "always in place" is only for tests, which
+  have the build without predecoding; the host knows what it set.
+- **No API: the kernel gives the idle task a code allocator that refuses**:
+  the engine answers a refusal by dropping others' code
+  (`wm_code_drop_one`), the opposite of what is wanted; it must know
+  "not allowed" from "no room".
+- **Per module at load, as now**: one large function forces the whole
+  module in place (Black Pill at 94 KB: 2.52 for all of CoreMark).
+- **A budget of bytes per runtime**: wider, but needs counting records
+  per runtime while they are shared between them; only 0 or "as memory
+  allows" is needed now.
+
+### Checks
+
+- The same module in the three ways (records, every function in place
+  by the bit, records refused at random by a test allocator) gives the
+  same results and **the same fuel to the instruction**, also with a
+  snapshot in the middle restored the other way; the spec tests run with
+  records refused (`check.sh`).
+- With the bit 0, `wm_code_cache_bytes()` does not grow and others'
+  records stay.
+- A call whose records find no room goes on in place (test allocator;
+  Black Pill CoreMark at 104 KB, measured).
+- Step 3: a task whose bit turns to 1 in the middle of an endless loop
+  speeds up, the fuel the same.
+- The Uno builds the same kernel line; flash grows by no more than a few
+  bytes (AVR size check).
+
+### Open
+
+- Frames: the loop in place and the register loop must agree on a
+  frame at a call between them; `mixed` does so inside one function, to
+  check for calls both ways before building.
+- How much the side table entries of one function take, against its
+  records (to measure: CoreMark, the largest functions).
+
+### Work, all of it
+
+| # | What | Where |
+|---|---|---|
+| 1 | This decision | docs |
+| 2 | Function in place when records find no room; calls between the loops | source |
+| 3 | `wm_set_makes_code`, the bit in `WmRuntime`, the API list | source, docs |
+| 4 | Tests: three ways the same, fuel, refusing allocator, spec with refusals | test, tools |
+| 5 | Back to records on resume | source, test |
+| 6 | The kernel's line, a kernel test with an idle task | wasm-rtos, tests |
+| 7 | Black Pill CoreMark at 104 KB, ESP32 unchanged, experiments.md | port |
