@@ -189,8 +189,6 @@ static int make_room(void)
     return evict_one();
 }
 
-static int is_exhaustion(WmResult result) { return result && !strncmp(result, "exhaustion", 10); }
-
 /*
  * The area (decision 18): records live in chunks of the code allocator.
  * A chunk holds spans one after another from its start to its top: a span
@@ -810,7 +808,7 @@ WmResult wm_code_make(WmModule* m, WmCode* code, const WmSide* side)
         if (side || !(result = wm_code_side(m, (uint32_t)(code - m->codes), &made)))
             result = wm_predecode(m, code, side ? side : made);
         wm_free(made);
-    } while (is_exhaustion(result) && make_room());
+    } while (result && !strncmp(result, "exhaustion", 10) && make_room());
     --code->pinned;
     pin_stacks(0);
     if (!result)

@@ -1193,13 +1193,6 @@ uint32_t wm_reg_sides_before(const WmModule* m, const WmCode* code, uint32_t off
     return count;
 }
 
-/*
- * Run make again while the heap refuses it and the code cache can let
- * something go (wm_code_drop_one), as wm_code_make does for records: code
- * stays meanwhile, with the functions on the stacks.
- */
-static int out_of_room(WmResult result) { return result && !strncmp(result, "exhaustion", 10); }
-
 /* The function's side table entries, from 0, in a tail without the translator's entries yet. */
 static WmResult reg_side_make(WmModule* m, WmCode* code)
 {
@@ -1246,7 +1239,8 @@ static WmResult reg_tail_make(WmModule* m, WmCode* code, int entries)
     while (!code->tail || (entries && !code->tail->translated))
     {
         result = code->tail ? reg_entries_make(m, code) : reg_side_make(m, code);
-        if (result && !(out_of_room(result) && wm_code_drop_one()))
+        /* The heap refused: again while the code cache can let something go, as wm_code_make does for records. */
+        if (result && !(!strncmp(result, "exhaustion", 10) && wm_code_drop_one()))
             break;
     }
     --code->pinned;
@@ -1328,7 +1322,8 @@ WmResult wm_reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t* fp,
 {
     WmResult result;
     ++code->pinned;
-    while (out_of_room(result = reg_stack_at(m, code, cell, fp, offset, top)) && wm_code_drop_one())
+    while ((result = reg_stack_at(m, code, cell, fp, offset, top)) && !strncmp(result, "exhaustion", 10) &&
+           wm_code_drop_one())
         ;
     --code->pinned;
     return result;
