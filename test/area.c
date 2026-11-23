@@ -10,14 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../source/wm_internal.h"
+#include "test.h"
 
-static int g_failures;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 /* The code allocator: counts the bytes it holds; with g_move_on_shrink every smaller size gets a new address. */
 static size_t g_heap, g_limit = (size_t)-1;
@@ -224,6 +218,5 @@ int main(void)
     g_limit = (size_t)-1;
     check(g_heap == 0 && wm_code_area_bytes() == 0, "all given back");
 
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

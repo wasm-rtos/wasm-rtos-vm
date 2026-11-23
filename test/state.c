@@ -6,17 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static uint8_t g_image[1 << 16];
 static uint32_t g_length, g_at;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static WmResult put(void* context, const void* data, uint32_t size)
 {
@@ -36,12 +29,6 @@ static WmResult get(void* context, void* data, uint32_t size)
     memcpy(data, g_image + g_at, size);
     g_at += size;
     return NULL;
-}
-
-static WmFunc* export_func(WmInstance* inst, const char* name)
-{
-    WmExtern f;
-    return wm_instance_export(inst, name, (uint32_t)strlen(name), &f) ? NULL : f.as.func;
 }
 
 int main(int argc, char** argv)
@@ -104,6 +91,5 @@ int main(int argc, char** argv)
     wm_instance_free(inst);
     wm_module_free(module);
     wm_runtime_free(rt);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures ? 1 : 0;
+    return summary();
 }

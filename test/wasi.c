@@ -2,20 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 #include "../source/wm_wasi.h"
 
-static int g_failures;
 static char g_out[64];
 static uint32_t g_out_length, g_slept;
 static const char g_exited[] = "test: exited";
 static uint32_t g_code;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static uint64_t now_ns(void* context, uint32_t clock)
 {
@@ -127,6 +120,5 @@ int main(void)
     wm_module_free(g_module);
     wm_runtime_free(rt);
     wm_wasi_free();
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

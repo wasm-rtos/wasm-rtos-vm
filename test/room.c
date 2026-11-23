@@ -8,17 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static size_t g_used;
 static size_t g_limit = (size_t)-1;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 /* realloc with the size in front, refusing what would pass g_limit. */
 static void* counted(void* ptr, size_t size)
@@ -118,12 +111,6 @@ static uint32_t make_module(uint8_t* out)
     return (uint32_t)(p - out);
 }
 
-static WmFunc* export_func(WmInstance* inst, const char* name)
-{
-    WmExtern f;
-    return wm_instance_export(inst, name, (uint32_t)strlen(name), &f) ? NULL : f.as.func;
-}
-
 int main(void)
 {
     static uint8_t bytes[200000];
@@ -170,6 +157,5 @@ int main(void)
     wm_module_free(module);
     wm_runtime_free(rt);
     check(g_used == 0, "everything given back");
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

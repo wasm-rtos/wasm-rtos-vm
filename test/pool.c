@@ -11,11 +11,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
 #define POOL 24u
 
-static int g_failures;
 static uint8_t* g_slots[1024];
 static uint32_t g_next_slot;
 static int g_allow_blocks;
@@ -23,12 +22,6 @@ static WmMemory* g_other;
 static WmMemory* g_program_memory;
 static WmResult g_between_result;
 static int g_pointer_kept;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static int reserve(void* context, int32_t frames) { (void)context, (void)frames; return 1; }
 static int room(void* context, int again) { (void)context; return !again; }
@@ -104,12 +97,6 @@ static WmResult resolve(void* c, const char* mo, uint32_t ml, const char* n, uin
     out->kind = k;
     out->as.func = g_between;
     return NULL;
-}
-
-static WmFunc* export_func(WmInstance* inst, const char* name)
-{
-    WmExtern f;
-    return wm_instance_export(inst, name, (uint32_t)strlen(name), &f) ? NULL : f.as.func;
 }
 
 int main(int argc, char** argv)
@@ -245,6 +232,5 @@ int main(int argc, char** argv)
     for (uint32_t i = 0; i < g_next_slot; ++i)
         free(g_slots[i]);
     free(pool);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

@@ -2,18 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static size_t g_block_limit = (size_t)-1;
 /* How many more allocations succeed, like a heap that is running out; -1: no end. */
 static long g_allocations_left = -1;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 /* The heap with no block larger than g_block_limit, like a fragmented one. */
 static void* limited(void* ptr, size_t size)
@@ -154,6 +147,5 @@ int main(int argc, char** argv)
     wm_instance_free(inst);
     wm_module_free(module);
     wm_runtime_free(rt);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures ? 1 : 0;
+    return summary();
 }

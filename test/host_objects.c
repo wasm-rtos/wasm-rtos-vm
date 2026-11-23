@@ -4,15 +4,8 @@
  * byte back (run under AddressSanitizer).
  */
 #include <stdio.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 int main(void)
 {
@@ -31,6 +24,5 @@ int main(void)
     wm_table_free(NULL);
     wm_global_free(NULL);
     check(1, "freed, NULL too");
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }
