@@ -252,11 +252,20 @@ typedef struct
     uint32_t slot;
 } RegValue;
 
+/*
+ * Values a translation keeps pending (copy propagation) before it writes
+ * them to their slots: past this many it writes the oldest; few blocks
+ * of real code keep more.
+ */
+#ifndef WM_REG_PENDING
+#define WM_REG_PENDING 128u
+#endif
+
 typedef struct
 {
     WmCell* cells;
     uint32_t count, capacity;
-    RegValue pend[256];
+    RegValue pend[WM_REG_PENDING];
     uint32_t pending;
     /* The cell of the last record written and the slot its result went to, or UINT32_MAX. */
     uint32_t last;
@@ -265,6 +274,8 @@ typedef struct
     uint8_t kind;
     /* Translated again only for its places (WmTail): the cells are not kept. */
     uint8_t scratch;
+    /* Cells to reserve at first: about what the body's bytes become. */
+    uint32_t hint;
     uint32_t base;
     const uint16_t* handlers;
     WmResult error;
@@ -279,16 +290,42 @@ typedef struct
     uint8_t in_head;
 } RegFixup;
 
+/*
+ * A translation only for its places (a tail) keeps the last cells only, in
+ * a ring: it reads back no more than the last record, and its cells are
+ * let go anyway. The indices stay those of the records.
+ */
+#define REG_WINDOW 256u
+#define REG_CELL(o, i) ((o)->cells[(o)->scratch ? ((i) & (REG_WINDOW - 1u)) : (i)])
+
 static void reg_put(RegOut* o, uint32_t value)
 {
     if (o->error)
         return;
+    if (o->scratch)
+    {
+        if (!o->cells && !(o->cells = (WmCell*)wm_malloc(REG_WINDOW * sizeof(WmCell))))
+        {
+            o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
+            return;
+        }
+        REG_CELL(o, o->count).u32 = value;
+        ++o->count;
+        return;
+    }
     if (o->count == o->capacity)
     {
-        uint32_t capacity = o->capacity ? o->capacity * 2u : 256u;
-        /* Records to keep grow in the code cache's memory; a translation only for its places, in the engine's. */
-        WmCell* grown = (WmCell*)(o->scratch ? wm_realloc(o->cells, capacity * sizeof(WmCell))
-                                             : wm_code_realloc(o->cells, capacity * sizeof(WmCell)));
+        /* Records are written straight into the code area (decision 18): first as many as the body suggests. */
+        uint32_t capacity = o->capacity ? o->capacity * 2u : o->hint;
+        WmCell* grown;
+        if (capacity > 0x8000u)
+            capacity = 0x8000u;
+        if (capacity <= o->capacity)
+        {
+            o->error = E_DOES_NOT_FIT;
+            return;
+        }
+        grown = o->cells ? wm_area_grow(capacity) : wm_area_begin(capacity);
         if (!grown)
         {
             o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
@@ -353,7 +390,7 @@ static int reg_fused_compare(RegOut* o, int negate, uint8_t* kind, uint32_t* ope
             if (compares[i][shape] == o->last_kind)
             {
                 uint32_t c = i;
-                *operands = o->cells[o->last + 1u].u32;
+                *operands = REG_CELL(o, o->last + 1u).u32;
                 if (negate)
                 {
                     if (i == 0)
@@ -531,9 +568,9 @@ struct RegFind
     uint32_t cell;
     int found;
     uint32_t offset, height, pending;
-    RegValue pend[256];
+    RegValue pend[WM_REG_PENDING];
     /* What was pending before an access, while looking for it: kept here, not on the stack. */
-    RegValue before[256];
+    RegValue before[WM_REG_PENDING];
 };
 
 static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmTail* tail, RegFind* find)
@@ -560,6 +597,8 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     o->last = UINT32_MAX;
     o->base = B;
     o->scratch = tail != NULL;
+    /* About half a cell per byte of the body (CoreMark: 15.3 KB of records for 7.3 KB of code); it grows if not. */
+    o->hint = (uint32_t)(code->end - code->body) / 2u + 16u;
     if (!o->handlers)
         o->error = WM_ERR_UNSUPPORTED("unsupported: handlers too far apart for predecoding");
     /* The instructions, and the labels: where branches land, so the frame there must be the stack machine's. */
@@ -662,7 +701,8 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
             {
                 if (seg_count > 0xFFFFu)
                     o->error = WM_ERR_UNSUPPORTED("unsupported: a segment too long for the register loop");
-                o->cells[seg_cell].u32 = (o->cells[seg_cell].u32 & 0xFFFFu) | (seg_count << 16);
+                if (!o->scratch)
+                    o->cells[seg_cell].u32 = (o->cells[seg_cell].u32 & 0xFFFFu) | (seg_count << 16);
             }
             reg_flush(o);
             seg_cell = o->count;
@@ -880,7 +920,7 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
                             read |= o->pend[i].kind == P_LOCAL && o->pend[i].value == slot;
                         if (!read)
                         {
-                            o->cells[o->last].u32 = (o->cells[o->last].u32 & 0xFFFFu) | (slot << 16);
+                            REG_CELL(o, o->last).u32 = (REG_CELL(o, o->last).u32 & 0xFFFFu) | (slot << 16);
                             o->last = UINT32_MAX;
                             if (op == 0x22u)
                                 reg_push(o, P_LOCAL, slot, v.slot);
@@ -1105,9 +1145,9 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
 #undef FIXUP
 #undef FIXUP_HEAD
 #undef FIXUP_AT
-    if (seg_cell != UINT32_MAX && !o->error)
+    if (seg_cell != UINT32_MAX && !o->error && !o->scratch)
         o->cells[seg_cell].u32 = (o->cells[seg_cell].u32 & 0xFFFFu) | ((seg_count > 0xFFFFu ? 0xFFFFu : seg_count) << 16);
-    for (uint32_t i = 0; !o->error && i < fixup_count; ++i)
+    for (uint32_t i = 0; !o->error && !o->scratch && i < fixup_count; ++i)
     {
         const RegLabel* l = reg_label(labels, label_count, fixups[i].pc);
         if (!l || l->cell == UINT32_MAX)
@@ -1120,24 +1160,18 @@ static WmResult reg_translate(WmModule* m, WmCode* code, const WmSide* side, WmT
     }
     if (!o->error && o->count > 0x7FFFu)
         o->error = E_DOES_NOT_FIT;
-    if (!o->error && !tail)
+    if (!o->error && !tail && o->count)
     {
-        /* The cells were written in the code cache's memory: they become the records, cut to their size. */
-        WmCell* fit = (WmCell*)wm_code_realloc(o->cells, (size_t)o->count * sizeof(WmCell));
-        if (fit)
-        {
-            code->own = fit;
-            code->fast_cells = (uint16_t)o->count;
-            code->mapped = 0;
-            o->cells = NULL;
-        }
-        else
-            o->error = WM_ERR_EXHAUSTION("exhaustion: out of memory");
+        /* The cells were written in the code area: they become the records, cut to their size. */
+        code->own = wm_area_end(code, o->count);
+        code->fast_cells = (uint16_t)o->count;
+        code->mapped = 0;
+        o->cells = NULL;
     }
     if (o->scratch)
         wm_free(o->cells);
-    else
-        wm_code_free(o->cells);
+    else if (o->cells)
+        wm_area_cancel();
     wm_free(fixups);
     wm_free(heights);
     wm_free(labels);
@@ -1159,17 +1193,18 @@ uint32_t wm_reg_sides_before(const WmModule* m, const WmCode* code, uint32_t off
     return count;
 }
 
-/* What the loop in place needs to run part of a function that runs predecoded: made once, kept with its records. */
-WmResult wm_reg_tail(WmModule* m, WmCode* code, WmTail** out)
+/*
+ * Run make again while the heap refuses it and the code cache can let
+ * something go (wm_code_drop_one), as wm_code_make does for records: code
+ * stays meanwhile, with the functions on the stacks.
+ */
+static int out_of_room(WmResult result) { return result && !strncmp(result, "exhaustion", 10); }
+
+static WmResult reg_tail_make(WmModule* m, WmCode* code, WmTail** out)
 {
     uint32_t index = (uint32_t)(code - m->codes);
     WmTail* tail;
     WmResult result;
-    if (code->tail)
-    {
-        *out = code->tail;
-        return NULL;
-    }
     tail = (WmTail*)wm_calloc(1, sizeof(WmTail));
     if (!tail)
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
@@ -1183,6 +1218,22 @@ WmResult wm_reg_tail(WmModule* m, WmCode* code, WmTail** out)
     code->tail = tail;
     *out = tail;
     return NULL;
+}
+
+/* What the loop in place needs to run part of a function that runs predecoded: made once, kept with its records. */
+WmResult wm_reg_tail(WmModule* m, WmCode* code, WmTail** out)
+{
+    WmResult result;
+    if (code->tail)
+    {
+        *out = code->tail;
+        return NULL;
+    }
+    ++code->pinned;
+    while (out_of_room(result = reg_tail_make(m, code, out)) && wm_code_drop_one())
+        ;
+    --code->pinned;
+    return result;
 }
 
 void wm_reg_tail_free(WmTail* tail)
@@ -1214,7 +1265,7 @@ const WmTailEntry* wm_reg_entry(const WmTail* tail, uint32_t offset)
  * pending there goes into its slots, and the access's offset and the
  * stack's top (fp-relative) come back. The function is translated again.
  */
-WmResult wm_reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top)
+static WmResult reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top)
 {
     RegFind* find = (RegFind*)wm_calloc(1, sizeof(RegFind));
     WmTail scratch;
@@ -1238,6 +1289,16 @@ WmResult wm_reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t* fp,
         *top = type->param_slots + code->local_slots + find->height;
     }
     wm_free(find);
+    return result;
+}
+
+WmResult wm_reg_stack_at(WmModule* m, WmCode* code, uint32_t cell, uint32_t* fp, uint32_t* offset, uint32_t* top)
+{
+    WmResult result;
+    ++code->pinned;
+    while (out_of_room(result = reg_stack_at(m, code, cell, fp, offset, top)) && wm_code_drop_one())
+        ;
+    --code->pinned;
     return result;
 }
 

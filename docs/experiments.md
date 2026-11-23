@@ -666,6 +666,115 @@ them in if there is room by then.
 round, and it sent those functions back to stop the loop at their next
 call, again and again. `wm_code_cache_trim` lets them go instead.
 
+### Records in an area of their own, on the Black Pill
+
+**Built, not enough alone** · 2026-11-22 (decision 18)
+
+**Tried.** Records in chunks of the code allocator, compacted when there
+are holes, with tails in a window of cells and memory before code giving
+the heap whole chunk tops back.
+
+| Black Pill, in the OS (heap 110 KB) | Result |
+|---|---|
+| The system's other 17 checks | pass, nothing leaked |
+| CoreMark | out of memory: `resume: exhaustion` |
+| Chunks refused while it ran | 281 (2.6 to 7.5 KB, with 3 to 12 KB free in pieces) |
+| Register translation buffers refused | 99 (1 to 2 KB) |
+| Least free heap during the run | 4 756 B |
+| The area after the run | 0 B: everything given back |
+
+**Found.** The area does what it says: it compacts, cuts and gives back,
+and holds nothing once CoreMark is gone (`test/area.c` and the spec suite
+with code moved at every allocation agree). What it cannot do is make the
+rest of the heap whole: the program's memory, stacks and the translator's
+buffers leave free bytes in pieces too small for a chunk, so the records
+CoreMark needs at once do not fit in 110 KB. The spec suite (27 437
+checks) and the kernel's tests (1 734) pass with it; the ESP32 and Mac
+CoreMark are not measured yet.
+
+**Next.** A function with no room runs from its bytecode in place (the
+loop that already exists for it), so a call never fails for records; or
+smaller tails; or records kept in the board's flash (a code store).
+
+### The engine's heap on the Black Pill
+
+**Kept: holes gone; not enough memory for CoreMark's records** · 2026-11-22 (decision 20)
+
+**Tried.** The whole system's `malloc` from `wm_heap` over one static
+block, code from its top.
+
+| Black Pill, in the OS | newlib's heap | `wm_heap`, 94 KB | `wm_heap`, 104 KB |
+|---|---|---|---|
+| Allocations refused | 514 | 0 | 0 |
+| Free after CoreMark loads | — | 11.7 KB | 26.4 KB |
+| CoreMark | out of memory | 2.52, every function in place | out of memory during the run |
+| Least free during the run | 4.8 KB | 11.7 KB | 3.8 KB |
+| Other checks, leaks | 17/17, none | 17/17, none | 17/17, none |
+
+**Found.** The heap does its part: no allocation is refused while memory
+is free, and everything comes back to one piece. With 94 KB the module
+is judged too large to predecode when it loads and runs in place whole
+(2.52, correct but slow). With 104 KB it is predecoded, and during the
+run a function's records find no room once the program's 64 KB memory,
+its 8 KB stack and the other functions' records are in: the call fails
+instead of going on. Moving to the bytecode loop is decided per module,
+at load, not per function when room runs out.
+
+**Next.** A function whose records find no room runs in place, by
+itself, while the others keep theirs (a decision of its own): then a
+call never fails for want of records, and CoreMark runs at whatever
+speed the memory allows.
+
+### Values the register translator keeps pending
+
+**Kept: 128** · 2026-11-22 (decision 18 branch)
+
+**Tried.** How many operands the translator holds before it writes them
+to slots (`WM_REG_PENDING`), each 12 bytes, twice (pending and a copy),
+in the heap while a function is translated. CoreMark in the system on an
+ESP32 (each result the same on every run):
+
+| Pending | Translator's buffers | CoreMark |
+|---:|---:|---:|
+| 256 (main before) | 6 KB | 21.55 on main, 22.27 here |
+| 128 | 3 KB | **22.38** |
+| 64 | 1.5 KB | 21.17 (−1.8% against main) |
+
+**Found.** With 64, CoreMark's longer expressions are written out early
+and run slower; 128 is as fast as 256 at half its memory. With the code
+area this branch is 3.9% faster than main on the ESP32; the loop's
+machine code is the same byte for byte, so the gain is in the records.
+
+### The heap on the board checks' own allocations
+
+**Kept: a boundary for code, a control sized to the heap; not kept: slabs** · 2026-11-22 (decision 20)
+
+**Tried.** The board checks (the same as on the Black Pill and the ESP32)
+run on a computer with the whole system's memory from `wm_heap`, every
+allocation recorded (`test/heap-trace.txt`, 14 991 calls) and replayed by
+`tools/heap-replay`. The measure that says whether a board fits: the
+smallest heap the trace runs in with nothing refused (its live data peak
+at 99.8 KB).
+
+| Heap | Smallest heap that fits | Lost to headers and holes |
+|---|---:|---:|
+| First version | 107.0 KB | 7.2 KB |
+| Code kept above a boundary, blocks of code shrinking by their bottom, control sized to the heap | **105.0 KB** | **5.2 KB (−28%)** |
+
+**Found.**
+- Ordinary blocks taken among the code were the holes; keeping them
+  below the lowest block of code, and having code shrink upwards, gives
+  2 KB back. The control for a 104 KB heap is 0.7 KB instead of 1.2.
+- At the peak only 38 blocks are live, 17 of them small: slabs for small
+  sizes would save about 136 bytes on a 32-bit board. Not built.
+- "How whole the free memory stays" measured while allocations are
+  refused depends on which ones are refused, so it moves between runs;
+  the smallest heap that fits does not.
+- The checks need a 120 KB heap on a computer for CoreMark to keep its
+  records (pointers are 8 bytes there); on the Black Pill 104 KB is not
+  enough. The heap loses 5% to itself: the rest is memory the system
+  needs, which a heap cannot give.
+
 ## Checks
 
 ### Writing the fuel back at every trap

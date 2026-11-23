@@ -1748,7 +1748,7 @@ void wm_module_predecode(WmModule* m)
     for (uint32_t i = 0; !predecoded && !m->image && i < defined; ++i)
     {
         predecoded = wm_code_make(m, &m->codes[i], m->side + m->codes[i].side);
-        wm_code_free(m->codes[i].own);
+        wm_area_free(m->codes[i].own);
         m->codes[i].fast = NULL;
         m->codes[i].fast_cells = 0;
     }

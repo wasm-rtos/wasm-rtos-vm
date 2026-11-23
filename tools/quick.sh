@@ -20,6 +20,10 @@ for mode in "" "-DWM_FUSE=1" -DWM_PREDECODE=0 -DWM_MEMORY_ALWAYS_PAGED=1 -DWM_SP
     python3 tools/spec.py build/quick-spec "$SPEC" > /dev/null && echo "spec:          ok ${mode:-(predecoded)}" ||
         { echo "spec:          FAIL $mode"; fail=1; }
 done
+cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/heap.c -lm -o build/quick-heap || exit 1
+build/quick-heap >/dev/null && echo "heap:          ok" || { echo "heap:          FAIL"; fail=1; }
+cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c test/area.c -lm -o build/quick-area || exit 1
+build/quick-area >/dev/null && echo "code area:     ok" || { echo "code area:     FAIL"; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address -DWM_CHECKS=1 source/*.c test/image.c -lm -o build/quick-image || exit 1
 build/quick-image > /dev/null && echo "code images:   ok" || { echo "code images:   FAIL"; fail=1; }
 xxd -i test/fuzz/snapshot.wasm > build/snapshot_wasm.h

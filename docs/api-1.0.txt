@@ -28,6 +28,7 @@ WmSnapshotWrite
 WmTable
 wm_call
 wm_call_depth
+wm_code_area_bytes
 wm_code_cache_bytes
 wm_code_cache_limit
 wm_code_cache_trim
@@ -121,3 +122,18 @@ wm_dylink_free
 wm_dylink_instance
 wm_dylink_load
 wm_module_is_dylink
+
+# source/wm_heap.h
+WmHeap
+WmHeapStats
+wm_heap_allocator
+wm_heap_check
+wm_heap_code_allocator
+wm_heap_current
+wm_heap_free
+wm_heap_malloc
+wm_heap_malloc_high
+wm_heap_new
+wm_heap_realloc
+wm_heap_stats
+wm_heap_use

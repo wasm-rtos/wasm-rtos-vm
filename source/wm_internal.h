@@ -428,7 +428,7 @@ typedef struct WmCode
     };
     /* At most 0x7FFF: a longer function is not predecoded. */
     uint16_t fast_cells;
-    /* For the code cache's CLOCK: called since the hand last passed; on a call stack right now. */
+    /* For the code cache's CLOCK: called since the hand last passed; pinned (a count): on a call stack, or being made. */
     uint8_t used;
     uint8_t pinned;
     /* fast points into the code image: nothing to free, not counted in the cache. */
@@ -871,6 +871,20 @@ typedef struct WmCodeStack
 WmResult wm_code_stack(const WmModule* module, uint32_t index, uint32_t offset, WmCodeStack* out);
 /* One function's records dropped, by CLOCK, for an allocation the heap refused; 0 when none can go. */
 int wm_code_drop_one(void);
+/*
+ * The code area (decision 18, wm_code.c): records in chunks of the code
+ * allocator, moved together when there are holes. A span of cells, or
+ * NULL when nothing can make room; one span being written at a time
+ * (begin, grow: it may move, take its address back; end: cut to count,
+ * its owner takes it, then settle).
+ */
+WmCell* wm_area_alloc(WmCode* owner, uint32_t cells);
+void wm_area_free(WmCell* records);
+WmCell* wm_area_begin(uint32_t cells);
+WmCell* wm_area_grow(uint32_t cells);
+WmCell* wm_area_end(WmCode* owner, uint32_t count);
+void wm_area_cancel(void);
+void wm_area_settle(void);
 void* wm_code_malloc(size_t size);
 void* wm_code_realloc(void* ptr, size_t size);
 void wm_code_free(void* ptr);
