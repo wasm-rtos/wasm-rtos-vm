@@ -42,7 +42,7 @@ static WmResult page_fault(WmRuntime* rt)
     uint8_t op = rt->fault_op;
     uint8_t d = WM_ROM8(ACCESS + (op - WM_FIRST_ACCESS));
     uint8_t size = (uint8_t)(1u << (d & 3u));
-    int store = op >= 0x36u;
+    int store = op >= WM_OP_I32_STORE;
     WmResult result = wm_page_fault(rt->tlb, memory, rt->fault_address, rt->fault_offset, size, store);
     if (result == wm_page_emulate)
     {
@@ -455,7 +455,7 @@ access:
     uint8_t d = WM_ROM8(ACCESS + (op - WM_FIRST_ACCESS));
     uint8_t size = (uint8_t)(1u << (d & 3u));
     uint32_t offset = keep;
-    uint32_t above = op >= 0x36u ? ((d & 8u) ? 2u : 1u) : 0u;
+    uint32_t above = op >= WM_OP_I32_STORE ? ((d & 8u) ? 2u : 1u) : 0u;
     uint8_t* host;
     WM_PROFILE_SHARED(op);
 #if WM_HAS_MMU
