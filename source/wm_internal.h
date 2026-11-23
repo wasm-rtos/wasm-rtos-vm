@@ -250,6 +250,20 @@ extern const char wm_error_unsupported[];
 #define WM_REF_SLOTS ((uint32_t)((sizeof(uintptr_t) + 3u) / 4u))
 #endif
 
+/* WebAssembly's opcodes by name, and those after 0xFC (wm_defs.def). */
+enum
+{
+#define WM_WASM(OP, NAME, name) WM_OP_##NAME = OP,
+#define WM_WASM_ACCESS(OP, NAME, name, VALUE, ALIGN, STORE) WM_OP_##NAME = OP,
+#define WM_WASM_NUM(OP, NAME, name, OPERAND, ARITY, RESULT) WM_OP_##NAME = OP,
+#include "wm_defs.def"
+};
+enum
+{
+#define WM_WASM_FC(SUB, NAME, name) WM_FC_##NAME = SUB,
+#include "wm_defs.def"
+};
+
 /* Block kinds while validating. */
 #define WM_BLOCK 0x02
 #define WM_LOOP 0x03
