@@ -345,7 +345,7 @@ int main(int argc, char** argv)
      * is too large to predecode, as with UBSan) reads frames at once.
      */
 #if WM_PREDECODE
-    if (module->codes[0].fast)
+    if (module->codes[0].records)
     {
         WmExtern f;
         uint32_t expected = call1(rt, inst, "sum", 4, 0, 0);

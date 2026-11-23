@@ -1,6 +1,6 @@
 /*
  * The register loop (decision 16), the loop of predecoded functions.
- * Records name frame slots (wm_fast.c, reg_translate); there is no stack
+ * Records name frame slots (wm_translate.c, reg_translate); there is no stack
  * pointer while it runs: a record that works on the stack gets its top as
  * an operand. Fuel is charged by segment (SEG); short of a segment, the
  * loop in place goes on with what is left. A paged memory is reached
@@ -76,7 +76,7 @@ static WmResult page_fault(WmRuntime* rt)
         uint32_t offset, top;
         WmResult made;
         if ((made = wm_reg_tail(m, func->code, &tail)) ||
-            (made = wm_reg_stack_at(m, func->code, (uint32_t)(rec - func->code->fast), fp, &offset, &top)))
+            (made = wm_reg_stack_at(m, func->code, (uint32_t)(rec - func->code->records), fp, &offset, &top)))
             return made;
         rt->saved.pc = m->bytes + offset;
         rt->saved.sp = fp + top;
@@ -244,7 +244,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
     if (sp + code->local_slots + code->max_stack > rt->stack_end)
         TRAP(T_STACK);
     zero_slots(sp, code->local_slots);
-    ip = code->fast;
+    ip = code->records;
     NEXT();
 
 r_unreachable:
@@ -627,14 +627,14 @@ call:
         if (sp + code->local_slots + code->max_stack > rt->stack_end)
             TRAP(T_STACK);
         zero_slots(sp, code->local_slots);
-        if (__builtin_expect(!code->fast, 0))
+        if (__builtin_expect(!code->records, 0))
         {
             ip = NULL;
             stop = wm_code_stop;
             goto suspend;
         }
         code->used = 1;
-        ENTER(code->fast);
+        ENTER(code->records);
     }
     if (callee->host)
     {

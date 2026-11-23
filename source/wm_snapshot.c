@@ -358,9 +358,9 @@ static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, u
     WmResult result = NULL;
     if (!WM_RUNS_FAST(m))
         return NULL;
-    if (func->code->fast || makes_code)
+    if (func->code->records || makes_code)
         result = wm_code_load(func);
-    if (!(func->code->fast || makes_code) || (result && !strncmp(result, "exhaustion", 10)))
+    if (!(func->code->records || makes_code) || (result && !strncmp(result, "exhaustion", 10)))
     {
         /* Without records (decision 21): the function runs in place by itself, here too. */
         WmTail* tail;
@@ -384,7 +384,7 @@ static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, u
         e = wm_reg_entry(tail, offset);
         if (e && !e->charge)
         {
-            *pc = (const uint8_t*)(const void*)(func->code->fast + e->cell);
+            *pc = (const uint8_t*)(const void*)(func->code->records + e->cell);
             *st = NULL;
             return NULL;
         }

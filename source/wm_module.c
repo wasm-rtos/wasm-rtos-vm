@@ -1717,8 +1717,8 @@ uint32_t wm_module_code_bytes(const WmModule* m)
             const WmCode* c = &m->codes[i];
             if (c->local_offsets)
                 bytes += ((size_t)c->local_count + 1u) * sizeof(uint32_t);
-            if (c->fast && !c->mapped)
-                bytes += (size_t)c->fast_cells * sizeof(WmCell);
+            if (c->records && !c->mapped)
+                bytes += (size_t)c->record_cells * sizeof(WmCell);
         }
     return (uint32_t)bytes;
 }
@@ -1746,8 +1746,8 @@ void wm_module_predecode(WmModule* m)
     {
         predecoded = wm_code_make(m, &m->codes[i], m->side + m->codes[i].side);
         wm_area_free(m->codes[i].own);
-        m->codes[i].fast = NULL;
-        m->codes[i].fast_cells = 0;
+        m->codes[i].records = NULL;
+        m->codes[i].record_cells = 0;
     }
     m->predecode_result = predecoded;
     if (!predecoded)

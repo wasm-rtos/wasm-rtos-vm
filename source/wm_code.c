@@ -1,5 +1,5 @@
 /*
- * The code cache: the records of predecoded functions (wm_fast.c), made when
+ * The code cache: the records of predecoded functions (wm_translate.c), made when
  * a function is first called and dropped when room is needed. The hand of a
  * CLOCK goes round the functions of every module that runs predecoded; a
  * call marks its function used, the hand clears the mark and drops the
@@ -58,15 +58,15 @@ static void wm_code_drop(WmCode* code)
     wm_reg_tail_free(code->tail);
     code->tail = NULL;
 #endif
-    if (!code->fast)
+    if (!code->records)
         return;
     if (!code->mapped)
     {
         wm_area_free(code->own);
-        g_bytes -= (size_t)code->fast_cells * sizeof(WmCell);
+        g_bytes -= (size_t)code->record_cells * sizeof(WmCell);
     }
-    code->fast = NULL;
-    code->fast_cells = 0;
+    code->records = NULL;
+    code->record_cells = 0;
     code->used = 0;
     code->mapped = 0;
 }
@@ -158,7 +158,7 @@ static int evict_one(void)
     {
         WmCode* code = hand_next();
         /* Records in the image take no RAM: nothing to gain. */
-        if (!code->fast || code->pinned || code->mapped)
+        if (!code->records || code->pinned || code->mapped)
             continue;
         if (code->used)
         {
@@ -775,7 +775,7 @@ static void from_image(WmModule* m, WmCode* code)
     ++code->pinned;
     copy = wm_area_alloc(code, count);
     --code->pinned;
-    code->fast_cells = (uint16_t)count;
+    code->record_cells = (uint16_t)count;
     code->mapped = !copy;
     if (copy)
     {
@@ -784,7 +784,7 @@ static void from_image(WmModule* m, WmCode* code)
         wm_area_settle();
     }
     else
-        code->fast = cells;
+        code->records = cells;
 }
 
 /*
@@ -821,7 +821,7 @@ WmResult wm_code_load(WmFunc* func)
     WmModule* m = func->instance->module;
     WmCode* code = func->code;
     WmResult result;
-    if (code->fast)
+    if (code->records)
         return NULL;
     if (!WM_RUNS_FAST(m))
         return WM_ERR_TRAP("trap: a call into code that is not predecoded");
@@ -830,7 +830,7 @@ WmResult wm_code_load(WmFunc* func)
     code->used = 1;
     if (code->mapped)
         return NULL;
-    g_bytes += (size_t)code->fast_cells * sizeof(WmCell);
+    g_bytes += (size_t)code->record_cells * sizeof(WmCell);
     if (g_limit && g_bytes > g_limit)
     {
         pin_stacks(1);
@@ -943,17 +943,17 @@ WmResult wm_code_image_write(WmModule* m, WmSnapshotWrite write, void* context)
     for (uint32_t i = 0; !o.error && i < defined_count; ++i)
     {
         WmCode* code = &m->codes[i];
-        int made = !code->fast;
+        int made = !code->records;
         if (made && (o.error = wm_code_make(m, code, NULL)))
             break;
         index[i] = at;
-        at += code->fast_cells;
-        image_put(&o, code->fast, code->fast_cells * (uint32_t)sizeof(WmCell));
+        at += code->record_cells;
+        image_put(&o, code->records, code->record_cells * (uint32_t)sizeof(WmCell));
         if (made)
         {
             wm_area_free(code->own);
-            code->fast = NULL;
-            code->fast_cells = 0;
+            code->records = NULL;
+            code->record_cells = 0;
         }
     }
     index[defined_count] = at;
@@ -1009,16 +1009,16 @@ WmResult wm_code_image_map(WmModule* m, const void* image, uint32_t size)
     {
         WmCode* code = &m->codes[i];
         uint32_t count = index[i + 1u] - index[i];
-        int made = !code->fast, same;
+        int made = !code->records, same;
         WmResult result;
         if (made && (result = wm_code_make(m, code, m->side ? m->side + code->side : NULL)))
             return result;
-        same = code->fast_cells == count && !memcmp(code->fast, words + index[i], (size_t)count * sizeof(WmCell));
+        same = code->record_cells == count && !memcmp(code->records, words + index[i], (size_t)count * sizeof(WmCell));
         if (made)
         {
             wm_area_free(code->own);
-            code->fast = NULL;
-            code->fast_cells = 0;
+            code->records = NULL;
+            code->record_cells = 0;
         }
         if (!same)
             return wm_code_image_invalid;

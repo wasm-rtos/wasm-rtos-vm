@@ -42,8 +42,10 @@ if [ "${SHA:-0}" = 1 ]; then
     code() { # tree compiler objdump flags...
         local tree=$1 cc=$2 dump=$3
         shift 3
-        for f in wm_exec wm_fast; do
-            $cc -std=gnu99 "$@" -c "$tree/source/$f.c" -o build/quick-$f.o && $dump -d build/quick-$f.o | tail -n +4
+        for f in wm_exec wm_translate; do
+            src="$tree/source/$f.c"
+            [ -f "$src" ] || src="$tree/source/wm_fast.c" # the translator's name before decision 22's tidying
+            $cc -std=gnu99 "$@" -c "$src" -o build/quick-$f.o && $dump -d build/quick-$f.o | tail -n +4
         done | shasum | cut -c1-12
     }
     same() { [ "$(code "$base" "$@")" = "$(code . "$@")" ] && echo "same" || echo "CHANGED"; }

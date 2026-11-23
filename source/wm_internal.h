@@ -446,11 +446,11 @@ typedef struct WmCode
      */
     union
     {
-        const WmCell* fast;
+        const WmCell* records;
         WmCell* own;
     };
     /* At most 0x7FFF: a longer function is not predecoded. */
-    uint16_t fast_cells;
+    uint16_t record_cells;
     /* For the code cache's CLOCK: called since the hand last passed; pinned (a count): on a call stack, or being made. */
     uint8_t used;
     uint8_t pinned;
