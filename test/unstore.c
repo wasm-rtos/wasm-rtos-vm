@@ -2,18 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static uint8_t g_slots[64][65536];
 static uint8_t g_used[64];
 static uint32_t g_writes, g_drops;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static int reserve(void* context, int32_t frames)
 {
@@ -64,7 +57,7 @@ int main(void)
     static const WmPager pager = { NULL, reserve, room, write, read, drop, NULL, NULL, NULL, NULL };
     WmMemory* memory;
     uint8_t byte = 0;
-    uint32_t first;
+    uint32_t first = 0;
     wm_set_pager(&pager);
     memory = wm_memory_new(1, 4);
     check(memory != NULL && wm_memory_frames(memory) > 1, "a paged memory");
@@ -87,6 +80,5 @@ int main(void)
     check(!wm_memory_frame_unstore(memory, 1), "a frame without a slot: nothing to do");
     wm_memory_free(memory);
     wm_set_pager(NULL);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

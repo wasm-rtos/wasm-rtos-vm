@@ -10,19 +10,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static uint8_t* g_slots[4096];
 static uint32_t g_next_slot;
 static unsigned long g_written;
 static uint32_t g_ram = 1000;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static int reserve(void* context, int32_t frames)
 {
@@ -73,12 +66,6 @@ static int block(void* context, uint32_t frames)
 }
 
 static const WmPager g_pager = {NULL, reserve, room, write_frame, read_frame, drop, NULL, NULL, NULL, block};
-
-static WmFunc* export_func(WmInstance* inst, const char* name)
-{
-    WmExtern f;
-    return wm_instance_export(inst, name, (uint32_t)strlen(name), &f) ? NULL : f.as.func;
-}
 
 static WmInstance* g_paged_inst;
 static WmResult resolve(void* user, const char* module, uint32_t module_len, const char* name, uint32_t name_len,
@@ -308,6 +295,5 @@ int main(void)
     wm_runtime_free(rt);
     for (uint32_t i = 0; i < g_next_slot; ++i)
         free(g_slots[i]);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

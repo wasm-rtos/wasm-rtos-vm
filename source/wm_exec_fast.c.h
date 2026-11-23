@@ -40,9 +40,9 @@ static WmResult page_fault(WmRuntime* rt)
     const WmCell* rec = (const WmCell*)(const void*)rt->saved.pc;
     uint32_t* fp = rt->saved.fp;
     uint8_t op = rt->fault_op;
-    uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
+    uint8_t d = WM_ROM8(ACCESS + (op - WM_FIRST_ACCESS));
     uint8_t size = (uint8_t)(1u << (d & 3u));
-    int store = op >= 0x36u;
+    int store = op >= WM_OP_I32_STORE;
     WmResult result = wm_page_fault(rt->tlb, memory, rt->fault_address, rt->fault_offset, size, store);
     if (result == wm_page_emulate)
     {
@@ -91,7 +91,7 @@ WM_HOT static WmResult run_fast(WmRuntime* rt, WmFunc* func, int resume)
 {
     static const void* const labels[WM_R_COUNT] = {
 #define WM_REC(NAME, name) [WM_R_##NAME] = &&r_##name,
-#include "wm_records.def"
+#include "wm_defs.def"
     };
     uint32_t entry_depth;
     WmCode* code;
@@ -452,10 +452,10 @@ access:
 {
     /* Any other access, on the slots below its top (sp), the offset in keep: in one block here, a paged memory through its functions. */
     uint8_t op = (uint8_t)IMM;
-    uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
+    uint8_t d = WM_ROM8(ACCESS + (op - WM_FIRST_ACCESS));
     uint8_t size = (uint8_t)(1u << (d & 3u));
     uint32_t offset = keep;
-    uint32_t above = op >= 0x36u ? ((d & 8u) ? 2u : 1u) : 0u;
+    uint32_t above = op >= WM_OP_I32_STORE ? ((d & 8u) ? 2u : 1u) : 0u;
     uint8_t* host;
     WM_PROFILE_SHARED(op);
 #if WM_HAS_MMU
@@ -504,7 +504,7 @@ access:
         __builtin_memcpy(host, &value, sizeof(TYPE));                                                          \
         NEXT();                                                                                                \
     }
-#include "wm_records.def"
+#include "wm_defs.def"
 r_memory_size:
     fp[IMM] = inst->memory->pages;
     NEXT();
@@ -516,7 +516,7 @@ r_memory_grow:
 r_numeric:
 {
     uint8_t op = (uint8_t)IMM;
-    uint8_t d = WM_ROM8(wm_numeric + (op - 0x45u));
+    uint8_t d = WM_ROM8(wm_numeric + (op - WM_FIRST_NUMERIC));
     WM_PROFILE_SHARED(op);
     sp = fp + (ip++)->u32;
     switch (d & 3u)
@@ -588,7 +588,7 @@ r_ref_func:
         NEXT();                                                                                                \
     }
 #define WM_REC(NAME, name)
-#include "wm_records.def"
+#include "wm_defs.def"
 #define WM_REC_CMP(NAME, name)                                                                                 \
     r_brif_ss_##name:                                                                                          \
     {                                                                                                          \
@@ -605,7 +605,7 @@ r_ref_func:
         ENTER(ip - 1 + SIMM);                                                                                  \
     }
 #define WM_REC(NAME, name)
-#include "wm_records.def"
+#include "wm_defs.def"
 
 call:
     if (callee->code)

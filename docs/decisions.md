@@ -1605,3 +1605,109 @@ kernel, as everywhere else.
 | 5 | Back to records on resume | source, test |
 | 6 | The kernel's line, a kernel test with an idle task | wasm-rtos, tests |
 | 7 | Black Pill CoreMark at 104 KB, ESP32 unchanged, experiments.md | port |
+
+## 22. One description of WebAssembly's instructions
+
+**Decided (2026-11-23).** The user: «пусть все опкоды и тд все что
+касается wasm операндов и тд будет в одном файле defs так же проще искать
+а не бегать по файлам», and the firmware smaller, the code clearer, not
+slower.
+
+### Problem
+
+What the engine knows about an instruction is written in six places, each
+its own way: the validator's switch (`wm_module.c`), a table of 128 bare
+numbers (`wm_numeric`), the loop in place's dispatch and switch, the
+translator's `step()` and its switch (`wm_fast.c`), the shared helpers'
+switches (`op_i32`, `op_i64`, `op_float`: 82 cases), and constant
+expressions (`wm_instance.c`). Two `.def` files hold parts: the i32
+operations (`wm_ops.def`) and the register loop's records
+(`wm_records.def`). Adding or checking an instruction means visiting all
+of them; reading the immediates of one is written four times. The
+numeric instructions' types were 128 bare numbers, the accesses' two
+tables of 23 more.
+
+### Decision
+
+**One file, `source/wm_defs.def`**, in parts, included with the
+kinds a reader needs defined (X-macros, as now):
+
+1. **WebAssembly's instructions**, one line each, in opcode order:
+   `WM_OP(0x6A, I32_ADD, i32_add, NONE, I32_I32__I32, a + b)`: opcode,
+   names, what immediates follow, the signature (operands, results), and
+   for the i32 instructions both loops share, the expression. The `0xFC`
+   instructions the same way (`WM_OP_FC`). What `wm_ops.def` holds now
+   becomes this part's last column.
+2. **The register loop's records** (what `wm_records.def` holds now),
+   after it: the engine's own instructions, made from the first part.
+
+**Made from it**, replacing what is written by hand:
+
+- `WM_OP_*` and `WM_FC_*`: every opcode by name, used where instructions
+  are read (the validator, both loops, the translator, constant
+  expressions): `case WM_OP_END`, not `case 0x0B`.
+- `wm_numeric` (the numeric instructions' types) and the two access
+  tables (the validator's, the shared helpers'), from the lines.
+- The translator's choice of records for i32 accesses, from their list.
+- The profile's names (`tools/profile.py`).
+
+**Not changed:** the two loops' hot code. Their dispatch is made from the
+same lines, but each handler stays what it is now; their machine code is
+checked against the last commit's (decision 13, `SHA=1`) and must not move
+unless a measurement says it is faster.
+
+### Why
+
+The engines that last describe their instruction set once: WABT
+(`opcode.def`: opcode, names, signature, immediates), V8
+(`wasm-opcodes.h`, `FOREACH_*_OPCODE` with signatures), SpiderMonkey
+(`WasmConstants.h`, `FOR_EACH_*`), WAMR (its opcode tables). One line per
+instruction makes the instruction set readable as a list, and the
+compiler checks what a person used to check by eye.
+
+### Instead
+
+- **Only moving the two `.def` files into one**: easier to find, but the
+  six places stay; little gained.
+- **Generating C from a script**: the user wants no tools on the computer,
+  and X-macros need none.
+- **One reader of immediates for the validator, `step()` and the loop in
+  place**: each reads them for its own end (checking, counting cells,
+  running), so one reader would branch on what it is for; left as is.
+- **The validator's simple instructions through a signature**: they are
+  already (numeric through `wm_numeric`, accesses through their table);
+  what stays written out is control, locals, calls and tables, as in
+  every engine.
+- **The loops' handlers made from the table too**: their hot code is tuned
+  by profile (decisions 13, 14); a generic handler would be slower.
+
+### Checks
+
+spec in every mode `check.sh` runs; the loops' machine code unchanged
+(Mac, Xtensa); flash on AVR, M4, Xtensa against main; CoreMark on a Mac,
+ESP32 and Black Pill against main. Kept only if smaller and not slower.
+
+### As built
+
+- 184 opcodes and 18 after `0xFC`, each once (checked: no gaps from 0x28
+  to 0x3E and 0x45 to 0xC4, no repeats); the generated tables equal the
+  numbers they replace byte for byte.
+- Offsets into the tables use unsigned bases (`WM_FIRST_ACCESS`,
+  `WM_FIRST_NUMERIC`): with the signed enum the Mac compiler laid the
+  loop out differently. The loops' machine code is the same as before on
+  the Mac and Xtensa; Uno flash the same to the byte (35 644 B).
+- Records of i32 accesses take the instructions' names (`I32_LOAD8_S`).
+- Flash does not shrink: the validator was table driven already. What is
+  gained is reading: one list, names instead of numbers.
+
+### Work, all of it
+
+| # | What | Where |
+|---|---|---|
+| 1 | This decision | docs |
+| 2 | `wm_defs.def`: every instruction (MVP and 2.0 without SIMD), signatures, immediates; `wm_ops.def` and `wm_records.def` folded in | source |
+| 3 | `wm_numeric` from it | source |
+| 4 | One reader of immediates for the validator, `step()`, the loop in place, constant expressions | source |
+| 5 | The validator's simple instructions through the signature | source |
+| 6 | Names for the profile and traces | source |
+| 7 | Sizes (AVR, M4, Xtensa), CoreMark on three machines, loops' machine code, spec; experiments.md | test, docs |

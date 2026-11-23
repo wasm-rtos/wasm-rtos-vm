@@ -11,15 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../source/wm_heap.h"
+#include "test.h"
 
-static int g_failures;
 static unsigned g_seed = 12345;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static unsigned rnd(unsigned n)
 {
@@ -190,6 +184,5 @@ int main(void)
         check(largest_high > largest_low, "larger than with code mixed in");
     }
 
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

@@ -10,9 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static uint32_t g_code[1 << 12];
 static uint32_t g_code_size;
 static uint8_t g_snapshot[1 << 16];
@@ -20,18 +19,6 @@ static uint32_t g_length, g_at;
 static WmInstance* g_inst;
 static WmFunc* g_back;
 static int g_code_refused;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
-
-static WmFunc* export_func(WmInstance* inst, const char* name)
-{
-    WmExtern f;
-    return wm_instance_export(inst, name, (uint32_t)strlen(name), &f) ? NULL : f.as.func;
-}
 
 /* square(n), called back in, with every record that can go gone first. */
 static WmResult host_back(WmRuntime* rt, void* user, uint32_t* slots, WmMemory* memory)
@@ -266,6 +253,5 @@ int main(int argc, char** argv)
     check(wm_code_cache_bytes() == 0, "modules freed take their records along");
     wm_runtime_free(rt);
     wm_host_function_free(g_back);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

@@ -250,6 +250,23 @@ extern const char wm_error_unsupported[];
 #define WM_REF_SLOTS ((uint32_t)((sizeof(uintptr_t) + 3u) / 4u))
 #endif
 
+/* WebAssembly's opcodes by name, and those after 0xFC (wm_defs.def). */
+enum
+{
+#define WM_WASM(OP, NAME, name) WM_OP_##NAME = OP,
+#define WM_WASM_ACCESS(OP, NAME, name, VALUE, SIZE, STORE, SIGNED) WM_OP_##NAME = OP,
+#define WM_WASM_NUM(OP, NAME, name, OPERAND, ARITY, RESULT) WM_OP_##NAME = OP,
+#include "wm_defs.def"
+};
+enum
+{
+#define WM_WASM_FC(SUB, NAME, name) WM_FC_##NAME = SUB,
+#include "wm_defs.def"
+};
+/* Where the memory accesses and the numeric instructions start, unsigned as an index from an opcode is. */
+#define WM_FIRST_ACCESS ((uint32_t)WM_OP_I32_LOAD)
+#define WM_FIRST_NUMERIC ((uint32_t)WM_OP_I32_EQZ)
+
 /* Block kinds while validating. */
 #define WM_BLOCK 0x02
 #define WM_LOOP 0x03
@@ -849,7 +866,7 @@ WmResult wm_code_side(const WmModule* module, uint32_t index, WmSide** out);
 enum
 {
 #define WM_REC(NAME, name) WM_R_##NAME,
-#include "wm_records.def"
+#include "wm_defs.def"
     WM_R_COUNT
 };
 /* The register loop (decision 16): the stack's height in slots before each instruction, in their order. */

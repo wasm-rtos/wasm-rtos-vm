@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 #include "../source/wm_internal.h"
 
 /* Frames RAM holds: 3, or 1 when the memory is only a few large frames. */
@@ -16,7 +16,6 @@
 /* The frames fill and sum touch: they go 4 KiB at a time. */
 #define TOUCHED (wm_frame_size() < 4096u ? 64u : FRAMES)
 
-static int g_failures;
 /* Frames promised to memories, and how many the pager will promise. */
 static int32_t g_reserved, g_reserve_limit = 1 << 30;
 static uint8_t* g_slots[4096];
@@ -34,12 +33,6 @@ static uint32_t g_writing;
 static unsigned long g_write_starts;
 static uint32_t g_most_resident;
 static void end_write(uint32_t i, int tell);
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static int reserve(void* context, int32_t frames)
 {
@@ -453,6 +446,5 @@ int main(int argc, char** argv)
     wm_module_free(module);
     wm_runtime_free(rt);
     wm_set_pager(NULL);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures ? 1 : 0;
+    return summary();
 }

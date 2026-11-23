@@ -2,17 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static uint32_t* g_wait_slot;
 static uint32_t g_waits;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 /* Yields; the test writes the result into the slot before resuming. */
 static WmResult host_wait(WmRuntime* rt, void* user, uint32_t* slots, WmMemory* memory)

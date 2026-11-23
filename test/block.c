@@ -10,9 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static int32_t g_reserved;
 static uint8_t* g_slots[1024];
 static uint32_t g_next_slot;
@@ -20,12 +19,6 @@ static unsigned long g_written, g_read;
 /* Frames the pager lets stay in RAM in one block; a write it fails, for the test. */
 static uint32_t g_block_budget = 1000;
 static int g_fail_writes;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static int reserve(void* context, int32_t frames)
 {
@@ -71,12 +64,6 @@ static int block(void* context, uint32_t frames)
 }
 
 static const WmPager g_pager = {NULL, reserve, room, write_frame, read_frame, drop, NULL, NULL, NULL, block};
-
-static WmFunc* export_func(WmInstance* inst, const char* name)
-{
-    WmExtern f;
-    return wm_instance_export(inst, name, (uint32_t)strlen(name), &f) ? NULL : f.as.func;
-}
 
 int main(int argc, char** argv)
 {
@@ -218,6 +205,5 @@ int main(int argc, char** argv)
     wm_runtime_free(rt);
     for (uint32_t i = 0; i < g_next_slot; ++i)
         free(g_slots[i]);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

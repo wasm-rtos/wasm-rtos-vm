@@ -11,29 +11,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
 #define FUEL 1000000u
 #define SLICE 37u
 
-static int g_failures;
 static uint8_t g_image[1 << 16];
 static uint32_t g_length, g_at;
 static WmInstance* g_inst;
 static WmFunc* g_back;
 static int g_refusing;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
-
-static WmFunc* export_func(const char* name)
-{
-    WmExtern f;
-    return wm_instance_export(g_inst, name, (uint32_t)strlen(name), &f) ? NULL : f.as.func;
-}
 
 /* square(n), called back in. */
 static WmResult host_back(WmRuntime* rt, void* user, uint32_t* slots, WmMemory* memory)
@@ -41,7 +28,7 @@ static WmResult host_back(WmRuntime* rt, void* user, uint32_t* slots, WmMemory* 
     uint32_t result = 0;
     WmResult r;
     (void)user, (void)memory;
-    r = wm_call(rt, export_func("square"), slots, &result);
+    r = wm_call(rt, export_func(g_inst, "square"), slots, &result);
     slots[0] = result;
     return r;
 }
@@ -230,7 +217,7 @@ int main(int argc, char** argv)
 
     for (uint32_t c = 0; c < sizeof(calls) / sizeof(calls[0]); ++c)
     {
-        WmFunc* func = export_func(calls[c].name);
+        WmFunc* func = export_func(g_inst, calls[c].name);
         Run usual, run;
         wm_code_cache_trim(0);
         check(!run_whole(rt, USUAL, func, calls[c].arg, &usual), calls[c].name);
@@ -255,7 +242,7 @@ int main(int argc, char** argv)
             uint32_t ten = 10, ignored;
             wm_code_cache_trim(0);
             wm_set_makes_code(rt, 1);
-            wm_call(rt, export_func("fib"), &ten, &ignored);
+            wm_call(rt, export_func(g_inst, "fib"), &ten, &ignored);
             before = wm_code_cache_bytes();
             run_whole(rt, MAKES_NONE, func, calls[c].arg, &run);
             snprintf(what, sizeof(what), "%s(%u) whole, others' records used", calls[c].name, calls[c].arg);
@@ -303,7 +290,7 @@ int main(int argc, char** argv)
           "instantiate the loop");
     if (g_inst)
     {
-        WmFunc* sum = export_func("sum");
+        WmFunc* sum = export_func(g_inst, "sum");
         Run usual, run;
         size_t first;
         check(!run_sliced(&rt, USUAL, 0, sum, 300, &usual), "sum(300) in slices");
@@ -325,6 +312,5 @@ int main(int argc, char** argv)
         snprintf(line, sizeof(line), "everything given back (%ld blocks held)", g_blocks);
         check(g_blocks == 0, line);
     }
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

@@ -7,17 +7,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../source/wm.h"
+#include "test.h"
 
-static int g_failures;
 static uint8_t g_image[1 << 16];
 static uint32_t g_length, g_at;
-
-static void check(int ok, const char* what)
-{
-    printf("%s %s\n", ok ? "PASS" : "FAIL", what);
-    g_failures += !ok;
-}
 
 static WmResult put(void* context, const void* data, uint32_t size)
 {
@@ -126,6 +119,5 @@ int main(int argc, char** argv)
     check(load(module) == 12, "the snapshot as written still loads");
 
     wm_module_free(module);
-    printf("%s\n", g_failures ? "FAILED" : "all passed");
-    return g_failures != 0;
+    return summary();
 }

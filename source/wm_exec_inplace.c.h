@@ -290,26 +290,26 @@ in_place:;
 #pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC diagnostic ignored "-Winitializer-overrides"
             static const void* const dispatch[256] = {
-                [0 ... 255] = &&l_default, [0x45 ... 0xC4] = &&l_numeric, [0x00] = &&l_0x00, [0x01] = &&l_0x01, [0x02] = &&l_0x02, [0x03] = &&l_0x03, [0x04] = &&l_0x04, [0x0D] = &&l_0x0D, [0x05] = &&l_0x05, [0x0C] = &&l_0x0C, [0x0E] = &&l_0x0E, [0x0B] = &&l_0x0B, [0x0F] = &&l_0x0F, [0x10] = &&l_0x10, [0x11] = &&l_0x11, [0x1A] = &&l_0x1A, [0x1B] = &&l_0x1B, [0x1C] = &&l_0x1C, [0x20] = &&l_0x20, [0x21] = &&l_0x21, [0x22] = &&l_0x22, [0x23] = &&l_0x23, [0x24] = &&l_0x24, [0x28] = &&l_0x28, [0x29] = &&l_0x29, [0x2A] = &&l_0x2A, [0x2B] = &&l_0x2B, [0x2C] = &&l_0x2C, [0x2D] = &&l_0x2D, [0x2E] = &&l_0x2E, [0x2F] = &&l_0x2F, [0x30] = &&l_0x30, [0x31] = &&l_0x31, [0x32] = &&l_0x32, [0x33] = &&l_0x33, [0x34] = &&l_0x34, [0x35] = &&l_0x35, [0x36] = &&l_0x36, [0x37] = &&l_0x37, [0x38] = &&l_0x38, [0x39] = &&l_0x39, [0x3A] = &&l_0x3A, [0x3B] = &&l_0x3B, [0x3C] = &&l_0x3C, [0x3D] = &&l_0x3D, [0x3E] = &&l_0x3E, [0x3F] = &&l_0x3F, [0x40] = &&l_0x40, [0x41] = &&l_0x41, [0x43] = &&l_0x43, [0x44] = &&l_0x44, [0xFC] = &&l_0xFC,
+                [0 ... 255] = &&l_default, [WM_OP_I32_EQZ ... WM_OP_I64_EXTEND32_S] = &&l_numeric, [WM_OP_UNREACHABLE] = &&l_WM_OP_UNREACHABLE, [WM_OP_NOP] = &&l_WM_OP_NOP, [WM_OP_BLOCK] = &&l_WM_OP_BLOCK, [WM_OP_LOOP] = &&l_WM_OP_LOOP, [WM_OP_IF] = &&l_WM_OP_IF, [WM_OP_BR_IF] = &&l_WM_OP_BR_IF, [WM_OP_ELSE] = &&l_WM_OP_ELSE, [WM_OP_BR] = &&l_WM_OP_BR, [WM_OP_BR_TABLE] = &&l_WM_OP_BR_TABLE, [WM_OP_END] = &&l_WM_OP_END, [WM_OP_RETURN] = &&l_WM_OP_RETURN, [WM_OP_CALL] = &&l_WM_OP_CALL, [WM_OP_CALL_INDIRECT] = &&l_WM_OP_CALL_INDIRECT, [WM_OP_DROP] = &&l_WM_OP_DROP, [WM_OP_SELECT] = &&l_WM_OP_SELECT, [WM_OP_SELECT_T] = &&l_WM_OP_SELECT_T, [WM_OP_LOCAL_GET] = &&l_WM_OP_LOCAL_GET, [WM_OP_LOCAL_SET] = &&l_WM_OP_LOCAL_SET, [WM_OP_LOCAL_TEE] = &&l_WM_OP_LOCAL_TEE, [WM_OP_GLOBAL_GET] = &&l_WM_OP_GLOBAL_GET, [WM_OP_GLOBAL_SET] = &&l_WM_OP_GLOBAL_SET, [WM_OP_I32_LOAD] = &&l_WM_OP_I32_LOAD, [WM_OP_I64_LOAD] = &&l_WM_OP_I64_LOAD, [WM_OP_F32_LOAD] = &&l_WM_OP_F32_LOAD, [WM_OP_F64_LOAD] = &&l_WM_OP_F64_LOAD, [WM_OP_I32_LOAD8_S] = &&l_WM_OP_I32_LOAD8_S, [WM_OP_I32_LOAD8_U] = &&l_WM_OP_I32_LOAD8_U, [WM_OP_I32_LOAD16_S] = &&l_WM_OP_I32_LOAD16_S, [WM_OP_I32_LOAD16_U] = &&l_WM_OP_I32_LOAD16_U, [WM_OP_I64_LOAD8_S] = &&l_WM_OP_I64_LOAD8_S, [WM_OP_I64_LOAD8_U] = &&l_WM_OP_I64_LOAD8_U, [WM_OP_I64_LOAD16_S] = &&l_WM_OP_I64_LOAD16_S, [WM_OP_I64_LOAD16_U] = &&l_WM_OP_I64_LOAD16_U, [WM_OP_I64_LOAD32_S] = &&l_WM_OP_I64_LOAD32_S, [WM_OP_I64_LOAD32_U] = &&l_WM_OP_I64_LOAD32_U, [WM_OP_I32_STORE] = &&l_WM_OP_I32_STORE, [WM_OP_I64_STORE] = &&l_WM_OP_I64_STORE, [WM_OP_F32_STORE] = &&l_WM_OP_F32_STORE, [WM_OP_F64_STORE] = &&l_WM_OP_F64_STORE, [WM_OP_I32_STORE8] = &&l_WM_OP_I32_STORE8, [WM_OP_I32_STORE16] = &&l_WM_OP_I32_STORE16, [WM_OP_I64_STORE8] = &&l_WM_OP_I64_STORE8, [WM_OP_I64_STORE16] = &&l_WM_OP_I64_STORE16, [WM_OP_I64_STORE32] = &&l_WM_OP_I64_STORE32, [WM_OP_MEMORY_SIZE] = &&l_WM_OP_MEMORY_SIZE, [WM_OP_MEMORY_GROW] = &&l_WM_OP_MEMORY_GROW, [WM_OP_I32_CONST] = &&l_WM_OP_I32_CONST, [WM_OP_F32_CONST] = &&l_WM_OP_F32_CONST, [WM_OP_F64_CONST] = &&l_WM_OP_F64_CONST, [WM_OP_PREFIX_FC] = &&l_WM_OP_PREFIX_FC,
 #if WM_HAS_I64
-                [0x42] = &&l_0x42,
+                [WM_OP_I64_CONST] = &&l_WM_OP_I64_CONST,
 #endif
 #if WM_HAS_REF_TYPES
-                [0x25] = &&l_0x25, [0x26] = &&l_0x26, [0xD0] = &&l_0xD0, [0xD1] = &&l_0xD1, [0xD2] = &&l_0xD2,
+                [WM_OP_TABLE_GET] = &&l_WM_OP_TABLE_GET, [WM_OP_TABLE_SET] = &&l_WM_OP_TABLE_SET, [WM_OP_REF_NULL] = &&l_WM_OP_REF_NULL, [WM_OP_REF_IS_NULL] = &&l_WM_OP_REF_IS_NULL, [WM_OP_REF_FUNC] = &&l_WM_OP_REF_FUNC,
 #endif
                 /* The short paths last, so they win over the general code of the same opcodes. */
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) [OP] = &&l_i32_##name,
-#include "wm_ops.def"
-                [0x28] = &&f_0x28, [0x36] = &&f_0x36, [0x20] = &&f_0x20, [0x21] = &&f_0x21, [0x41] = &&f_0x41,};
+#include "wm_defs.def"
+                [WM_OP_I32_LOAD] = &&f_WM_OP_I32_LOAD, [WM_OP_I32_STORE] = &&f_WM_OP_I32_STORE, [WM_OP_LOCAL_GET] = &&f_WM_OP_LOCAL_GET, [WM_OP_LOCAL_SET] = &&f_WM_OP_LOCAL_SET, [WM_OP_I32_CONST] = &&f_WM_OP_I32_CONST,};
 #pragma GCC diagnostic pop
             goto *dispatch[op];
         }
     l_numeric:
 #else
-        if (op >= 0x45u && op <= 0xC4u)
+        if (op >= WM_OP_I32_EQZ && op <= WM_OP_I64_EXTEND32_S)
 #endif
         {
-            uint8_t d = WM_ROM8(wm_numeric + (op - 0x45u));
+            uint8_t d = WM_ROM8(wm_numeric + (op - WM_FIRST_NUMERIC));
             switch (d & 3u)
             {
                 case WM_NUM_I32: sp = op_i32(op, d, sp, &trap); break;
@@ -327,7 +327,7 @@ in_place:;
 #if WM_COMPUTED_GOTO
         /*
          * The most common instructions each with a short path, past the shared
-         * numeric code: the i32 ones of wm_ops.def, then memory accesses.
+         * numeric code: the i32 ones of wm_defs.def, then memory accesses.
          */
 #define INPLACE_I32(name, ARITY)                                                                               \
     l_i32_##name:                                                                                              \
@@ -339,7 +339,7 @@ in_place:;
         continue;                                                                                              \
     }
 #define WM_RECORD_I32(NAME, name, OP, ARITY, EXPR) INPLACE_I32(name, ARITY)
-#include "wm_ops.def"
+#include "wm_defs.def"
 #undef INPLACE_I32
         /*
          * The commonest pairs run without a dispatch in between: the next
@@ -351,44 +351,44 @@ in_place:;
 #else
 #define TAKE_NEXT(OPCODE) 0
 #endif
-    f_0x20:
+    f_WM_OP_LOCAL_GET:
         if (code->local_offsets)
-            goto l_0x20;
+            goto l_WM_OP_LOCAL_GET;
         *sp++ = fp[imm_u32(&pc)];
-        if (TAKE_NEXT(0x20u))
+        if (TAKE_NEXT(WM_OP_LOCAL_GET))
             *sp++ = fp[imm_u32(&pc)];
-        else if (TAKE_NEXT(0x41u))
+        else if (TAKE_NEXT(WM_OP_I32_CONST))
             *sp++ = imm_s32(&pc);
         continue;
-    f_0x21:
+    f_WM_OP_LOCAL_SET:
         if (code->local_offsets)
-            goto l_0x21;
+            goto l_WM_OP_LOCAL_SET;
         fp[imm_u32(&pc)] = *--sp;
-        if (TAKE_NEXT(0x20u))
+        if (TAKE_NEXT(WM_OP_LOCAL_GET))
             *sp++ = fp[imm_u32(&pc)];
         continue;
-    f_0x41:
+    f_WM_OP_I32_CONST:
     {
         uint32_t c = imm_s32(&pc);
         /* A constant is usually an operand: add, and, subtract and compare it at once. */
-        if (TAKE_NEXT(0x6Au))
+        if (TAKE_NEXT(WM_OP_I32_ADD))
             sp[-1] += c;
-        else if (TAKE_NEXT(0x71u))
+        else if (TAKE_NEXT(WM_OP_I32_AND))
             sp[-1] &= c;
-        else if (TAKE_NEXT(0x6Bu))
+        else if (TAKE_NEXT(WM_OP_I32_SUB))
             sp[-1] -= c;
-        else if (TAKE_NEXT(0x46u))
+        else if (TAKE_NEXT(WM_OP_I32_EQ))
             sp[-1] = sp[-1] == c;
-        else if (TAKE_NEXT(0x76u))
+        else if (TAKE_NEXT(WM_OP_I32_SHR_U))
             sp[-1] >>= c & 31u;
-        else if (TAKE_NEXT(0x74u))
+        else if (TAKE_NEXT(WM_OP_I32_SHL))
             sp[-1] <<= c & 31u;
         else
             *sp++ = c;
         continue;
     }
 #undef TAKE_NEXT
-    f_0x28:
+    f_WM_OP_I32_LOAD:
     {
         uint32_t offset;
         uint32_t address = sp[-1];
@@ -400,7 +400,7 @@ in_place:;
 #if WM_HAS_MMU
             if (!mem && inst->memory)
             {
-                if (!(sp = paged_access(inst->memory, 0x28u, offset, sp, &trap)))
+                if (!(sp = paged_access(inst->memory, WM_OP_I32_LOAD, offset, sp, &trap)))
                     TRAP(trap);
                 continue;
             }
@@ -411,7 +411,7 @@ in_place:;
         sp[-1] = value;
         continue;
     }
-    f_0x36:
+    f_WM_OP_I32_STORE:
     {
         uint32_t offset;
         uint32_t address = sp[-2];
@@ -422,7 +422,7 @@ in_place:;
 #if WM_HAS_MMU
             if (!mem && inst->memory)
             {
-                if (!(sp = paged_access(inst->memory, 0x36u, offset, sp, &trap)))
+                if (!(sp = paged_access(inst->memory, WM_OP_I32_STORE, offset, sp, &trap)))
                     TRAP(trap);
                 continue;
             }
@@ -436,11 +436,11 @@ in_place:;
 #endif
         SWITCH(op)
         {
-            CASE(0x00) TRAP(WM_ERR_TRAP("trap: unreachable"));
-            CASE(0x01) NEXT;
-            CASE(0x02)
-            CASE(0x03) skip_block_type(&pc); NEXT;
-            CASE(0x04)
+            CASE(WM_OP_UNREACHABLE) TRAP(WM_ERR_TRAP("trap: unreachable"));
+            CASE(WM_OP_NOP) NEXT;
+            CASE(WM_OP_BLOCK)
+            CASE(WM_OP_LOOP) skip_block_type(&pc); NEXT;
+            CASE(WM_OP_IF)
                 skip_block_type(&pc);
                 if (*--sp)
                 {
@@ -449,7 +449,7 @@ in_place:;
                 }
                 taken = st;
                 goto take;
-            CASE(0x0D)
+            CASE(WM_OP_BR_IF)
                 imm_u32(&pc);
                 if (!*--sp)
                 {
@@ -457,23 +457,23 @@ in_place:;
                     NEXT;
                 }
                 FALLTHROUGH;
-            CASE(0x05)
-            CASE(0x0C)
+            CASE(WM_OP_ELSE)
+            CASE(WM_OP_BR)
                 taken = st;
                 goto take;
-            CASE(0x0E)
+            CASE(WM_OP_BR_TABLE)
             {
                 uint32_t count = imm_u32(&pc);
                 uint32_t index = *--sp;
                 taken = st + (index < count ? index : count);
                 goto take;
             }
-            CASE(0x0B)
+            CASE(WM_OP_END)
                 if (pc - 1 != code->end)
                     NEXT;
                 /* The function's own end returns. */
                 FALLTHROUGH;
-            CASE(0x0F)
+            CASE(WM_OP_RETURN)
             {
                 uint32_t n = func->result_slots;
                 WmFrame* frame;
@@ -512,8 +512,8 @@ in_place:;
                 REFRESH();
                 NEXT;
             }
-            CASE(0x10) callee = inst->funcs[imm_u32(&pc)]; goto call;
-            CASE(0x11)
+            CASE(WM_OP_CALL) callee = inst->funcs[imm_u32(&pc)]; goto call;
+            CASE(WM_OP_CALL_INDIRECT)
             {
                 const WmType* type = WM_TYPE(inst->module, imm_u32(&pc));
                 WmTable* table = inst->tables[imm_u32(&pc)];
@@ -527,15 +527,15 @@ in_place:;
                     TRAP(WM_ERR_TRAP("trap: indirect call type mismatch"));
                 goto call;
             }
-            CASE(0x1A)
+            CASE(WM_OP_DROP)
                 sp -= st->keep;
                 ++st;
                 NEXT;
-            CASE(0x1B)
-            CASE(0x1C)
+            CASE(WM_OP_SELECT)
+            CASE(WM_OP_SELECT_T)
             {
                 uint32_t n;
-                if (op == 0x1Bu)
+                if (op == WM_OP_SELECT)
                     n = (st++)->keep;
                 else
                 {
@@ -547,27 +547,27 @@ in_place:;
                 sp -= n;
                 NEXT;
             }
-            CASE(0x20)
-            CASE(0x21)
-            CASE(0x22)
+            CASE(WM_OP_LOCAL_GET)
+            CASE(WM_OP_LOCAL_SET)
+            CASE(WM_OP_LOCAL_TEE)
             {
                 uint32_t i = imm_u32(&pc);
                 uint32_t n;
                 /* Most functions have only one-slot locals: a plain word each. */
                 if (!code->local_offsets)
                 {
-                    if (op == 0x20u)
+                    if (op == WM_OP_LOCAL_GET)
                         *sp++ = fp[i];
                     else
                     {
                         fp[i] = sp[-1];
-                        if (op == 0x21u)
+                        if (op == WM_OP_LOCAL_SET)
                             --sp;
                     }
                     NEXT;
                 }
                 n = LOCAL_SLOTS(i);
-                if (op == 0x20u)
+                if (op == WM_OP_LOCAL_GET)
                 {
                     copy_slots(sp, LOCAL(i), n);
                     sp += n;
@@ -575,18 +575,18 @@ in_place:;
                 else
                 {
                     copy_slots(LOCAL(i), sp - n, n);
-                    if (op == 0x21u)
+                    if (op == WM_OP_LOCAL_SET)
                         sp -= n;
                 }
                 NEXT;
             }
-            CASE(0x23)
-            CASE(0x24)
+            CASE(WM_OP_GLOBAL_GET)
+            CASE(WM_OP_GLOBAL_SET)
             {
                 WmGlobal* g = inst->globals[imm_u32(&pc)];
                 uint32_t n = wm_type_slots(g->type);
                 /* The value as one or two slots, the way it lies in memory. */
-                if (op == 0x23u)
+                if (op == WM_OP_GLOBAL_GET)
                 {
                     if (n == 1u)
                         *sp = (uint32_t)g->value;
@@ -605,13 +605,13 @@ in_place:;
                 NEXT;
             }
 #if WM_HAS_REF_TYPES
-            CASE(0x25)
-            CASE(0x26)
+            CASE(WM_OP_TABLE_GET)
+            CASE(WM_OP_TABLE_SET)
             {
                 WmTable* t = inst->tables[imm_u32(&pc)];
                 uintptr_t r = 0;
                 uint32_t i;
-                if (op == 0x26u)
+                if (op == WM_OP_TABLE_SET)
                 {
                     sp -= WM_REF_SLOTS;
                     r = get_ref(sp);
@@ -619,7 +619,7 @@ in_place:;
                 i = *--sp;
                 if (i >= t->size)
                     TRAP(T_OOB_TABLE);
-                if (op == 0x26u)
+                if (op == WM_OP_TABLE_SET)
                     t->elems[i] = r;
                 else
                 {
@@ -629,11 +629,11 @@ in_place:;
                 NEXT;
             }
 #endif
-            CASE(0x28) CASE(0x29) CASE(0x2A) CASE(0x2B) CASE(0x2C) CASE(0x2D) CASE(0x2E) CASE(0x2F)
-            CASE(0x30) CASE(0x31) CASE(0x32) CASE(0x33) CASE(0x34) CASE(0x35)
-            CASE(0x36) CASE(0x37) CASE(0x38) CASE(0x39) CASE(0x3A) CASE(0x3B) CASE(0x3C) CASE(0x3D) CASE(0x3E)
+            CASE(WM_OP_I32_LOAD) CASE(WM_OP_I64_LOAD) CASE(WM_OP_F32_LOAD) CASE(WM_OP_F64_LOAD) CASE(WM_OP_I32_LOAD8_S) CASE(WM_OP_I32_LOAD8_U) CASE(WM_OP_I32_LOAD16_S) CASE(WM_OP_I32_LOAD16_U)
+            CASE(WM_OP_I64_LOAD8_S) CASE(WM_OP_I64_LOAD8_U) CASE(WM_OP_I64_LOAD16_S) CASE(WM_OP_I64_LOAD16_U) CASE(WM_OP_I64_LOAD32_S) CASE(WM_OP_I64_LOAD32_U)
+            CASE(WM_OP_I32_STORE) CASE(WM_OP_I64_STORE) CASE(WM_OP_F32_STORE) CASE(WM_OP_F64_STORE) CASE(WM_OP_I32_STORE8) CASE(WM_OP_I32_STORE16) CASE(WM_OP_I64_STORE8) CASE(WM_OP_I64_STORE16) CASE(WM_OP_I64_STORE32)
             {
-                uint8_t d = WM_ROM8(ACCESS + (op - 0x28u));
+                uint8_t d = WM_ROM8(ACCESS + (op - WM_FIRST_ACCESS));
                 uint8_t size = (uint8_t)(1u << (d & 3u));
                 uint64_t value = 0;
                 uint32_t address;
@@ -648,7 +648,7 @@ in_place:;
                     NEXT;
                 }
 #endif
-                if (op >= 0x36u)
+                if (op >= WM_OP_I32_STORE)
                 {
                     if (d & 8u)
                     {
@@ -664,7 +664,7 @@ in_place:;
                 if (offset > mem_size || wm_out_of_bounds(address, offset + size, mem_size))
                     TRAP(T_OOB_MEMORY);
                 address += offset;
-                if (op >= 0x36u)
+                if (op >= WM_OP_I32_STORE)
                 {
                     store_bytes(mem + address, value, size);
                     NEXT;
@@ -681,11 +681,11 @@ in_place:;
                     *sp++ = (uint32_t)value;
                 NEXT;
             }
-            CASE(0x3F)
+            CASE(WM_OP_MEMORY_SIZE)
                 ++pc;
                 *sp++ = inst->memory->pages;
                 NEXT;
-            CASE(0x40)
+            CASE(WM_OP_MEMORY_GROW)
                 ++pc;
 #if WM_TRACKS_CALLERS
                 rt->caller = func;
@@ -693,17 +693,17 @@ in_place:;
                 sp[-1] = wm_memory_grow(inst->memory, sp[-1]);
                 REFRESH();
                 NEXT;
-            CASE(0x41) *sp++ = imm_s32(&pc); NEXT;
+            CASE(WM_OP_I32_CONST) *sp++ = imm_s32(&pc); NEXT;
 #if WM_HAS_I64
-            CASE(0x42)
+            CASE(WM_OP_I64_CONST)
                 put64(sp, imm_signed(&pc));
                 sp += 2;
                 NEXT;
 #endif
-            CASE(0x43)
-            CASE(0x44)
+            CASE(WM_OP_F32_CONST)
+            CASE(WM_OP_F64_CONST)
             {
-                uint8_t n = op == 0x43u ? 4u : 8u;
+                uint8_t n = op == WM_OP_F32_CONST ? 4u : 8u;
                 for (uint8_t i = 0; i < n; ++i)
                     ((uint8_t*)sp)[i] = WM_RD8(pc + i);
                 pc += n;
@@ -711,18 +711,18 @@ in_place:;
                 NEXT;
             }
 #if WM_HAS_REF_TYPES
-            CASE(0xD0)
-            CASE(0xD2)
-                put_ref(sp, op == 0xD0u ? (++pc, (uintptr_t)0) : (uintptr_t)inst->funcs[imm_u32(&pc)]);
+            CASE(WM_OP_REF_NULL)
+            CASE(WM_OP_REF_FUNC)
+                put_ref(sp, op == WM_OP_REF_NULL ? (++pc, (uintptr_t)0) : (uintptr_t)inst->funcs[imm_u32(&pc)]);
                 sp += WM_REF_SLOTS;
                 NEXT;
-            CASE(0xD1)
+            CASE(WM_OP_REF_IS_NULL)
                 sp -= WM_REF_SLOTS;
                 *sp = get_ref(sp) == 0;
                 ++sp;
                 NEXT;
 #endif
-            CASE(0xFC)
+            CASE(WM_OP_PREFIX_FC)
             {
                 uint32_t sub = imm_u32(&pc);
 #if WM_HAS_FLOAT

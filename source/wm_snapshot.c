@@ -288,13 +288,13 @@ static WmResult walk(const WmInstance* inst, const Place* places, uint32_t count
             const Place* next = &places[k + 1u];
             const uint8_t* call = m->bytes + at.prev;
             uint8_t op = WM_RD8(call);
-            uint32_t args = next->func->type->param_count + (op == 0x11u);
-            uint32_t arg_slots = next->func->param_slots + (op == 0x11u);
-            if (op != 0x10u && op != 0x11u)
+            uint32_t args = next->func->type->param_count + (op == WM_OP_CALL_INDIRECT);
+            uint32_t arg_slots = next->func->param_slots + (op == WM_OP_CALL_INDIRECT);
+            if (op != WM_OP_CALL && op != WM_OP_CALL_INDIRECT)
                 result = wm_snapshot_invalid;
-            else if (check && op == 0x10u && leb_at(call + 1) != func_index(inst, next->func))
+            else if (check && op == WM_OP_CALL && leb_at(call + 1) != func_index(inst, next->func))
                 result = wm_snapshot_invalid;
-            else if (check && op == 0x11u && !same_type(&m->types[leb_at(call + 1)], next->func->type))
+            else if (check && op == WM_OP_CALL_INDIRECT && !same_type(&m->types[leb_at(call + 1)], next->func->type))
                 result = wm_snapshot_invalid;
             else if (before.count < args || before.slots < arg_slots)
                 result = wm_snapshot_invalid;
