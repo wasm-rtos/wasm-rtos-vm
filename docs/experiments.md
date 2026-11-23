@@ -32,6 +32,7 @@ the build before the experiment; ±0 is within noise.
 | [The translator's memory by the byte](#the-translators-memory-by-the-byte) | rejected | | peak 34.8 → 19.1 KB | |
 | [Shorter records for branches, constants and other accesses](#shorter-records-for-branches-constants-and-other-accesses) | kept | +2.5% | ±0 | |
 | [Records of their own for 64-bit instructions](#records-of-their-own-for-64-bit-instructions) | rejected by the profile | | | |
+| [A function in place by itself](#a-function-in-place-by-itself) | kept, as decision 21 | | ±0 | to measure |
 | **Stack and registers** | | | | |
 | [The top of the stack in a register](#the-top-of-the-stack-in-a-register) | kept | −0.5% | +7.6% | |
 | [`misc` taking the stack pointer's address](#misc-taking-the-stack-pointers-address) | fixed | +6.6% | ±0 | |
@@ -836,3 +837,23 @@ compares, its copies calls.
 **Kept.** The engine's files are built with `-fjump-tables
 -ftree-switch-conversion` there (about 20% faster; see the README), and
 the loop copies with `__builtin_memcpy`, which stays inline.
+
+### A function in place by itself
+
+**Kept, as decision 21** · 2026-11-23
+
+**Tried.** A function whose records find no room, or of a runtime that
+makes none, runs in the loop in place while the others keep their
+records; a return looks at its caller's frame to pick the loop.
+
+| | before | after |
+|---|---:|---:|
+| Mac CoreMark, ns per instruction (4 runs each, alternating) | 0.325–0.337 | 0.332–0.342 |
+| Uno flash (`tools/avr-size.sh`) | 35 688 B | 35 644 B |
+| spec, every function in place / at random | — | 27437 / 27437 |
+| `fib(15)` sliced by 37: fuel, slices (records, none made, refused) | — | 22686, 613 in all three |
+
+**Found.** The extra test per return costs nothing measurable on a Mac.
+Black Pill CoreMark at 104 KB (out of memory before) and ESP32 still to
+measure.
+

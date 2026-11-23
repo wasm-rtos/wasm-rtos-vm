@@ -1441,7 +1441,7 @@ in it. Larger tests later (fuzzing the allocator, every platform).
 
 ## 21. A function runs in place by itself: when its records find no room, and when the host asks
 
-**Proposed (2026-11-23).** The user asked for the second case: «чтобы
+**Decided (2026-11-23).** The user asked for the second case: «чтобы
 если задача была типа не важной или idle подобной ее можно было чисто
 так выполнять», with one API the same on every board, the Uno included,
 changeable while the program runs.
@@ -1568,6 +1568,31 @@ kernel, as everywhere else.
   check for calls both ways before building.
 - How much the side table entries of one function take, against its
   records (to measure: CoreMark, the largest functions).
+
+### As built
+
+- A function in place by itself keeps its side table in its tail
+  (`wm_reg_side`), without the translator's entries; they are made into
+  the same tail when part of it later runs inside the register loop, so
+  frames pointing into its side table stay valid. A function without
+  branches gets one empty entry, so such a frame never has `st` NULL.
+- The frames answer the open question: the register loop's slots are the
+  stack machine's (decision 16), so a call between the loops needs no
+  conversion; a return reads its caller's frame (`st` NULL: the register
+  loop) and goes on in that loop. One test more per return in the
+  register loop: Mac CoreMark ±0 (0.333 against 0.336 ns per
+  instruction, within the runs' spread).
+- A call from a function in place to one without records stops where
+  making room is safe (as the register loop does, `wm_code_stop`), and
+  there it gets them or runs in place too.
+- `memory.grow` and the misc instructions in the loop in place now name
+  their function as the caller (`WM_TRACKS_CALLERS`), as the register
+  loop does: the cache could otherwise let its side table go meanwhile.
+- Uno: flash 35 644 B against 35 688 B before, RAM the same.
+- Checks: `test/inplace.c` (the three ways, sliced, snapshots changing
+  the setting in turn, a loop that never calls moving to its records);
+  spec with `-DWM_SPEC_IN_PLACE=1` and `=2`, also paged with code always
+  moved, in `check.sh` (ASan only: UBSan's interpreter predecodes nothing).
 
 ### Work, all of it
 
