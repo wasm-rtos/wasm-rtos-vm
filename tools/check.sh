@@ -60,6 +60,18 @@ for mode in "" -DWM_PREDECODE=0; do
 done
 cc -std=gnu99 -O1 -g -fsanitize=address,undefined source/*.c test/host_objects.c -lm -o build/host_objects || exit 1
 build/host_objects >/dev/null && echo "host globals and tables: ok" || { echo "host globals and tables: FAIL"; build/host_objects | grep FAIL; fail=1; }
+# Reading and linking modules through wm.h (decision 23), in both loops and without validation.
+for mode in "-fsanitize=address,undefined" "-fsanitize=address" "-fsanitize=address -DWM_PREDECODE=0" "-fsanitize=address -DWM_HAS_VALIDATION=0"; do
+    # shellcheck disable=SC2086
+    cc -std=gnu99 -O1 -g -DWM_CHECKS=1 $mode source/*.c test/link.c -lm -o build/link || exit 1
+    build/link >/dev/null && echo "linking modules: ok $mode" || { echo "linking modules: FAIL $mode"; build/link | grep FAIL; fail=1; }
+done
+# Snapshots of linked instances (decision 23): frames in both modules, shared memory and global, a host function in a table.
+for mode in "-fsanitize=address,undefined" "-fsanitize=address" "-fsanitize=address -DWM_PREDECODE=0" "-fsanitize=address -DWM_HAS_VALIDATION=0" "-fsanitize=address -DWM_MEMORY_ALWAYS_PAGED=1"; do
+    # shellcheck disable=SC2086
+    cc -std=gnu99 -O1 -g -DWM_CHECKS=1 $mode source/*.c test/group.c -lm -o build/group || exit 1
+    build/group >/dev/null && echo "linked snapshots: ok $mode" || { echo "linked snapshots: FAIL $mode"; build/group | grep FAIL; fail=1; }
+done
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/room.c -lm -o build/room || exit 1
 build/room >/dev/null && echo "memory before code: ok" || { echo "memory before code: FAIL"; build/room | grep FAIL; fail=1; }
 cc -std=gnu99 -O1 -g -fsanitize=address source/*.c test/pool.c -lm -o build/pool || exit 1

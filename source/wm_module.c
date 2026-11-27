@@ -1883,3 +1883,128 @@ WmResult wm_code_stack(const WmModule* m, uint32_t index, uint32_t offset, WmCod
     out->local_count = v.local_count;
     return NULL;
 }
+
+/* What an import or export of this kind and index is (decision 23). */
+static void extern_type(const WmModule* m, uint8_t kind, uint32_t index, WmExternType* out)
+{
+    const WmLimits* limits = NULL;
+    out->kind = kind;
+    out->index = index;
+    switch (kind)
+    {
+    case WM_EXTERN_FUNC:
+    {
+        const WmType* t = &m->types[m->func_types[index]];
+        out->params = t->params;
+        out->results = t->results;
+        out->param_count = t->param_count;
+        out->result_count = t->result_count;
+        break;
+    }
+    case WM_EXTERN_TABLE:
+        out->type = m->tables[index].type;
+        limits = &m->tables[index].limits;
+        break;
+    case WM_EXTERN_MEMORY:
+        limits = &m->memory;
+        out->page_log2 = m->memory.page_log2;
+        break;
+    default:
+        out->type = m->globals[index].type;
+        out->mutable_ = m->globals[index].mutable_;
+        break;
+    }
+    if (limits)
+    {
+        out->min = limits->min;
+        out->max = limits->max;
+        out->has_max = limits->has_max;
+    }
+}
+
+uint32_t wm_module_imports(const WmModule* m, uint32_t index, WmExternType* out)
+{
+    if (out && index < m->import_count)
+    {
+        const WmImport* imp = &m->imports[index];
+        memset(out, 0, sizeof(*out));
+        out->module = (const char*)imp->module;
+        out->module_length = imp->module_length;
+        out->name = (const char*)imp->name;
+        out->name_length = imp->name_length;
+        extern_type(m, imp->kind, imp->index, out);
+    }
+    return m->import_count;
+}
+
+uint32_t wm_module_exports(const WmModule* m, uint32_t index, WmExternType* out)
+{
+    if (out && index < m->export_count)
+    {
+        const WmExport* exp = &m->exports[index];
+        memset(out, 0, sizeof(*out));
+        out->name = (const char*)exp->name;
+        out->name_length = exp->name_length;
+        extern_type(m, exp->kind, exp->index, out);
+    }
+    return m->export_count;
+}
+
+/* A memory or table by its index, named by its import when it is one. */
+static uint32_t defined(const WmModule* m, uint8_t kind, uint32_t index, WmExternType* out)
+{
+    uint32_t count = kind == WM_EXTERN_MEMORY ? m->memory_count : m->table_count;
+    if (!out || index >= count)
+        return count;
+    memset(out, 0, sizeof(*out));
+    for (uint32_t i = 0; i < m->import_count; ++i)
+        if (m->imports[i].kind == kind && m->imports[i].index == index)
+        {
+            out->module = (const char*)m->imports[i].module;
+            out->module_length = m->imports[i].module_length;
+            out->name = (const char*)m->imports[i].name;
+            out->name_length = m->imports[i].name_length;
+        }
+    extern_type(m, kind, index, out);
+    return count;
+}
+
+uint32_t wm_module_memories(const WmModule* m, uint32_t index, WmExternType* out)
+{
+    return defined(m, WM_EXTERN_MEMORY, index, out);
+}
+
+uint32_t wm_module_tables(const WmModule* m, uint32_t index, WmExternType* out)
+{
+    return defined(m, WM_EXTERN_TABLE, index, out);
+}
+
+/* The module was read once already: its sections are whole. */
+uint32_t wm_module_custom_sections(const WmModule* m, const char* name, uint32_t name_length, uint32_t index,
+                                   const uint8_t** bytes, uint32_t* size)
+{
+    Reader r = {m->bytes + 8, m->bytes + m->size, NULL};
+    uint32_t count = 0;
+    while (r.p < r.end && !r.error)
+    {
+        uint8_t id = read_u8(&r);
+        Reader section;
+        uint32_t length;
+        const uint8_t* own;
+        length = read_u32(&r);
+        section.p = skip(&r, length);
+        section.end = r.p;
+        section.error = NULL;
+        if (r.error || id != 0u)
+            continue;
+        own = read_name(&section, &length);
+        if (section.error || !wm_bytes_equal(own, length, (const uint8_t*)name, name_length))
+            continue;
+        if (count++ == index)
+        {
+            *bytes = section.p;
+            *size = (uint32_t)(section.end - section.p);
+        }
+    }
+    return count;
+}

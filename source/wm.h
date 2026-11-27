@@ -66,6 +66,8 @@ uint32_t wm_type_slots(uint8_t type);
  */
 typedef void* (*WmAllocator)(void* ptr, size_t size);
 void wm_set_allocator(WmAllocator allocator);
+/* Allocate as the engine does, through that allocator (as realloc; size 0 frees): for a host's linker, counted alike. */
+void* wm_allocate(void* ptr, size_t size);
 
 /* Decode and validate. The bytes must stay valid while the module is used. */
 WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size);
@@ -121,6 +123,59 @@ int wm_module_import_type(const WmModule* module, const char* name, const uint8_
                           const uint8_t** results, uint32_t* result_count);
 
 /*
+ * What a module imports or exports, for a host that links modules itself
+ * (decision 23). Names, signatures and section bytes point into the
+ * module's bytes: they are read as those are (WM_RD8 where a program is
+ * in program memory) and live as long as they do.
+ */
+typedef struct WmExternType
+{
+    /* Imports only: the module named; NULL for an export. */
+    const char* module;
+    uint32_t module_length;
+    const char* name;
+    uint32_t name_length;
+    uint8_t kind;
+    /* In its kind's index space: an import's comes before the module's own. */
+    uint32_t index;
+    /* Functions: the signature. */
+    const uint8_t* params;
+    const uint8_t* results;
+    uint32_t param_count;
+    uint32_t result_count;
+    /* Tables: the element type; globals: the value type, and whether it is mutable. */
+    uint8_t type;
+    uint8_t mutable_;
+    /* Tables and memories: the limits; page_log2 for memories, 16 or 0 (custom page sizes). */
+    uint32_t min;
+    uint32_t max;
+    uint8_t has_max;
+    uint8_t page_log2;
+} WmExternType;
+
+/*
+ * The imports and exports, in the module's order, as WebAssembly's JS API
+ * gives them (Module.imports, Module.exports): how many there are, and out
+ * filled when index is below that.
+ */
+uint32_t wm_module_imports(const WmModule* module, uint32_t index, WmExternType* out);
+uint32_t wm_module_exports(const WmModule* module, uint32_t index, WmExternType* out);
+/*
+ * Every memory and table the module has, in their index space: the
+ * imported ones first, with the names they are imported by, then its own
+ * (module and name NULL).
+ */
+uint32_t wm_module_memories(const WmModule* module, uint32_t index, WmExternType* out);
+uint32_t wm_module_tables(const WmModule* module, uint32_t index, WmExternType* out);
+/*
+ * The custom sections of that name (Module.customSections): how many there
+ * are, and the contents of the one at index, after its name, when index is
+ * below that.
+ */
+uint32_t wm_module_custom_sections(const WmModule* module, const char* name, uint32_t name_length, uint32_t index,
+                                   const uint8_t** bytes, uint32_t* size);
+
+/*
  * Instantiate: imports, segments, then the start function, run on runtime.
  * With runtime NULL the start function waits for wm_instance_start, so
  * imports can be linked first. A failure once the imports are linked (a
@@ -144,6 +199,14 @@ WmMemory* wm_instance_detach_memory(WmInstance* instance);
 WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* module, WmMemory* memory, WmResolver resolver,
                                     void* context);
 WmResult wm_instance_export(const WmInstance* instance, const char* name, uint32_t length, WmExtern* out);
+/*
+ * Bind a function import the resolver left unresolved (index in the
+ * function index space) to a host function or a function of another
+ * instance, of the import's type: calls go straight into it, and table
+ * entries made of the import see it. A function import still unlinked is
+ * refused as the target.
+ */
+WmResult wm_instance_link_function(WmInstance* instance, uint32_t index, WmFunc* func);
 WmMemory* wm_instance_memory(const WmInstance* instance);
 
 /*
@@ -155,6 +218,12 @@ typedef WmResult (*WmHostFunction)(WmRuntime* runtime, void* user, uint32_t* slo
 WmFunc* wm_host_function_new(const uint8_t* params, uint32_t param_count, const uint8_t* results,
                              uint32_t result_count, WmHostFunction function, void* user);
 void wm_host_function_free(WmFunc* func);
+/*
+ * Whether two functions are the same one: the same object, or an import
+ * wm_instance_link_function bound and its target (the import is a copy of
+ * it), as a table entry made of either is.
+ */
+int wm_func_equal(const WmFunc* a, const WmFunc* b);
 void wm_func_type(const WmFunc* func, const uint8_t** params, uint32_t* param_count, const uint8_t** results,
                   uint32_t* result_count);
 
@@ -162,11 +231,17 @@ WmGlobal* wm_global_new(uint8_t type, uint8_t mutable_, uint64_t value);
 void wm_global_free(WmGlobal* global);
 uint8_t wm_global_type(const WmGlobal* global);
 uint64_t wm_global_get(const WmGlobal* global);
+/* For the host: a linker fills an immutable global it made before the module that imports it runs. */
+void wm_global_set(WmGlobal* global, uint64_t value);
 
 WmTable* wm_table_new(uint8_t type, uint32_t size, uint32_t max);
 void wm_table_free(WmTable* table);
 /* Grow by delta entries (null): the old size, or 0xFFFFFFFF when it cannot grow. */
 uint32_t wm_table_grow(WmTable* table, uint32_t delta);
+/* Table.length, get and set of WebAssembly's JS API, for funcref tables; get gives NULL for null. */
+uint32_t wm_table_size(const WmTable* table);
+WmFunc* wm_table_get(const WmTable* table, uint32_t index);
+WmResult wm_table_set(WmTable* table, uint32_t index, WmFunc* func);
 
 WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages);
 /* page_log2 16 for 64 KiB pages, 0 for 1-byte pages (custom page sizes). */
