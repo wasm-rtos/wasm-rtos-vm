@@ -1883,7 +1883,7 @@ now. Their names leave `docs/api-1.0.txt`; 1.0 is not tagged yet.
 
 ## 24. A kept memory may be the one a module imports
 
-**Proposed (2026-11-27).** The user: «да делай своп» — a task of a
+**Decided and built (2026-11-27).** The user: «да делай своп» — a task of a
 loader (wasm-rtos decision 17) leaves RAM as any task does.
 
 ### Problem
@@ -1946,3 +1946,14 @@ One rule for both: a memory given here has its bytes already.
 | 1 | `wm_instantiate_with_memory` binds a kept memory to the memory import, no data segments, no start | source |
 | 2 | Test: a library rebuilt on a kept memory leaves its data as the program left it; limits checked; detach gives NULL | test |
 | 3 | `wm.h` comment, CHANGELOG | docs |
+
+### Built
+
+As on paper. Checked: `test/kept.c` in three builds; `tools/check.sh` in
+full (the spec suite, the kernel's tests also paged); wasm-rtos-dylink's
+test, where a linked task swapped out inside a library comes back and
+ends as a run that never left, and fails when the libraries' data
+segments are written again; on the boards, a linked task swapped out
+inside the library and back (ESP32, Black Pill). The loops' machine code
+is the same (Mac, Xtensa); `WM_TINY` 28386 bytes, 56 more (the import
+binding, run when a module is instantiated).
