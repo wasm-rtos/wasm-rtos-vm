@@ -273,7 +273,7 @@ static WmResult initialize(WmInstance* inst, int kept_memory)
 /*
  * The functions of this instance: the module's own, then a stub for each
  * function import still unlinked, which traps until something links it
- * (dylink.0). A linked import uses its target and takes no room here.
+ * (wm_instance_link_function). A linked import uses its target and takes no room here.
  */
 static WmResult make_own_funcs(WmInstance* inst)
 {
@@ -531,6 +531,18 @@ WmGlobal* wm_global_new(uint8_t type, uint8_t mutable_, uint64_t value)
 void wm_global_free(WmGlobal* g) { wm_free(g); }
 uint8_t wm_global_type(const WmGlobal* g) { return g->type; }
 uint64_t wm_global_get(const WmGlobal* g) { return g->value; }
+void wm_global_set(WmGlobal* g, uint64_t value) { g->value = value; }
+
+int wm_func_equal(const WmFunc* a, const WmFunc* b)
+{
+    if (a == b)
+        return 1;
+    if (!a || !b)
+        return 0;
+    /* A copy of a host function has its function and user; of a module's, its code and instance. */
+    return a->host ? a->host == b->host && a->user == b->user && !b->code
+                   : a->code && a->code == b->code && a->instance == b->instance;
+}
 
 WmTable* wm_table_new(uint8_t type, uint32_t size, uint32_t max)
 {
@@ -554,6 +566,42 @@ void wm_table_free(WmTable* t)
     if (t)
         wm_free(t->elems);
     wm_free(t);
+}
+
+uint32_t wm_table_size(const WmTable* t) { return t->size; }
+
+WmFunc* wm_table_get(const WmTable* t, uint32_t index)
+{
+    return t->type == WM_FUNCREF && index < t->size ? (WmFunc*)t->elems[index] : NULL;
+}
+
+WmResult wm_table_set(WmTable* t, uint32_t index, WmFunc* func)
+{
+    if (t->type != WM_FUNCREF)
+        return E_INCOMPATIBLE;
+    if (index >= t->size)
+        return WM_ERR_TRAP("trap: out of bounds table access");
+    t->elems[index] = (uintptr_t)func;
+    return NULL;
+}
+
+/* An import's own stub, which nothing has bound: no code, not a host's. */
+static int unlinked(const WmInstance* inst, const WmFunc* f) { return f->instance == inst && !f->code && !f->host; }
+
+WmResult wm_instance_link_function(WmInstance* inst, uint32_t index, WmFunc* func)
+{
+    WmFunc* stub;
+    if (index >= inst->module->func_imports || !func)
+        return WM_ERR_UNLINKABLE("unlinkable: unknown function import");
+    stub = inst->funcs[index];
+    if (!unlinked(inst, stub))
+        return WM_ERR_UNLINKABLE("unlinkable: function import already linked");
+    if (func->instance && unlinked(func->instance, func))
+        return WM_ERR_UNLINKABLE("unlinkable: function import not linked yet");
+    if (!wm_func_has_type(func, stub->type))
+        return E_INCOMPATIBLE;
+    *stub = *func;
+    return NULL;
 }
 
 #if WM_HAS_ALLOCATOR
@@ -592,6 +640,14 @@ void wm_free(void* ptr)
 #else
 void wm_set_allocator(WmAllocator a) { (void)a; }
 #endif
+
+void* wm_allocate(void* ptr, size_t size)
+{
+    if (size)
+        return wm_realloc(ptr, size);
+    wm_free(ptr);
+    return NULL;
+}
 
 #if WM_TRACKS_CALLERS
 static WmRuntime* g_runtimes;

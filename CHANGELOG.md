@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Modules read and linked through `wm.h`** (decision 23), named after
+  WebAssembly's JS API: `wm_module_imports`, `wm_module_exports` and
+  `wm_module_custom_sections` (`WmExternType`); `wm_instance_link_function`
+  binds a function import left unresolved, as `WmResolver`'s comment
+  promised; `wm_table_size`, `wm_table_get`, `wm_table_set`. A host can
+  link modules of its own format without the engine's internals.
+- **Snapshots of linked instances** (decision 23): a snapshot is of the
+  instance given and every instance linked to it, with calls between
+  them on the stack, and the memories, tables and mutable globals they
+  use (imported ones too) written once each. The format is version 3;
+  version 2 is refused. A host function in a table or on the stack is
+  kept; version 2 wrote it as null.
+
 - **WASI without files** (decision 19): `wm_wasi.h` answers the WASI
   preview 1 calls that need no file system for any host, through a
   `WmWasiHost` of plain functions; every other WASI call links and

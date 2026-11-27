@@ -52,8 +52,10 @@ How these work inside: [docs/internals.md](docs/internals.md).
   passes, 27437 checks, also under AddressSanitizer and UBSan.
 - Runs on AVR (Arduino Uno), ARM Cortex-M (STM32F411), ESP32, desktop
   computers and in the browser (Emscripten).
-- Optional `dylink.0` shared libraries (`wm_dylink.h`): a program and its
-  libraries in one runtime, like an ELF process.
+- Modules read and linked by the host (`wm_module_imports`,
+  `wm_instance_link_function`...), and snapshots of linked instances: a
+  host's own way of making a program out of modules, such as `dylink.0`
+  shared libraries ([wasm-rtos-dylink](https://github.com/wasm-rtos/wasm-rtos-dylink)).
 - Optional WASI preview 1 without files (`wm_wasi.h`): programs built with
   a WASI C library run; the host says what the clocks, sleeping and output
   are.
@@ -67,8 +69,7 @@ or generate:
 cc -std=gnu99 -O2 your_main.c source/*.c -lm
 ```
 
-`wm_dylink.c` is only needed for `dylink.0` programs. On Arduino and
-ESP-IDF build the engine's files with `-fjump-tables
+On Arduino and ESP-IDF build the engine's files with `-fjump-tables
 -ftree-switch-conversion` (their default turns the interpreter's `switch`
 into a chain of comparisons; about 20% faster).
 
@@ -322,15 +323,26 @@ WmResult wm_code_image_map(WmModule* module, const void* image, uint32_t size); 
 extern const char wm_code_image_invalid[];   /* another module or build, or damaged: write a new one */
 ```
 
-### dylink.0 (`wm_dylink.h`)
+### Linking modules (decision 23)
 
 ```c
-int          wm_module_is_dylink(const WmModule* module);
-WmResult     wm_dylink_load(WmDylink** out, const WmModule* program, const char* name,
-                            WmRuntime* runtime, const WmDylinkOptions* options);
-WmInstance*  wm_dylink_instance(const WmDylink* process);
-void         wm_dylink_free(WmDylink* process);
+/* What a module imports, exports, defines, and its custom sections (as WebAssembly's JS API) */
+uint32_t wm_module_imports(const WmModule* m, uint32_t index, WmExternType* out);   /* the count */
+uint32_t wm_module_exports(const WmModule* m, uint32_t index, WmExternType* out);
+uint32_t wm_module_memories(const WmModule* m, uint32_t index, WmExternType* out);
+uint32_t wm_module_tables(const WmModule* m, uint32_t index, WmExternType* out);
+uint32_t wm_module_custom_sections(const WmModule* m, const char* name, uint32_t name_length,
+                                   uint32_t index, const uint8_t** bytes, uint32_t* size);
+/* A function import left unresolved, bound once the other module is there */
+WmResult wm_instance_link_function(WmInstance* instance, uint32_t index, WmFunc* func);
+int      wm_func_equal(const WmFunc* a, const WmFunc* b);
+uint32_t wm_table_size(const WmTable* t);  WmFunc* wm_table_get(...);  WmResult wm_table_set(...);
+void     wm_global_set(WmGlobal* global, uint64_t value);
+void*    wm_allocate(void* ptr, size_t size);   /* as the engine allocates */
 ```
+
+A snapshot of an instance holds every instance linked to it: frames in
+any of them, and the memories, tables and globals they share, once each.
 
 ### WASI without files (`wm_wasi.h`)
 
@@ -347,7 +359,7 @@ arguments, environment (none), random bytes and `proc_exit`, in both
 `wasi_snapshot_preview1` and `wasi_unstable`. A host with files answers the
 file calls first. `wm_wasi_free` gives back the functions made.
 
-The comments in `wm.h`, `wm_dylink.h` and `wm_wasi.h` give the details of
+The comments in `wm.h` and `wm_wasi.h` give the details of
 each call. `docs/api-1.0.txt` lists the public names at 1.0;
 `tools/check-api.py` checks that they are only added.
 

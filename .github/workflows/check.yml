@@ -41,7 +41,7 @@ jobs:
           ln -s "$(command -v clang)" "$RUNNER_TEMP/bin/cc"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
-      # clang for wasm32 builds the snapshot test's program and the kernel's dylink.0 test library.
+      # clang for wasm32 builds the snapshot test's program.
       - name: Install the WASI SDK
         env:
           WASI_SDK_VERSION: "34"

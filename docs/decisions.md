@@ -1711,3 +1711,172 @@ ESP32 and Black Pill against main. Kept only if smaller and not slower.
 | 5 | The validator's simple instructions through the signature | source |
 | 6 | Names for the profile and traces | source |
 | 7 | Sizes (AVR, M4, Xtensa), CoreMark on three machines, loops' machine code, spec; experiments.md | test, docs |
+
+## 23. Linkers outside the engine: modules read and linked through `wm.h`, linked instances in one snapshot
+
+**Decided and built (2026-11-27)**, with four more functions than on
+paper (see "Built" below). The user: «dylink из репо вытеснить и сделать
+не по def а как .h… чтобы можно было сделать похожий например свой
+механизм при желании», «мне нужно максимально элегантное решение». With
+wasm-rtos decision 16 (loaders), which takes dylink out of the kernel too.
+
+### Problem
+
+1. **dylink.0 is in the engine, and only it can be.** `wm_dylink.c` (975
+   lines) includes `wm_internal.h`: it reads `m->imports` and
+   `m->exports`, finds its custom section in `module->bytes`, binds a
+   function import by overwriting the instance's stub (`*stub = *found`)
+   and writes `table->elems`. None of that is in `wm.h`, so no other way
+   of making a program out of modules can be written beside it. Yet
+   dylink.0 is not WebAssembly's standard but a convention of the tools
+   (WebAssembly/tool-conventions, `DynamicLinking.md`).
+2. **`wm.h` promises a function it does not have.** `WmResolver`'s comment
+   says an unresolved function import traps "until
+   wm_instance_link_function binds it"; there is no such function.
+3. **A snapshot is of one instance.** `wm_snapshot.c` refuses a call of
+   another instance on the stack, a reference to another instance's
+   function, and anything but one instance: a program linked from
+   modules cannot be saved, swapped out as its state or put to deep
+   sleep.
+
+Size and speed are not the problem: `wm_dylink.c` is 6630 bytes on a
+Cortex-M4 (`-O2`), only in builds that link it, and runs only while a
+program loads; calls between modules go straight in, as within one.
+
+### Decision
+
+**1. Reading a module**, named after WebAssembly's JS API
+(`Module.imports`, `Module.exports`, `Module.customSections`) and
+wasm-c-api (`wasm_module_imports`, `wasm_module_exports`). Each returns
+how many there are and fills `out` when `index` is below that:
+
+```c
+typedef struct WmExternType {
+    const char* module; uint32_t module_length;   /* imports only */
+    const char* name;   uint32_t name_length;
+    uint8_t kind;                                 /* WM_EXTERN_* */
+    uint32_t index;                               /* in its kind's index space */
+    /* func: the signature; table, memory: limits; global: type, mutable */
+    ...
+} WmExternType;
+
+uint32_t wm_module_imports(const WmModule* module, uint32_t index, WmExternType* out);
+uint32_t wm_module_exports(const WmModule* module, uint32_t index, WmExternType* out);
+uint32_t wm_module_custom_sections(const WmModule* module, const char* name, uint32_t name_length,
+                                   uint32_t index, const uint8_t** bytes, uint32_t* size);
+```
+
+`wm_module_import_type` stays (1.0 names are only added).
+
+**2. Linking late**, what a linker of modules that call each other needs
+(an import can only be bound once the other module is instantiated):
+
+```c
+/* Binds a function import left unresolved; its type must match. Calls go straight in. */
+WmResult wm_instance_link_function(WmInstance* instance, uint32_t import_index, WmFunc* func);
+uint32_t wm_table_size(const WmTable* table);
+WmFunc*  wm_table_get(const WmTable* table, uint32_t index);
+WmResult wm_table_set(WmTable* table, uint32_t index, WmFunc* func);
+```
+
+`wm_instance_link_function` is what the resolver's comment already
+promises; it does what dylink does to the stub now, behind a type check.
+The table's three are JS API's `Table.length`, `get`, `set`.
+
+**3. A snapshot is of the program's instance and every instance linked to
+it.** `wm_snapshot_write` and `wm_snapshot_read` keep their signatures;
+what "the instance" covers grows. The engine finds the group itself,
+from the instance it is given: the instances its bound function imports
+belong to, and those its tables' functions belong to, depth first in
+import order, then table order. Nobody hands it a list.
+
+- Shared memories and tables are written once; each instance's own
+  globals, tables and dropped segments as now.
+- Frames and function references are (instance in the group, function):
+  calls between modules on the stack and other modules' functions in a
+  table are saved.
+- On reading, the same walk over the instances given must find as many,
+  each of a module with the hash written (already in the header):
+  otherwise `wm_snapshot_invalid`, before anything changes.
+- The header's version goes up to 3; the old version is refused
+  (`wm_snapshot_invalid`): 1.0 is not tagged, no snapshot of it is kept
+  anywhere, and reading both would be two readers for one format.
+- A host function in a table or on the stack is written as the first
+  function import bound to it. Version 2 wrote it as null, so such a
+  program trapped after it was read back.
+
+A linker then writes nothing for snapshots. Its host builds the same
+instances again, as the kernel does now for one: instantiated with no
+runtime, started unless the memory was kept apart (back from swap, where
+nothing runs), and reads the snapshot over them, which replaces whatever
+their start functions wrote.
+That holds for a linker that builds the same group from the same modules
+and keeps its state in WebAssembly's objects (memories, tables, globals),
+not in C variables of its own.
+
+**4. dylink.0 leaves the engine.** `wm_dylink.c` and `wm_dylink.h` move
+to their own repository (wasm-rtos-dylink, wasm-rtos decision 16),
+rewritten on `wm.h` and `wm_heap.h` only, following DynamicLinking.md as
+now. Their names leave `docs/api-1.0.txt`; 1.0 is not tagged yet.
+
+### Why
+
+- WebAssembly's specification leaves linking to the embedder
+  (`instantiate(module, imports)`); in the browser, Emscripten implements
+  dylink.0 in JavaScript on the JS API, and V8 knows nothing of it. The
+  engine should hold the standard and let conventions live beside it, as
+  WASI does (decision 19).
+- Linux's dynamic linker is not in the kernel either (`ld.so`, named by
+  `PT_INTERP`; `dyld` on macOS): the kernel loads, a program links.
+- Saving a group by rebuilding it and laying the state over it is how
+  CRIU restores processes; not running start functions again is what
+  Wizer does for snapshots of initialised modules. WebAssembly has no
+  standard for snapshots: ours stays ours, and says so.
+
+### Instead
+
+- **dylink stays, behind `OS_HAS_DYLINK`**: one way to link, in the
+  engine, unsaved. What we have.
+- **The linker hands the engine a list of its instances** (and a recipe
+  to rebuild them): the engine can find them from the links, and a list
+  is one more thing every linker gets wrong.
+- **A mode in which no WebAssembly code runs, for restoring**: not
+  needed; building without running is already how instances are made.
+- **A loader in WebAssembly** (a `dylink.wasm` linking through calls of
+  the host): possible later through the same functions given to programs
+  as handles, with a rule for who may call them. Not for 1.0.
+- **The Component Model**: the standard way to compose modules, too
+  heavy for these boards now; a loader of its own later, the engine
+  unchanged.
+
+### Steps
+
+| # | What | Where |
+|---|---|---|
+| 1 | `wm_module_imports`, `wm_module_exports`, `wm_module_custom_sections`; test | source, test |
+| 2 | `wm_instance_link_function`, `wm_table_size/get/set`; the resolver's comment true | source, test |
+| 3 | Snapshots of linked instances: the walk, (instance, function), version; old snapshots read | source, test |
+| 4 | `wm_dylink` out, to wasm-rtos-dylink on `wm.h`; its tests with it | source, docs, CI |
+| 5 | `api-1.0.txt`, internals, README, CHANGELOG | docs |
+
+### Built
+
+- Rewriting dylink.0 on `wm.h` showed what a linker needs besides what was
+  on paper: **`wm_module_memories` and `wm_module_tables`** (a program
+  defines its memory without exporting it, so imports and exports do not
+  say it is there), **`wm_func_equal`** (an import bound late is a copy of
+  its target, and C needs `&f` to be one value whichever module takes
+  it), **`wm_global_set`** (the GOT is filled once every module is in;
+  `Global.value` in the JS API), and **`wm_allocate`** (a linker's memory
+  goes through the engine's allocator, so a kernel counts it per task).
+- `wm_instance_link_function` refuses a target that is itself an import
+  still unlinked: binding to it would copy a stub.
+- The group is found from the copies, the tables and the globals, breadth
+  first; nothing needed a list from the linker, nor a mode in which code
+  does not run.
+- Checked: `test/link.c` (reading, linking, tables; 4 builds),
+  `test/group.c` (a call stopped with frames in two modules that call each
+  other, five fuel points, a host function in a table, a group that
+  differs refused; 5 builds), the kernel's tests, and wasm-rtos-dylink's
+  test, which fails with the snapshots of version 2. Machine code of the
+  loops unchanged (Mac, Xtensa); Uno (`WM_TINY`) 28330 bytes as before.

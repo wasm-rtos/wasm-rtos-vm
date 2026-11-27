@@ -13,7 +13,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIST = os.path.join(ROOT, "docs", "api-1.0.txt")
-HEADERS = ["source/wm.h", "source/wm_wasi.h", "source/wm_dylink.h", "source/wm_heap.h"]
+HEADERS = ["source/wm.h", "source/wm_wasi.h", "source/wm_heap.h"]
 SKIP = {"if", "for", "while", "switch", "return", "sizeof", "defined", "__attribute__", "import_module",
         "import_name", "typedef", "do", "void", "int", "char", "unsigned", "signed", "short", "long", "float",
         "double", "const", "volatile", "static", "inline", "extern", "struct", "enum", "union"}

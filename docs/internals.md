@@ -216,14 +216,16 @@ shared by the memories (each has an address space number in the key), with
 loads the frame. An access that crosses frames is done through the memory
 functions and the loop steps past it.
 
-## dylink.0
+## Linked instances
 
-`source/wm_dylink.c` loads a position-independent program with the shared
-libraries it needs into one runtime, as an ELF process: one linear memory
-and one function table, the convention's globals made by the loader. A
-function imported from another module is a copy of the target `WmFunc`, so
-a call into a library is a call into its code, and fuel and stops work
-across modules.
+A host links modules itself (decision 23; wasm-rtos-dylink does
+`dylink.0` this way). `wm_instance_link_function` makes a function import
+a copy of its target `WmFunc`, so a call into another module is a call into
+its code, fuel and stops work across modules, and the table entries made of
+the import see it. A snapshot finds the instances linked to the one it is
+given from those copies and from the functions in tables and globals,
+numbers their functions one after another, and writes what they share
+once.
 
 ## ESP32
 

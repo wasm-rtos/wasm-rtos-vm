@@ -5,23 +5,34 @@
  * functions are indices; everything is little-endian and holds no host
  * address.
  *
- *   header   magic "WMS1", version, reference slots, module hash, memory
- *            page size and pages, stack slots, frames
+ * A snapshot is of the instance given and every instance linked to it
+ * (decision 23), its group: those whose functions its function imports
+ * bind to or its tables and globals hold, and theirs, breadth first in
+ * import order. The memories, tables and mutable globals they use, their
+ * own and imported, are written once each, in the order the group meets
+ * them. Functions are numbered across the group, instance by instance, as
+ * each numbers its own (imports first).
+ *
+ *   header   magic "WMS1", version, reference slots, the instances and the
+ *            hash of each one's module, the memories and each one's page
+ *            size and pages, stack slots, frames
  *   call     the suspended call: entry function, base, depth, and where it
  *            stands (function, offset, side index, frame and stack slots)
  *   frames   the calls below it, outermost first
  *   stack    the used slots
- *   memory   runs of (zero bytes, data bytes, data); or, for a state
+ *   memories each: runs of (zero bytes, data bytes, data); or, for a state
  *            snapshot that leaves the memory where it is, one run of
  *            (0xFFFFFFFF, 0xFFFFFFFF)
- *   globals  the module's own mutable globals
- *   tables   the module's own tables: size, then each element
- *   dropped  one byte per element segment, then per data segment
+ *   globals  the mutable globals
+ *   tables   the tables: size, then each element
+ *   dropped  each instance's: one byte per element segment, then per data
+ *            segment
  *   crc      CRC-32 of all of the above
  *
- * A function reference on the value stack is written as its index plus one
- * (0 for null), in the first of its slots, as in globals and tables; an
- * externref as the host's value. References change the stack's layout: a
+ * A function reference on the value stack is written as its number plus
+ * one (0 for null), in the first of its slots, as in globals and tables; a
+ * host function by the first function import bound to it; an externref as
+ * the host's value. References change the stack's layout: a
  * module that can have them there loads only into a build with references
  * as wide. C programs have none.
  *
@@ -33,7 +44,7 @@
 #include <stdlib.h>
 
 #define WM_SNAPSHOT_MAGIC 0x31534D57u /* "WMS1" */
-#define WM_SNAPSHOT_VERSION 2u
+#define WM_SNAPSHOT_VERSION 3u
 /* Zero runs shorter than this are written as data. */
 #define MIN_ZERO_RUN 32u
 
@@ -135,13 +146,117 @@ static uint32_t func_index(const WmInstance* inst, const WmFunc* f)
     return WM_NONE;
 }
 
-static WmFunc* func_at(const WmInstance* inst, uint32_t index)
+/* The instance a snapshot is of and those linked to it, and what they use (once each). */
+typedef struct Group
 {
-    WmFunc* f;
-    if (index >= inst->module->func_count)
-        return NULL;
-    f = inst->funcs[index];
-    return func_index(inst, f) == index && f->code ? f : NULL;
+    WmInstance** insts;
+    uint32_t count;
+    /* The number of each instance's first function across the group. */
+    uint32_t* bases;
+    WmMemory** memories;
+    uint32_t memory_count;
+    WmTable** tables;
+    uint32_t table_count;
+    /* Mutable only. */
+    WmGlobal** globals;
+    uint32_t global_count;
+    uint8_t stack_refs;
+} Group;
+
+/* Adds item to the list unless it is there: 0 when out of memory. */
+static int add(void*** list, uint32_t* count, void* item)
+{
+    void** more;
+    for (uint32_t i = 0; i < *count; ++i)
+        if ((*list)[i] == item)
+            return 1;
+    if (!(more = (void**)wm_realloc(*list, ((size_t)*count + 1u) * sizeof(void*))))
+        return 0;
+    more[(*count)++] = item;
+    *list = more;
+    return 1;
+}
+
+static void group_free(Group* g)
+{
+    wm_free(g->insts), wm_free(g->bases), wm_free(g->memories), wm_free(g->tables), wm_free(g->globals);
+}
+
+/* The instance of a function reference, to the group. */
+static int add_ref(Group* g, uint8_t type, uintptr_t ref)
+{
+    const WmFunc* f = (const WmFunc*)ref;
+    return type != WM_FUNCREF || !f || !f->instance || add((void***)&g->insts, &g->count, f->instance);
+}
+
+/* The group of inst, the same for the same links: what a snapshot is written of and read into. */
+static WmResult group_make(Group* g, WmInstance* inst)
+{
+    int ok = add((void***)&g->insts, &g->count, inst);
+    for (uint32_t i = 0; ok && i < g->count; ++i)
+    {
+        WmInstance* in = g->insts[i];
+        const WmModule* m = in->module;
+        for (uint32_t k = 0; ok && k < m->func_imports; ++k)
+            ok = add_ref(g, WM_FUNCREF, (uintptr_t)in->funcs[k]);
+        for (uint32_t k = 0; ok && k < m->table_count; ++k)
+        {
+            WmTable* t = in->tables[k];
+            ok = add((void***)&g->tables, &g->table_count, t);
+            for (uint32_t e = 0; ok && e < t->size; ++e)
+                ok = add_ref(g, t->type, t->elems[e]);
+        }
+        for (uint32_t k = 0; ok && k < m->global_count; ++k)
+        {
+            WmGlobal* gl = in->globals[k];
+            if (gl->mutable_)
+                ok = add((void***)&g->globals, &g->global_count, gl) && add_ref(g, gl->type, (uintptr_t)gl->value);
+        }
+        if (ok && in->memory)
+            ok = add((void***)&g->memories, &g->memory_count, in->memory);
+        g->stack_refs |= m->stack_refs;
+    }
+    if (ok && (g->bases = (uint32_t*)wm_malloc((size_t)g->count * sizeof(uint32_t))) != NULL)
+        for (uint32_t i = 0, base = 0; i < g->count; base += g->insts[i++]->module->func_count)
+            g->bases[i] = base;
+    if (!ok || !g->bases)
+    {
+        group_free(g);
+        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    }
+    return NULL;
+}
+
+/* A function's number across the group, or WM_NONE: the instance that holds its object, else (a host's) an import bound to it. */
+static uint32_t group_index(const Group* g, const WmFunc* f)
+{
+    for (uint32_t i = 0; i < g->count; ++i)
+    {
+        uint32_t index = func_index(g->insts[i], f);
+        if (index != WM_NONE)
+            return g->bases[i] + index;
+    }
+    for (uint32_t i = 0; f && !f->instance && i < g->count; ++i)
+        for (uint32_t k = 0; k < g->insts[i]->module->func_imports; ++k)
+            if (g->insts[i]->funcs[k] == f)
+                return g->bases[i] + k;
+    return WM_NONE;
+}
+
+/* The function of that number: the object, as group_index found it; NULL past the group. */
+static WmFunc* group_func(const Group* g, uint32_t number)
+{
+    for (uint32_t i = 0; i < g->count; ++i)
+        if (number - g->bases[i] < g->insts[i]->module->func_count)
+            return g->insts[i]->funcs[number - g->bases[i]];
+    return NULL;
+}
+
+/* A function with code a frame may stand in, by its number. */
+static WmFunc* group_code_at(const Group* g, uint32_t number)
+{
+    WmFunc* f = group_func(g, number);
+    return f && f->code && group_index(g, f) == number ? f : NULL;
 }
 
 /* A frame as a snapshot has it: its function, the offset and side table index it stands at, its first slot. */
@@ -153,9 +268,11 @@ typedef struct Place
     uint32_t fp;
 } Place;
 
-static WmResult place_of(const WmInstance* inst, const WmRuntime* rt, WmFunc* func, const uint8_t* pc,
-                         const WmSide* st, const uint32_t* fp, int inplace, Place* out)
+static WmResult place_of(const WmRuntime* rt, WmFunc* func, const uint8_t* pc, const WmSide* st, const uint32_t* fp,
+                         int inplace, Place* out)
 {
+    /* Its code's module: a function bound to an import of another runs that one's code. */
+    const WmModule* m = func->instance->module;
     out->func = func;
     out->fp = (uint32_t)(fp - rt->stack);
 #if WM_PREDECODE
@@ -164,9 +281,9 @@ static WmResult place_of(const WmInstance* inst, const WmRuntime* rt, WmFunc* fu
      * frame of a function running in place by itself (decision 21, st not
      * NULL): its own side table, from 0.
      */
-    if (inplace || (st && WM_RUNS_FAST(func->instance->module)))
+    if (inplace || (st && WM_RUNS_FAST(m)))
     {
-        out->offset = (uint32_t)(pc - inst->module->bytes);
+        out->offset = (uint32_t)(pc - m->bytes);
         out->side = func->code->side + (uint32_t)(st - func->code->tail->side);
         return NULL;
     }
@@ -175,20 +292,20 @@ static WmResult place_of(const WmInstance* inst, const WmRuntime* rt, WmFunc* fu
 #endif
 #if WM_PREDECODE
     /* A predecoded position is a record (its function on a stack keeps them): written as the instruction it stands for. */
-    if (WM_RUNS_FAST(func->instance->module))
-        return wm_fast_position(func->instance->module, func->code, (const WmCell*)(const void*)pc, &out->offset,
+    if (WM_RUNS_FAST(m))
+        return wm_fast_position(m, func->code, (const WmCell*)(const void*)pc, &out->offset,
                                 &out->side)
                    ? NULL
                    : wm_snapshot_invalid;
 #endif
-    out->offset = (uint32_t)(pc - inst->module->bytes);
-    out->side = (uint32_t)(st - inst->module->side);
+    out->offset = (uint32_t)(pc - m->bytes);
+    out->side = (uint32_t)(st - m->side);
     return NULL;
 }
 
-static void put_place(Stream* s, const WmInstance* inst, const Place* p)
+static void put_place(Stream* s, const Group* g, const Place* p)
 {
-    put32(s, func_index(inst, p->func));
+    put32(s, group_index(g, p->func));
     put32(s, p->offset);
     put32(s, p->side);
     put32(s, p->fp);
@@ -240,10 +357,8 @@ static uint32_t mark_refs(const uint8_t* types, uint32_t count, uint32_t slot, u
  * as high as the innermost frame's code says. With refs (one byte a
  * slot, zeroed), where function references start on the stack.
  */
-static WmResult walk(const WmInstance* inst, const Place* places, uint32_t count, uint32_t base, uint32_t stack_slots,
-                     int check, uint8_t* refs)
+static WmResult walk(const Place* places, uint32_t count, uint32_t base, uint32_t stack_slots, int check, uint8_t* refs)
 {
-    const WmModule* m = inst->module;
     WmResult result = NULL;
     WmCodeStack at;
     WmCodeStack before;
@@ -255,7 +370,9 @@ static WmResult walk(const WmInstance* inst, const Place* places, uint32_t count
     {
         const Place* p = &places[k];
         const WmFunc* f = p->func;
-        uint32_t index = func_index(inst, f) - m->func_imports;
+        /* The code's module and its function there (decision 23: a frame may run another module's code). */
+        const WmModule* m = f->instance->module;
+        uint32_t index = (uint32_t)(f->code - m->codes);
         const uint8_t* operands;
         uint32_t operand_count;
         uint32_t operand_slots;
@@ -292,7 +409,7 @@ static WmResult walk(const WmInstance* inst, const Place* places, uint32_t count
             uint32_t arg_slots = next->func->param_slots + (op == WM_OP_CALL_INDIRECT);
             if (op != WM_OP_CALL && op != WM_OP_CALL_INDIRECT)
                 result = wm_snapshot_invalid;
-            else if (check && op == WM_OP_CALL && leb_at(call + 1) != func_index(inst, next->func))
+            else if (check && op == WM_OP_CALL && leb_at(call + 1) != func_index(f->instance, next->func))
                 result = wm_snapshot_invalid;
             else if (check && op == WM_OP_CALL_INDIRECT && !same_type(&m->types[leb_at(call + 1)], next->func->type))
                 result = wm_snapshot_invalid;
@@ -319,26 +436,29 @@ static WmResult walk(const WmInstance* inst, const Place* places, uint32_t count
 }
 
 /* A position read back, checked roughly against the module and the stack; walk checks the rest. */
-static WmResult get_place(Stream* s, WmInstance* inst, Place* out, uint32_t stack_slots)
+static WmResult get_place(Stream* s, const Group* g, Place* out, uint32_t stack_slots)
 {
-    const WmModule* m = inst->module;
+    const WmModule* m;
     uint32_t index = get32(s);
     out->offset = get32(s);
     out->side = get32(s);
     out->fp = get32(s);
-    out->func = func_at(inst, index);
+    out->func = group_code_at(g, index);
     if (s->error)
         return s->error;
-    if (!out->func || out->offset >= m->size || out->func->code->body > m->bytes + out->offset ||
+    if (!out->func)
+        return wm_snapshot_invalid;
+    m = out->func->instance->module;
+    if (out->offset >= m->size || out->func->code->body > m->bytes + out->offset ||
         out->func->code->end < m->bytes + out->offset || out->side > m->side_count || out->fp > stack_slots)
         return wm_snapshot_invalid;
     return NULL;
 }
 
-static void set_place(const WmInstance* inst, WmRuntime* rt, const Place* p, WmFunc** func, const uint8_t** pc,
-                      const WmSide** st, uint32_t** fp)
+static void set_place(WmRuntime* rt, const Place* p, WmFunc** func, const uint8_t** pc, const WmSide** st,
+                      uint32_t** fp)
 {
-    const WmModule* m = inst->module;
+    const WmModule* m = p->func->instance->module;
     *func = p->func;
     *fp = rt->stack + p->fp;
     *pc = m->bytes + p->offset;
@@ -398,24 +518,27 @@ static WmResult to_record(WmFunc* func, const uint8_t** pc, const WmSide** st, u
 }
 #endif
 
-static uintptr_t put_ref_index(const WmInstance* inst, uint8_t type, uintptr_t ref)
+/* funcref: the function's number plus one, 0 for null; externref as it is. WM_NONE: not the group's. */
+static uint64_t put_ref_index(const Group* g, uint8_t type, uintptr_t ref)
 {
-    /* funcref: the function's index plus one, 0 for null; externref as it is. */
+    uint32_t index;
     if (type != WM_FUNCREF || ref == 0)
-        return ref;
-    return func_index(inst, (const WmFunc*)ref) + 1u;
+        return (uint64_t)ref;
+    index = group_index(g, (const WmFunc*)ref);
+    return index == WM_NONE ? WM_NONE : (uint64_t)index + 1u;
 }
 
-static WmResult get_ref_index(const WmInstance* inst, uint8_t type, uint64_t value, uintptr_t* out)
+static WmResult get_ref_index(const Group* g, uint8_t type, uint64_t value, uintptr_t* out)
 {
+    WmFunc* f;
     if (type != WM_FUNCREF || value == 0)
     {
         *out = (uintptr_t)value;
         return NULL;
     }
-    if (value > inst->module->func_count)
+    if (value > 0xFFFFFFFFu || !(f = group_func(g, (uint32_t)(value - 1u))))
         return wm_snapshot_invalid;
-    *out = (uintptr_t)inst->funcs[value - 1u];
+    *out = (uintptr_t)f;
     return NULL;
 }
 
@@ -425,17 +548,22 @@ static WmResult get_ref_index(const WmInstance* inst, uint8_t type, uint64_t val
 static WmResult snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSnapshotWrite write, void* context,
                                int with_memory)
 {
-    const WmModule* m = inst->module;
     const WmSuspended* saved = &rt->saved;
-    WmMemory* memory = inst->memory;
     uint32_t stack_slots;
     Stream s = {write, NULL, context, NULL, 0xFFFFFFFFu};
+    Group g;
     Place* places;
     uint8_t* refs = NULL;
     WmResult result = NULL;
 
-    if (!rt->suspended || saved->entry_depth != 0 || func_index(inst, saved->entry) == WM_NONE)
-        return WM_ERR_UNSUPPORTED("unsupported: snapshots are of a suspended call of one instance");
+    memset(&g, 0, sizeof(g));
+    if ((result = group_make(&g, (WmInstance*)(uintptr_t)inst)))
+        return result;
+    if (!rt->suspended || saved->entry_depth != 0 || group_index(&g, saved->entry) == WM_NONE)
+    {
+        group_free(&g);
+        return WM_ERR_UNSUPPORTED("unsupported: snapshots are of a suspended call of an instance and those linked to it");
+    }
     stack_slots = (uint32_t)(saved->sp - rt->stack);
 #if WM_PREDECODE
     /* Stopped at a segment of the register loop: where its stack's top is, the function's tail says. */
@@ -448,59 +576,67 @@ static WmResult snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSn
 #endif
     places = (Place*)wm_malloc(((size_t)rt->depth + 1u) * sizeof(Place));
     if (!places)
-        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+        result = WM_ERR_EXHAUSTION("exhaustion: out of memory");
     for (uint32_t i = 0; !result && i <= rt->depth; ++i)
     {
         const WmFrame* f = &rt->frames[i];
-        if (i == rt->depth)
-            result = place_of(inst, rt, saved->func, saved->pc, saved->st, saved->fp, saved->inplace, &places[i]);
-        else if (func_index(inst, f->func) == WM_NONE)
-            result = WM_ERR_UNSUPPORTED("unsupported: a call of another instance is in progress");
+        WmFunc* func = i == rt->depth ? saved->func : f->func;
+        if (group_index(&g, func) == WM_NONE)
+            result = WM_ERR_UNSUPPORTED("unsupported: a call of an instance not linked to it is in progress");
+        else if (i == rt->depth)
+            result = place_of(rt, saved->func, saved->pc, saved->st, saved->fp, saved->inplace, &places[i]);
         else
-            result = place_of(inst, rt, f->func, f->pc, f->st, f->fp, 0, &places[i]);
+            result = place_of(rt, f->func, f->pc, f->st, f->fp, 0, &places[i]);
     }
-    /* Function references on the stack become indices: where they are, the code says. */
-    if (!result && m->stack_refs)
+    /* Function references on the stack become numbers: where they are, the code says. */
+    if (!result && g.stack_refs)
     {
         if (!(refs = (uint8_t*)wm_calloc(stack_slots + 1u, 1)))
             result = WM_ERR_EXHAUSTION("exhaustion: out of memory");
         else
-            result = walk(inst, places, rt->depth + 1u, (uint32_t)(saved->base - rt->stack), stack_slots, 0, refs);
+            result = walk(places, rt->depth + 1u, (uint32_t)(saved->base - rt->stack), stack_slots, 0, refs);
     }
     if (result)
     {
         wm_free(places);
         wm_free(refs);
+        group_free(&g);
         return result;
     }
 
     put32(&s, WM_SNAPSHOT_MAGIC);
     put32(&s, WM_SNAPSHOT_VERSION);
     /* The stack's layout depends on the width of references only where they can be on it. */
-    put32(&s, m->stack_refs ? WM_REF_SLOTS : 0u);
-    put32(&s, module_hash(m));
-    put32(&s, memory ? memory->page_log2 : 0);
-    put32(&s, memory ? memory->pages : 0);
+    put32(&s, g.stack_refs ? WM_REF_SLOTS : 0u);
+    put32(&s, g.count);
+    for (uint32_t i = 0; i < g.count; ++i)
+        put32(&s, module_hash(g.insts[i]->module));
+    put32(&s, g.memory_count);
+    for (uint32_t i = 0; i < g.memory_count; ++i)
+    {
+        put32(&s, g.memories[i]->page_log2);
+        put32(&s, g.memories[i]->pages);
+    }
     put32(&s, stack_slots);
     put32(&s, rt->depth);
 
-    put32(&s, func_index(inst, saved->entry));
+    put32(&s, group_index(&g, saved->entry));
     put32(&s, (uint32_t)(saved->base - rt->stack));
-    put_place(&s, inst, &places[rt->depth]);
+    put_place(&s, &g, &places[rt->depth]);
     for (uint32_t i = 0; i < rt->depth; ++i)
-        put_place(&s, inst, &places[i]);
+        put_place(&s, &g, &places[i]);
     wm_free(places);
     for (uint32_t i = 0; i < stack_slots; ++i)
     {
         if (refs && refs[i])
         {
             uintptr_t ref = 0;
-            uint32_t index;
+            uint64_t index;
             memcpy(&ref, &rt->stack[i], sizeof(ref) < WM_REF_SLOTS * 4u ? sizeof(ref) : WM_REF_SLOTS * 4u);
-            index = ref ? func_index(inst, (const WmFunc*)ref) : 0u;
+            index = put_ref_index(&g, WM_FUNCREF, ref);
             if (index == WM_NONE)
-                s.error = WM_ERR_UNSUPPORTED("unsupported: a reference to another instance's function on the stack");
-            put32(&s, ref ? index + 1u : 0u);
+                s.error = WM_ERR_UNSUPPORTED("unsupported: a reference to a function of no linked instance on the stack");
+            put32(&s, (uint32_t)index);
             for (uint32_t k = 1; k < WM_REF_SLOTS; ++k)
                 put32(&s, 0);
             i += WM_REF_SLOTS - 1u;
@@ -510,85 +646,98 @@ static WmResult snapshot_write(const WmRuntime* rt, const WmInstance* inst, WmSn
     }
     wm_free(refs);
 
-    if (memory && !with_memory && WM_MEMORY_SIZE(memory))
+    for (uint32_t i = 0; i < g.memory_count; ++i)
     {
-        put32(&s, KEPT_MEMORY);
-        put32(&s, KEPT_MEMORY);
-    }
-    else if (memory)
-    {
+        WmMemory* memory = g.memories[i];
+        if (!with_memory && WM_MEMORY_SIZE(memory))
+        {
+            put32(&s, KEPT_MEMORY);
+            put32(&s, KEPT_MEMORY);
+            continue;
+        }
 #if WM_HAS_MMU
 #define MEMORY_BYTE(AT) (data ? data[AT] : wm_memory_byte(memory, (uint32_t)(AT)))
 #else
 #define MEMORY_BYTE(AT) (data[AT])
 #endif
-        const uint8_t* data = memory->data;
-        wm_size size = WM_MEMORY_SIZE(memory);
-        wm_size at = 0;
-        while (at < size)
         {
-            wm_size zeros = at;
-            wm_size end;
-            while (zeros < size && MEMORY_BYTE(zeros) == 0)
-                ++zeros;
-            zeros -= at;
-            if (zeros < MIN_ZERO_RUN && at + zeros < size)
-                zeros = 0;
-            at += zeros;
-            /* Data up to the next long run of zeros. */
-            end = at;
-            while (end < size)
+            const uint8_t* data = memory->data;
+            wm_size size = WM_MEMORY_SIZE(memory);
+            wm_size at = 0;
+            while (at < size)
             {
-                wm_size run = end;
-                while (run < size && MEMORY_BYTE(run) == 0 && run - end < MIN_ZERO_RUN)
-                    ++run;
-                if (run - end >= MIN_ZERO_RUN || run == size)
-                    break;
-                end = run + 1u;
-            }
-            put32(&s, (uint32_t)zeros);
-            put32(&s, (uint32_t)(end - at));
-#if WM_HAS_MMU
-            if (!data)
-            {
-                /* Paged: through a buffer, the same bytes as from one block. */
-                uint8_t chunk[64];
-                for (wm_size k = at; k < end;)
+                wm_size zeros = at;
+                wm_size end;
+                while (zeros < size && MEMORY_BYTE(zeros) == 0)
+                    ++zeros;
+                zeros -= at;
+                if (zeros < MIN_ZERO_RUN && at + zeros < size)
+                    zeros = 0;
+                at += zeros;
+                /* Data up to the next long run of zeros. */
+                end = at;
+                while (end < size)
                 {
-                    uint32_t n = end - k < sizeof(chunk) ? (uint32_t)(end - k) : (uint32_t)sizeof(chunk);
-                    wm_memory_read(memory, (uint32_t)k, chunk, n);
-                    put(&s, chunk, n);
-                    k += n;
+                    wm_size run = end;
+                    while (run < size && MEMORY_BYTE(run) == 0 && run - end < MIN_ZERO_RUN)
+                        ++run;
+                    if (run - end >= MIN_ZERO_RUN || run == size)
+                        break;
+                    end = run + 1u;
                 }
-            }
-            else
+                put32(&s, (uint32_t)zeros);
+                put32(&s, (uint32_t)(end - at));
+#if WM_HAS_MMU
+                if (!data)
+                {
+                    /* Paged: through a buffer, the same bytes as from one block. */
+                    uint8_t chunk[64];
+                    for (wm_size k = at; k < end;)
+                    {
+                        uint32_t n = end - k < sizeof(chunk) ? (uint32_t)(end - k) : (uint32_t)sizeof(chunk);
+                        wm_memory_read(memory, (uint32_t)k, chunk, n);
+                        put(&s, chunk, n);
+                        k += n;
+                    }
+                }
+                else
 #endif
-                put(&s, data + at, (uint32_t)(end - at));
-            at = end;
+                    put(&s, data + at, (uint32_t)(end - at));
+                at = end;
+            }
         }
 #undef MEMORY_BYTE
     }
 
-    for (uint32_t i = m->global_imports; i < m->global_count; ++i)
+    for (uint32_t i = 0; i < g.global_count; ++i)
     {
-        const WmGlobal* g = inst->globals[i];
-        if (!g->mutable_)
-            continue;
-        if (g->type == WM_FUNCREF || g->type == WM_EXTERNREF)
-            put64(&s, (uint64_t)put_ref_index(inst, g->type, (uintptr_t)g->value));
-        else
-            put64(&s, g->value);
+        const WmGlobal* gl = g.globals[i];
+        uint64_t value = gl->value;
+        if (gl->type == WM_FUNCREF || gl->type == WM_EXTERNREF)
+            value = put_ref_index(&g, gl->type, (uintptr_t)gl->value);
+        if (value == WM_NONE && gl->type == WM_FUNCREF)
+            s.error = WM_ERR_UNSUPPORTED("unsupported: a reference to a function of no linked instance in a global");
+        put64(&s, value);
     }
-    for (uint32_t i = m->table_imports; i < m->table_count; ++i)
+    for (uint32_t i = 0; i < g.table_count; ++i)
     {
-        const WmTable* t = inst->tables[i];
+        const WmTable* t = g.tables[i];
         put32(&s, t->size);
         for (uint32_t k = 0; k < t->size; ++k)
-            put64(&s, (uint64_t)put_ref_index(inst, t->type, t->elems[k]));
+        {
+            uint64_t value = put_ref_index(&g, t->type, t->elems[k]);
+            if (value == WM_NONE && t->type == WM_FUNCREF)
+                s.error = WM_ERR_UNSUPPORTED("unsupported: a reference to a function of no linked instance in a table");
+            put64(&s, value);
+        }
     }
-    put(&s, inst->elem_dropped, m->elem_count);
-    put(&s, inst->data_dropped, m->data_count);
+    for (uint32_t i = 0; i < g.count; ++i)
+    {
+        put(&s, g.insts[i]->elem_dropped, g.insts[i]->module->elem_count);
+        put(&s, g.insts[i]->data_dropped, g.insts[i]->module->data_count);
+    }
     put32(&s, ~s.crc);
+    group_free(&g);
     return s.error;
 }
 
@@ -602,55 +751,74 @@ WmResult wm_snapshot_write_state(const WmRuntime* rt, const WmInstance* inst, Wm
     return snapshot_write(rt, inst, write, context, 0);
 }
 
-WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, void* context)
+/*
+ * The header, the frames and the stack, checked before anything of the
+ * group changes; then the rest, read straight into it.
+ */
+static WmResult snapshot_read(WmRuntime* rt, Group* g, Stream* s)
 {
-    const WmModule* m = inst->module;
-    WmMemory* memory = inst->memory;
     WmSuspended* saved = &rt->saved;
     uint32_t capacity = (uint32_t)(rt->stack_end - rt->stack);
-    uint32_t page_log2, pages, stack_slots, depth, entry, base;
-    Stream s = {NULL, read, context, NULL, 0xFFFFFFFFu};
+    uint32_t* pages = NULL;
+    uint32_t stack_slots, depth, entry, base;
     WmResult result = NULL;
     Place* places;
     uint8_t* refs = NULL;
 
-    if (rt->suspended || rt->depth || rt->nesting)
-        return WM_ERR_UNSUPPORTED("unsupported: a snapshot loads into a runtime that is not running");
-    if (get32(&s) != WM_SNAPSHOT_MAGIC || get32(&s) != WM_SNAPSHOT_VERSION || get32(&s) != (m->stack_refs ? WM_REF_SLOTS : 0u) ||
-        get32(&s) != module_hash(m))
-        return s.error ? s.error : wm_snapshot_invalid;
-    page_log2 = get32(&s);
-    pages = get32(&s);
-    stack_slots = get32(&s);
-    depth = get32(&s);
-    entry = get32(&s);
-    base = get32(&s);
-    if (s.error)
-        return s.error;
-    if ((memory ? memory->page_log2 : 0u) != page_log2 || (!memory && pages) || stack_slots > capacity ||
-        depth > rt->max_frames || base > stack_slots || !func_at(inst, entry))
-        return wm_snapshot_invalid;
-    if (memory && (pages < memory->pages || (memory->max_pages != WM_NONE && pages > memory->max_pages)))
-        return wm_snapshot_invalid;
+    if (get32(s) != WM_SNAPSHOT_MAGIC || get32(s) != WM_SNAPSHOT_VERSION || get32(s) != (g->stack_refs ? WM_REF_SLOTS : 0u) ||
+        get32(s) != g->count)
+        return s->error ? s->error : wm_snapshot_invalid;
+    for (uint32_t i = 0; i < g->count; ++i)
+        if (get32(s) != module_hash(g->insts[i]->module))
+            return s->error ? s->error : wm_snapshot_invalid;
+    if (get32(s) != g->memory_count)
+        return s->error ? s->error : wm_snapshot_invalid;
+    if (!(pages = (uint32_t*)wm_malloc(((size_t)g->memory_count + 1u) * sizeof(uint32_t))))
+        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    for (uint32_t i = 0; !result && i < g->memory_count; ++i)
+    {
+        const WmMemory* memory = g->memories[i];
+        uint32_t page_log2 = get32(s);
+        pages[i] = get32(s);
+        if (!s->error && (memory->page_log2 != page_log2 || pages[i] < memory->pages ||
+                          (memory->max_pages != WM_NONE && pages[i] > memory->max_pages)))
+            result = wm_snapshot_invalid;
+    }
+    stack_slots = get32(s);
+    depth = get32(s);
+    entry = get32(s);
+    base = get32(s);
+    if (!result)
+        result = s->error;
+    if (!result && (stack_slots > capacity || depth > rt->max_frames || base > stack_slots || !group_code_at(g, entry)))
+        result = wm_snapshot_invalid;
+    if (result)
+    {
+        wm_free(pages);
+        return result;
+    }
 
-    /* The frames, outermost first, then the stack: checked before anything of the instance changes. */
+    /* The frames, outermost first, then the stack: checked before anything of the instances changes. */
     places = (Place*)wm_malloc(((size_t)depth + 1u) * sizeof(Place));
     if (!places)
+    {
+        wm_free(pages);
         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
-    result = get_place(&s, inst, &places[depth], stack_slots);
+    }
+    result = get_place(s, g, &places[depth], stack_slots);
     for (uint32_t i = 0; !result && i < depth; ++i)
-        result = get_place(&s, inst, &places[i], stack_slots);
+        result = get_place(s, g, &places[i], stack_slots);
     for (uint32_t i = 0; !result && i < stack_slots; ++i)
-        rt->stack[i] = get32(&s);
+        rt->stack[i] = get32(s);
     if (!result)
-        result = s.error;
-    if (!result && WM_HAS_VALIDATION && places[0].func != func_at(inst, entry))
+        result = s->error;
+    if (!result && WM_HAS_VALIDATION && places[0].func != group_code_at(g, entry))
         result = wm_snapshot_invalid;
-    if (!result && m->stack_refs && !(refs = (uint8_t*)wm_calloc(stack_slots + 1u, 1)))
+    if (!result && g->stack_refs && !(refs = (uint8_t*)wm_calloc(stack_slots + 1u, 1)))
         result = WM_ERR_EXHAUSTION("exhaustion: out of memory");
     if (!result && (WM_HAS_VALIDATION || refs))
-        result = walk(inst, places, depth + 1u, base, stack_slots, WM_HAS_VALIDATION, refs);
-    /* Function references back from their indices. */
+        result = walk(places, depth + 1u, base, stack_slots, WM_HAS_VALIDATION, refs);
+    /* Function references back from their numbers. */
     for (uint32_t i = 0; !result && refs && i < stack_slots; ++i)
         if (refs[i])
         {
@@ -658,38 +826,48 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
             for (uint32_t k = 1; k < WM_REF_SLOTS; ++k)
                 if (rt->stack[i + k])
                     result = wm_snapshot_invalid;
-            if (!result && !(result = get_ref_index(inst, WM_FUNCREF, rt->stack[i], &ref)))
+            if (!result && !(result = get_ref_index(g, WM_FUNCREF, rt->stack[i], &ref)))
                 memcpy(&rt->stack[i], &ref, sizeof(ref) < WM_REF_SLOTS * 4u ? sizeof(ref) : WM_REF_SLOTS * 4u);
             i += WM_REF_SLOTS - 1u;
         }
     if (!result)
     {
-        saved->entry = func_at(inst, entry);
+        saved->entry = group_code_at(g, entry);
         saved->base = rt->stack + base;
         saved->entry_depth = 0;
         saved->sp = rt->stack + stack_slots;
-        set_place(inst, rt, &places[depth], &saved->func, &saved->pc, &saved->st, &saved->fp);
+        set_place(rt, &places[depth], &saved->func, &saved->pc, &saved->st, &saved->fp);
         for (uint32_t i = 0; i < depth; ++i)
         {
             WmFrame* f = &rt->frames[i];
-            set_place(inst, rt, &places[i], &f->func, &f->pc, &f->st, &f->fp);
+            set_place(rt, &places[i], &f->func, &f->pc, &f->st, &f->fp);
         }
     }
     wm_free(places);
     wm_free(refs);
+    for (uint32_t i = 0; !result && i < g->memory_count; ++i)
+    {
+        WmMemory* memory = g->memories[i];
+        if (pages[i] != memory->pages && wm_memory_grow(memory, pages[i] - memory->pages) == WM_NONE)
+            result = WM_ERR_EXHAUSTION("exhaustion: out of memory");
+    }
+    wm_free(pages);
     if (result)
         return result;
-    if (memory && pages != memory->pages && wm_memory_grow(memory, pages - memory->pages) == WM_NONE)
-        return WM_ERR_EXHAUSTION("exhaustion: out of memory");
 
-    if (memory && WM_MEMORY_SIZE(memory))
+    for (uint32_t i = 0; i < g->memory_count; ++i)
     {
+        WmMemory* memory = g->memories[i];
         wm_size size = WM_MEMORY_SIZE(memory);
         wm_size at = 0;
-        uint32_t zeros = get32(&s);
-        uint32_t length = get32(&s);
+        uint32_t zeros, length;
+        int kept;
+        if (!size)
+            continue;
+        zeros = get32(s);
+        length = get32(s);
         /* A state snapshot: the memory is the one it was taken with, kept where it is. */
-        int kept = zeros == KEPT_MEMORY && length == KEPT_MEMORY;
+        kept = zeros == KEPT_MEMORY && length == KEPT_MEMORY;
         if (!kept)
         {
             WM_MEMORY_CHANGES(memory);
@@ -700,15 +878,15 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
 #endif
                 memset(memory->data, 0, (size_t)size);
         }
-        while (!kept && at < size && !s.error)
+        while (!kept && at < size && !s->error)
         {
             if (at)
             {
-                zeros = get32(&s);
-                length = get32(&s);
+                zeros = get32(s);
+                length = get32(s);
             }
-            if (s.error || zeros > size - at || length > size - at - zeros)
-                return s.error ? s.error : wm_snapshot_invalid;
+            if (s->error || zeros > size - at || length > size - at - zeros)
+                return s->error ? s->error : wm_snapshot_invalid;
             at += zeros;
 #if WM_HAS_MMU
             if (!memory->data)
@@ -717,7 +895,7 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
                 for (uint32_t k = 0; k < length;)
                 {
                     uint32_t n = length - k < sizeof(chunk) ? length - k : (uint32_t)sizeof(chunk);
-                    get(&s, chunk, n);
+                    get(s, chunk, n);
                     if (wm_memory_write(memory, (uint32_t)at + k, chunk, n))
                         return WM_ERR_EXHAUSTION("exhaustion: out of memory");
                     k += n;
@@ -725,35 +903,32 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
             }
             else
 #endif
-                get(&s, memory->data + at, length);
+                get(s, memory->data + at, length);
             at += length;
             if (zeros == 0 && length == 0)
                 return wm_snapshot_invalid;
         }
     }
 
-    for (uint32_t i = m->global_imports; i < m->global_count; ++i)
+    for (uint32_t i = 0; i < g->global_count; ++i)
     {
-        WmGlobal* g = inst->globals[i];
-        uint64_t value;
-        if (!g->mutable_)
-            continue;
-        value = get64(&s);
-        if (g->type == WM_FUNCREF || g->type == WM_EXTERNREF)
+        WmGlobal* gl = g->globals[i];
+        uint64_t value = get64(s);
+        if (gl->type == WM_FUNCREF || gl->type == WM_EXTERNREF)
         {
             uintptr_t ref;
-            if ((result = get_ref_index(inst, g->type, value, &ref)))
+            if ((result = get_ref_index(g, gl->type, value, &ref)))
                 return result;
             value = (uint64_t)ref;
         }
-        g->value = value;
+        gl->value = value;
     }
-    for (uint32_t i = m->table_imports; i < m->table_count; ++i)
+    for (uint32_t i = 0; i < g->table_count; ++i)
     {
-        WmTable* t = inst->tables[i];
-        uint32_t size = get32(&s);
-        if (s.error)
-            return s.error;
+        WmTable* t = g->tables[i];
+        uint32_t size = get32(s);
+        if (s->error)
+            return s->error;
         if (size != t->size)
         {
             uintptr_t* elems;
@@ -766,25 +941,29 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
             t->size = size;
         }
         for (uint32_t k = 0; k < size; ++k)
-            if ((result = get_ref_index(inst, t->type, get64(&s), &t->elems[k])))
+            if ((result = get_ref_index(g, t->type, get64(s), &t->elems[k])))
                 return result;
     }
-    get(&s, inst->elem_dropped, m->elem_count);
-    get(&s, inst->data_dropped, m->data_count);
+    for (uint32_t i = 0; i < g->count; ++i)
     {
-        uint32_t crc = ~s.crc;
+        get(s, g->insts[i]->elem_dropped, g->insts[i]->module->elem_count);
+        get(s, g->insts[i]->data_dropped, g->insts[i]->module->data_count);
+    }
+    {
+        uint32_t crc = ~s->crc;
         /* Fuzzing builds skip it, as is the custom, so mutated snapshots reach the checks above. */
 #ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-        if (get32(&s) != crc && !s.error)
+        if (get32(s) != crc && !s->error)
             return wm_snapshot_invalid;
 #else
         (void)crc;
-        (void)get32(&s);
+        (void)get32(s);
 #endif
     }
-    if (s.error)
-        return s.error;
-    inst->started = 1;
+    if (s->error)
+        return s->error;
+    for (uint32_t i = 0; i < g->count; ++i)
+        g->insts[i]->started = 1;
     rt->depth = depth;
     rt->sp = saved->sp;
     rt->suspended = 1;
@@ -802,4 +981,19 @@ WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, 
     }
 #endif
     return NULL;
+}
+
+WmResult wm_snapshot_read(WmRuntime* rt, WmInstance* inst, WmSnapshotRead read, void* context)
+{
+    Stream s = {NULL, read, context, NULL, 0xFFFFFFFFu};
+    Group g;
+    WmResult result;
+    if (rt->suspended || rt->depth || rt->nesting)
+        return WM_ERR_UNSUPPORTED("unsupported: a snapshot loads into a runtime that is not running");
+    memset(&g, 0, sizeof(g));
+    if ((result = group_make(&g, inst)))
+        return result;
+    result = snapshot_read(rt, &g, &s);
+    group_free(&g);
+    return result;
 }
