@@ -66,6 +66,12 @@ for mode in "-fsanitize=address,undefined" "-fsanitize=address" "-fsanitize=addr
     cc -std=gnu99 -O1 -g -DWM_CHECKS=1 $mode source/*.c test/link.c -lm -o build/link || exit 1
     build/link >/dev/null && echo "linking modules: ok $mode" || { echo "linking modules: FAIL $mode"; build/link | grep FAIL; fail=1; }
 done
+# A kept memory the module imports (decision 24): a library rebuilt on a program's memory, nothing written over.
+for mode in "-fsanitize=address,undefined" "-fsanitize=address -DWM_PREDECODE=0" "-fsanitize=address -DWM_MEMORY_ALWAYS_PAGED=1"; do
+    # shellcheck disable=SC2086
+    cc -std=gnu99 -O1 -g -DWM_CHECKS=1 $mode source/*.c test/kept.c -lm -o build/kept || exit 1
+    build/kept >/dev/null && echo "kept imported memory: ok $mode" || { echo "kept imported memory: FAIL $mode"; build/kept | grep FAIL; fail=1; }
+done
 # Snapshots of linked instances (decision 23): frames in both modules, shared memory and global, a host function in a table.
 for mode in "-fsanitize=address,undefined" "-fsanitize=address" "-fsanitize=address -DWM_PREDECODE=0" "-fsanitize=address -DWM_HAS_VALIDATION=0" "-fsanitize=address -DWM_MEMORY_ALWAYS_PAGED=1"; do
     # shellcheck disable=SC2086

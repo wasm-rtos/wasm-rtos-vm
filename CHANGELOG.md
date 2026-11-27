@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A kept memory the module imports** (decision 24):
+  `wm_instantiate_with_memory` binds a memory kept apart to a module's
+  memory import too (the resolver is not asked for it; it stays the
+  caller's), writing no data segments and running no start function, so
+  a linker's libraries come back from swap on the program's memory.
 - **Modules read and linked through `wm.h`** (decision 23), named after
   WebAssembly's JS API: `wm_module_imports`, `wm_module_exports` and
   `wm_module_custom_sections` (`WmExternType`); `wm_instance_link_function`

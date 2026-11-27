@@ -119,18 +119,25 @@ int wm_module_import_type(const WmModule* m, const char* name, const uint8_t** p
 
 #define E_INCOMPATIBLE WM_ERR_UNLINKABLE("unlinkable: incompatible import type")
 
-static WmResult link_imports(WmInstance* inst, WmResolver resolver, void* context)
+/* The imports, through the resolver; a kept memory (decision 24) is the memory import's, not asked for. */
+static WmResult link_imports(WmInstance* inst, WmResolver resolver, void* context, WmMemory* kept)
 {
     const WmModule* m = inst->module;
     for (uint32_t i = 0; i < m->import_count; ++i)
     {
         const WmImport* imp = &m->imports[i];
         WmExtern ext;
-        WmResult result;
+        WmResult result = NULL;
         memset(&ext, 0, sizeof(ext));
-        result = resolver ? resolver(context, (const char*)imp->module, imp->module_length, (const char*)imp->name,
-                                     imp->name_length, imp->kind, &ext)
-                          : WM_ERR_UNLINKABLE("unlinkable: unknown import");
+        if (kept && imp->kind == WM_EXTERN_MEMORY)
+        {
+            ext.kind = WM_EXTERN_MEMORY;
+            ext.as.memory = kept;
+        }
+        else
+            result = resolver ? resolver(context, (const char*)imp->module, imp->module_length, (const char*)imp->name,
+                                         imp->name_length, imp->kind, &ext)
+                              : WM_ERR_UNLINKABLE("unlinkable: unknown import");
         if (result)
             return result;
         if (ext.kind != imp->kind)
@@ -304,7 +311,7 @@ static WmResult make_own_funcs(WmInstance* inst)
     return NULL;
 }
 
-/* An instance of m; with kept a memory from an earlier instance, which it takes as its own. */
+/* An instance of m; with kept a memory from an earlier instance: its own, which it takes, or the one it imports. */
 static WmResult instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, WmResolver resolver,
                             void* context, WmMemory* kept)
 {
@@ -332,7 +339,7 @@ static WmResult instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, W
         return E_MEMORY;
     }
 
-    if ((result = link_imports(inst, resolver, context)) || (result = make_own_funcs(inst)))
+    if ((result = link_imports(inst, resolver, context, kept)) || (result = make_own_funcs(inst)))
     {
         wm_instance_free(inst);
         return result;
@@ -365,7 +372,16 @@ static WmResult instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, W
             return E_MEMORY;
         }
     }
-    if (kept)
+    /* A kept memory the module imports was bound with the imports, and stays the caller's. */
+    if (kept && m->memory_imports)
+    {
+        if (inst->memory != kept)
+        {
+            wm_instance_free(inst);
+            return E_INCOMPATIBLE;
+        }
+    }
+    else if (kept)
     {
         if (m->memory_count <= m->memory_imports || kept->page_log2 != m->memory.page_log2 ||
             !limits_match(kept->pages, kept->max_pages, kept->max_pages != WM_NONE, &m->memory))

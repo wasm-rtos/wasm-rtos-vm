@@ -193,7 +193,10 @@ void wm_instance_free(WmInstance* instance);
  * of the same module takes it back with wm_instantiate_with_memory, which
  * writes no data segments into it and runs no start function: the program
  * goes on from a state snapshot (wm_snapshot_write_state). On failure the
- * memory stays the caller's.
+ * memory stays the caller's. A module that imports its memory has the
+ * memory given here bound to that import instead (the resolver is not asked
+ * for it), with no data segments written either, and the memory stays the
+ * caller's: a library rebuilt on a program's memory kept apart (decision 24).
  */
 WmMemory* wm_instance_detach_memory(WmInstance* instance);
 WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* module, WmMemory* memory, WmResolver resolver,

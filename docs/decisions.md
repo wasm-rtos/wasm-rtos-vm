@@ -1880,3 +1880,69 @@ now. Their names leave `docs/api-1.0.txt`; 1.0 is not tagged yet.
   differs refused; 5 builds), the kernel's tests, and wasm-rtos-dylink's
   test, which fails with the snapshots of version 2. Machine code of the
   loops unchanged (Mac, Xtensa); Uno (`WM_TINY`) 28330 bytes as before.
+
+## 24. A kept memory may be the one a module imports
+
+**Proposed (2026-11-27).** The user: «да делай своп» — a task of a
+loader (wasm-rtos decision 17) leaves RAM as any task does.
+
+### Problem
+
+A swapped-out task comes back on the memory kept apart from it:
+`wm_instantiate_with_memory` gives a new instance the memory of the old
+one, writes no data segments into it (its bytes are there already) and
+runs no start function. It takes only a memory the module defines. A
+program linked from modules has one memory that its program defines and
+its libraries import (dylink.0): the program can be rebuilt on it, but a
+library cannot. Instantiated as new, a library writes its active data
+segments into the memory again, over the values the program left there,
+and the state read back afterwards (a state snapshot leaves the memory
+as it is) does not repair them.
+
+### Decision
+
+**`wm_instantiate_with_memory` takes a kept memory the module imports,
+too.** The signature stays:
+
+```c
+WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* module, WmMemory* memory,
+                                    WmResolver resolver, void* context);
+```
+
+- A module that **defines** its memory takes it, as now: the instance
+  owns it and `wm_instance_detach_memory` gives it back.
+- A module that **imports** its memory has it bound to that import: the
+  resolver is not asked for it, the import's limits and page size are
+  checked as any import's, and the memory stays the caller's
+  (`wm_instance_detach_memory` gives NULL, as for any import).
+- Either way **no active data segment is written** (each counts as
+  dropped, as now) and no start function runs. Element segments are
+  written as now: tables are rebuilt and the state read over them.
+
+One rule for both: a memory given here has its bytes already.
+
+### Why
+
+- A linker rebuilds the same instances after a swap as after a snapshot
+  (decision 23): the program on its own memory, each library on the
+  memory it imports. With one function for "this memory has its bytes",
+  a linker needs nothing else to come back from swap.
+- The memory a module imports is still one memory: which module defines
+  it says who frees it, not whether its bytes are there.
+
+### Instead
+
+- **A flag on `wm_instantiate`** ("no data segments"): one more parameter
+  of the call every host makes, for what only a kept memory needs.
+- **A function of its own for imported memories**: two names for one
+  idea.
+- **The linker saving its libraries' data and writing it back**: copies
+  the memory the MMU just paged out, and every linker would write it.
+
+### Steps
+
+| # | What | Where |
+|---|---|---|
+| 1 | `wm_instantiate_with_memory` binds a kept memory to the memory import, no data segments, no start | source |
+| 2 | Test: a library rebuilt on a kept memory leaves its data as the program left it; limits checked; detach gives NULL | test |
+| 3 | `wm.h` comment, CHANGELOG | docs |
