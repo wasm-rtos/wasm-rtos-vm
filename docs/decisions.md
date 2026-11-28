@@ -1960,7 +1960,7 @@ binding, run when a module is instantiated).
 
 ## 25. A store owns what a process makes
 
-**Decided (2026-11-28), being built.** The user, after a shared
+**Decided and built (2026-11-28).** The user, after a shared
 module charged to a task that was gone: «я хочу сделать правильней»,
 «сначала продумай архитектуру наилучшим образом … можем ли мы переделать
 архитектуру эту к стандарту», and on this paper: «лучше сразу нормально
@@ -2126,3 +2126,57 @@ own).
 | 5 | `wm_store_release`, `wm_store_memory`, `wm_instance_new_with_memory` | `wm_instance.c` |
 | 6 | Tests: everything of a store freed in any order (ASan); a failed instance; a module's last instance tells its owner, in any store; limits refused as the heap's are; swap through release, also of an imported memory; old functions unchanged; each rule broken on purpose fails | `test/` |
 | 7 | Kernel decision 18, dylink decision 3 on it; the boards (ESP32, Black Pill, Uno) | other repositories |
+
+### Built
+
+As on paper, with what building it found:
+
+- **Each allocation is charged to the store of the object it is for**,
+  given by that object (`wm_store_calloc(store, ...)` where an instance,
+  memory, table, global or runtime is made, a memory's frames and
+  tables), and kept in a header with its size, so growing or freeing it
+  later charges the same store whatever runs then. Only loading a module
+  for a store charges a store without an object at hand (`wm_charge`, set
+  for that load alone: what it allocates is the module's or freed before
+  it returns). What is charged to no store is always safe; what is
+  charged to one goes with it or before it. A store freed with bytes
+  still charged to it (a linker's records not freed yet) is kept until
+  the last of them is freed, so nothing ever points at a store that is
+  gone.
+- **A store's limit is not the heap's**: an allocation refused by it does
+  not drop predecoded code to make room (`wm_limit_refused`), which would
+  not help; memory.grow gives -1, an instance is refused with
+  "exhaustion".
+- **Tables and globals made alone in a store** are nodes around the
+  object, flagged in its padding: those an instance embeds grow by
+  nothing.
+- **The module's count is of instances, not of holders**: a host that
+  keeps a pointer to a module of the engine with no instance of it (the
+  kernel between parsing and instantiating) asks for it again after an
+  instance of it failed (kernel decision 18).
+- `wm_instance_detach_memory` gives NULL for an instance of a store: its
+  memory is the store's.
+
+### Checks
+
+- `tools/check.sh` passes whole: the spec suite (27437) in every build it
+  has, swapping, snapshots between builds, the code cache and images, the
+  kernel's 92 tests, also with every memory paged.
+- `test/store.c`, 34 checks (29 where bytes are not counted,
+  `WM_STORE_BYTES=0`), each with AddressSanitizer, without predecoding and
+  with every memory paged: a program and a library that imports its
+  memory, a table, a global, a second memory and a runtime in one store,
+  freed in one call, the heap as before; a module of the engine charged
+  to no store, one loaded for the store charged to it; a start function
+  that traps leaves its instance in the store, which frees it; a module's
+  owner told once, after the last instance in either of two stores; over
+  a limit an instance is refused and memory.grow gives -1, no code
+  dropped, the other store growing; released, a store keeps its memory,
+  and a program and its library made again on it go on from what it held;
+  another store's memory refused; a linker's record keeps a freed store
+  until it goes.
+- Size: `WM_TINY` on an ATmega328P 29136 bytes, 750 more (the lists'
+  links and unlinks in the free functions that every build has; nothing
+  of the store functions is linked when unused); the engine on a
+  Cortex-M4 (`-Os`, all objects whole) +1362 bytes. The hot loops are
+  untouched.
