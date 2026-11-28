@@ -72,6 +72,13 @@ for mode in "-fsanitize=address,undefined" "-fsanitize=address -DWM_PREDECODE=0"
     cc -std=gnu99 -O1 -g -DWM_CHECKS=1 $mode source/*.c test/kept.c -lm -o build/kept || exit 1
     build/kept >/dev/null && echo "kept imported memory: ok $mode" || { echo "kept imported memory: FAIL $mode"; build/kept | grep FAIL; fail=1; }
 done
+# Stores (decision 25): what a process makes freed in one call, counted, limited, released to its memory;
+# also where nothing is counted (WM_STORE_BYTES=0, as on AVR).
+for mode in "-fsanitize=address,undefined" "-fsanitize=address -DWM_PREDECODE=0" "-fsanitize=address -DWM_MEMORY_ALWAYS_PAGED=1" "-fsanitize=address -DWM_STORE_BYTES=0"; do
+    # shellcheck disable=SC2086
+    cc -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -DWM_CHECKS=1 $mode source/*.c test/store.c -lm -o build/store || exit 1
+    build/store >/dev/null && echo "stores:        ok $mode" || { echo "stores:        FAIL $mode"; build/store | grep FAIL; fail=1; }
+done
 # Snapshots of linked instances (decision 23): frames in both modules, shared memory and global, a host function in a table.
 for mode in "-fsanitize=address,undefined" "-fsanitize=address" "-fsanitize=address -DWM_PREDECODE=0" "-fsanitize=address -DWM_HAS_VALIDATION=0" "-fsanitize=address -DWM_MEMORY_ALWAYS_PAGED=1"; do
     # shellcheck disable=SC2086

@@ -29,6 +29,7 @@ typedef struct WmFunc WmFunc;
 typedef struct WmGlobal WmGlobal;
 typedef struct WmTable WmTable;
 typedef struct WmMemory WmMemory;
+typedef struct WmStore WmStore;
 
 /* Value types, as encoded in the binary format. */
 #define WM_I32 0x7F
@@ -69,7 +70,12 @@ void wm_set_allocator(WmAllocator allocator);
 /* Allocate as the engine does, through that allocator (as realloc; size 0 frees): for a host's linker, counted alike. */
 void* wm_allocate(void* ptr, size_t size);
 
-/* Decode and validate. The bytes must stay valid while the module is used. */
+/*
+ * Decode and validate. The bytes must stay valid while the module is used.
+ * Loaded with no store the module is the engine's: any number of stores
+ * make instances of it, and it is freed by whoever loaded it, after its
+ * last instance (wm_module_on_unused says when).
+ */
 WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size);
 void wm_module_free(WmModule* module);
 /* Bytes the module's code takes besides the module itself: side table, predecoded records, local offsets. */
@@ -176,6 +182,77 @@ uint32_t wm_module_custom_sections(const WmModule* module, const char* name, uin
                                    const uint8_t** bytes, uint32_t* size);
 
 /*
+ * Stores (decision 25), as wasm-c-api's wasm_store_t: the owner of what a
+ * process makes. Instances, memories, tables, globals, runtimes and modules
+ * made in a store go with it, in whatever order they were made and linked;
+ * one can still be freed alone with its own free function. What is made
+ * with the functions without a store (1.0's) belongs to none and keeps
+ * their rules. host is the owner's, for the owner's own use.
+ */
+WmStore* wm_store_new(void* host);
+void wm_store_free(WmStore* store);
+void* wm_store_host(const WmStore* store);
+/*
+ * Bytes allocated for the store's objects, and the most it has held: its
+ * instances, memories (their frames in RAM from the heap, not from a frame
+ * pool), tables, globals, runtimes, modules loaded for it, and what a
+ * linker allocates for it (wm_store_allocate). What is the engine's is
+ * charged to no store: modules loaded with no store, predecoded code, host
+ * functions. 0 in builds without a host allocator (AVR).
+ */
+size_t wm_store_bytes(const WmStore* store);
+size_t wm_store_peak_bytes(const WmStore* store);
+/*
+ * At most bytes charged to the store (0: no limit). An allocation over it
+ * fails as one does when the heap is full: a module does not load or
+ * instantiate, memory.grow gives -1. The other stores go on.
+ */
+void wm_store_limit(WmStore* store, size_t bytes);
+/* As wm_allocate, charged to store: for a linker's own records, freed before the store or with wm_allocate. */
+void* wm_store_allocate(WmStore* store, void* ptr, size_t size);
+/*
+ * Everything in the store but its memories goes: instances, tables,
+ * globals, runtimes, modules loaded for it. The memories stay, their frames
+ * where they are (a swapped-out task leaves them to the pager), for
+ * instances made again on them (wm_instance_new_with_memory).
+ */
+void wm_store_release(WmStore* store);
+/* The store's memories, oldest first: NULL past the last. */
+WmMemory* wm_store_memory(const WmStore* store, uint32_t index);
+
+/* A module for this store alone, freed with it. */
+WmResult wm_module_load_in(WmModule** out, WmStore* store, const uint8_t* bytes, uint32_t size);
+/*
+ * Call unused(context, module) each time the module's last instance goes,
+ * in any store: its owner may free it then, or keep it for the next. NULL
+ * calls nothing.
+ */
+void wm_module_on_unused(WmModule* module, void (*unused)(void* context, WmModule* module), void* context);
+/* Instances of the module now, in every store and none. */
+uint32_t wm_module_instance_count(const WmModule* module);
+
+/*
+ * An instance in store, as wm_instantiate makes one: imports, segments, the
+ * start function on runtime (NULL: wm_instance_start later). A memory the
+ * module defines is made in the store, and stays there when the instance
+ * goes. A failure once imports are linked leaves *out in the store.
+ */
+WmResult wm_instance_new(WmInstance** out, WmStore* store, WmModule* module, WmRuntime* runtime,
+                         WmResolver resolver, void* context);
+/*
+ * An instance in store on memory, one of the store's (wm_store_memory), as
+ * wm_instantiate_with_memory: no data segments written into it, no start
+ * function; a module that imports its memory has memory bound to that
+ * import. The memory stays the store's.
+ */
+WmResult wm_instance_new_with_memory(WmInstance** out, WmStore* store, WmModule* module, WmMemory* memory,
+                                     WmResolver resolver, void* context);
+WmMemory* wm_memory_new_in(WmStore* store, uint32_t pages, uint32_t max_pages, uint8_t page_log2);
+WmTable* wm_table_new_in(WmStore* store, uint8_t type, uint32_t size, uint32_t max);
+WmGlobal* wm_global_new_in(WmStore* store, uint8_t type, uint8_t mutable_, uint64_t value);
+WmRuntime* wm_runtime_new_in(WmStore* store, uint32_t stack_bytes, uint32_t max_frames);
+
+/*
  * Instantiate: imports, segments, then the start function, run on runtime.
  * With runtime NULL the start function waits for wm_instance_start, so
  * imports can be linked first. A failure once the imports are linked (a
@@ -189,7 +266,8 @@ WmResult wm_instance_start(WmInstance* instance, WmRuntime* runtime);
 void wm_instance_free(WmInstance* instance);
 /*
  * Keep an instance's memory past it: the instance no longer owns it, and
- * freeing the instance leaves it (NULL when it owns none). A new instance
+ * freeing the instance leaves it (NULL when it owns none, as an instance in
+ * a store never does: its memory is the store's). A new instance
  * of the same module takes it back with wm_instantiate_with_memory, which
  * writes no data segments into it and runs no start function: the program
  * goes on from a state snapshot (wm_snapshot_write_state). On failure the

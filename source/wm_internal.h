@@ -118,6 +118,18 @@ static inline int wm_out_of_bounds(uint32_t start, uint32_t count, wm_size size)
 #define WM_HAS_ALLOCATOR 1
 #endif
 #endif
+/*
+ * A store counts the bytes allocated for its objects (decision 25): each
+ * allocation then carries the store it is charged to and its size, in a
+ * header before it, so freeing it, or growing it, charges the same store
+ * whatever is being done when. Off where there is no host allocator (AVR):
+ * stores still own their objects, and count nothing.
+ */
+#ifndef WM_STORE_BYTES
+#define WM_STORE_BYTES WM_HAS_ALLOCATOR
+#endif
+
+struct WmStore;
 #if WM_HAS_ALLOCATOR
 void* wm_malloc(size_t size);
 void* wm_calloc(size_t count, size_t size);
@@ -129,6 +141,24 @@ void wm_free(void* ptr);
 #define wm_calloc calloc
 #define wm_realloc realloc
 #define wm_free free
+#endif
+#if WM_STORE_BYTES
+/*
+ * Allocations charged to store (NULL: the engine's, charged to none).
+ * wm_malloc and wm_calloc charge wm_charge, NULL but while a module is
+ * loaded for a store; wm_realloc and wm_free keep the store an allocation
+ * was made for. Only what goes with the store, or before it, is charged to
+ * it: charging NULL is always safe.
+ */
+void* wm_store_malloc(struct WmStore* store, size_t size);
+void* wm_store_calloc(struct WmStore* store, size_t count, size_t size);
+extern struct WmStore* wm_charge;
+/* The last allocation failed on a store's limit, not for want of heap: dropping code would not help. */
+extern uint8_t wm_limit_refused;
+#else
+#define wm_store_malloc(store, size) ((void)(store), wm_malloc(size))
+#define wm_store_calloc(store, count, size) ((void)(store), wm_calloc((count), (size)))
+#define wm_limit_refused 0
 #endif
 
 #ifndef WM_HAS_I64
@@ -544,10 +574,44 @@ typedef struct WmDataSegment
     uint32_t size;
 } WmDataSegment;
 
+/*
+ * A store (decision 25): what a process made, freed with it. Each kind of
+ * object in its own list, newest first; tables and globals made alone are
+ * nodes around the object (WmStoreTable, WmStoreGlobal), so the ones an
+ * instance embeds grow by nothing.
+ */
+struct WmStoreTable;
+struct WmStoreGlobal;
+struct WmStore
+{
+    void* host;
+    struct WmInstance* instances;
+    struct WmMemory* memories;
+    struct WmRuntime* runtimes;
+    struct WmModule* modules;
+    struct WmStoreTable* tables;
+    struct WmStoreGlobal* globals;
+#if WM_STORE_BYTES
+    size_t bytes;
+    size_t peak;
+    /* 0: none. */
+    size_t limit;
+    /* Freed while bytes were still charged to it: kept until they are, so nothing points at a store that is gone. */
+    uint8_t freed;
+#endif
+};
+
 struct WmModule
 {
     const uint8_t* bytes;
     uint32_t size;
+    /* The store it was loaded for (its own), or NULL: the engine's, shared by any. */
+    struct WmStore* store;
+    struct WmModule* store_next;
+    /* Its instances, in any store; told to unused when the last goes. */
+    uint32_t instance_count;
+    void (*unused)(void* context, struct WmModule* module);
+    void* unused_context;
 
     WmType* types;
     uint32_t type_count;
@@ -619,22 +683,43 @@ struct WmGlobal
 {
     uint8_t type;
     uint8_t mutable_;
+    /* Made alone in a store: inside a WmStoreGlobal (in padding, no room taken). */
+    uint8_t in_store;
     uint64_t value;
 };
+
+typedef struct WmStoreGlobal
+{
+    struct WmStore* store;
+    struct WmStoreGlobal* store_next;
+    struct WmGlobal global;
+} WmStoreGlobal;
 
 /* Elements are references: an WmFunc pointer for funcref, the host's value for externref, 0 for null. */
 struct WmTable
 {
     uint8_t type;
+    /* Made alone in a store: inside a WmStoreTable (in padding, no room taken). */
+    uint8_t in_store;
     uint32_t size;
     uint32_t max;
     uintptr_t* elems;
 };
 
+typedef struct WmStoreTable
+{
+    struct WmStore* store;
+    struct WmStoreTable* store_next;
+    struct WmTable table;
+} WmStoreTable;
+
 struct WmMemory
 {
     /* The memory in one block; NULL when it is paged. */
     uint8_t* data;
+    /* Its store, or NULL: an instance's own or the caller's (the functions of 1.0). */
+    struct WmStore* store;
+    struct WmMemory* store_next;
     uint32_t pages;
     uint32_t max_pages;
     uint8_t page_log2;
@@ -751,6 +836,9 @@ WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t l
 struct WmInstance
 {
     WmModule* module;
+    /* Its store, or NULL (wm_instantiate): it owns its memory itself then. */
+    struct WmStore* store;
+    struct WmInstance* store_next;
     WmFunc** funcs;
     /* The module's own functions, then a stub for each function import nothing was linked to. */
     WmFunc* own_funcs;
@@ -803,6 +891,9 @@ typedef struct WmSuspended
 struct WmRuntime
 {
     uint32_t* stack;
+    /* Its store, or NULL. */
+    struct WmStore* store;
+    struct WmRuntime* store_next;
 #if WM_HAS_MMU
     struct WmTlb* tlb;
     /* A TLB miss the fast loop stopped for: the access of the record it stopped at. */
@@ -964,5 +1055,40 @@ WmResult wm_execute(WmRuntime* runtime, WmFunc* func, int resume);
 /* Every runtime, newest first, linked through next. */
 WmRuntime* wm_runtimes(void);
 #endif
+
+
+/* A store's lists (decision 25): an object joins its store's list, newest first, and leaves it when freed alone. */
+#define WM_STORE_LIST(Type, list)                                                                                   \
+    static inline void wm_store_link_##list(WmStore* store, Type* object)                                          \
+    {                                                                                                               \
+        object->store = store;                                                                                      \
+        if (store)                                                                                                  \
+        {                                                                                                           \
+            object->store_next = store->list;                                                                       \
+            store->list = object;                                                                                   \
+        }                                                                                                           \
+    }                                                                                                               \
+    static inline void wm_store_unlink_##list(Type* object)                                                        \
+    {                                                                                                               \
+        Type** at;                                                                                                  \
+        if (!object->store)                                                                                         \
+            return;                                                                                                 \
+        for (at = &object->store->list; *at; at = &(*at)->store_next)                                              \
+            if (*at == object)                                                                                      \
+            {                                                                                                       \
+                *at = object->store_next;                                                                           \
+                break;                                                                                              \
+            }                                                                                                       \
+        object->store = NULL;                                                                                       \
+    }
+WM_STORE_LIST(struct WmInstance, instances)
+WM_STORE_LIST(struct WmMemory, memories)
+WM_STORE_LIST(struct WmRuntime, runtimes)
+WM_STORE_LIST(struct WmModule, modules)
+WM_STORE_LIST(WmStoreTable, tables)
+WM_STORE_LIST(WmStoreGlobal, globals)
+
+/* The module's last instance went: its owner is told (it may free it). */
+void wm_module_instance_gone(WmModule* module);
 
 #endif
