@@ -2180,3 +2180,13 @@ As on paper, with what building it found:
   of the store functions is linked when unused); the engine on a
   Cortex-M4 (`-Os`, all objects whole) +1362 bytes. The hot loops are
   untouched.
+- ESP32 (esp32dev), the kernel's board checks before and after, on the
+  same board: 24 of 24 both, nothing leaked. A task takes about 340 bytes
+  more of heap (the header before each allocation, the store): 17
+  programs at once where 18 fitted. 500 round trips through queues 88 ms
+  before, 113 after, every run the same; with `WM_STORE_BYTES=0` 95 ms
+  and 18 programs. No allocation is made per message (about 8000 in the
+  whole run of the checks, before and after alike on a computer), so the
+  time is where the code lies in the 32 KiB flash cache, which moved the
+  same exchange from 45 to 89 ms before when the interpreter's loop grew;
+  CoreMark 21.40 before, 21.94 after.
