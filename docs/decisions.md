@@ -2190,3 +2190,11 @@ As on paper, with what building it found:
   time is where the code lies in the 32 KiB flash cache, which moved the
   same exchange from 45 to 89 ms before when the interpreter's loop grew;
   CoreMark 21.40 before, 21.94 after.
+- Black Pill (STM32F411, the engine's heap of 104 KiB), before and after:
+  the same 21 of 22 (CoreMark does not fit, before as after); fib(24)
+  318 ms both, 500 round trips 74 and 75 ms. 9 programs at once both, but
+  free after them 13752 bytes before, 560 after: about 1450 bytes more a
+  task, four times the ESP32's, as the 8 bytes before an allocation push
+  blocks of round sizes (a 4 KiB frame) into the heap's next size class.
+  To be made smaller: a block whose size its object knows (frames, a
+  memory's block, a stack) needs no header.
