@@ -11,6 +11,7 @@ WM_F64
 WM_FUNCREF
 WM_I32
 WM_I64
+WM_STORE_BYTES
 WmAllocator
 WmExtern
 WmExternType
@@ -27,6 +28,7 @@ WmRuntime
 WmSnapshotRead
 WmSnapshotWrite
 WmStore
+WmStoreGrowing
 WmTable
 wm_allocate
 wm_call
@@ -113,6 +115,7 @@ wm_set_frame_pool
 wm_set_fuel
 wm_set_makes_code
 wm_set_pager
+wm_set_store_growing
 wm_snapshot_read
 wm_snapshot_write
 wm_snapshot_write_state
@@ -120,7 +123,6 @@ wm_store_allocate
 wm_store_bytes
 wm_store_free
 wm_store_host
-wm_store_limit
 wm_store_memory
 wm_store_new
 wm_store_peak_bytes

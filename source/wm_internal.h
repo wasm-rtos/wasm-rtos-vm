@@ -48,6 +48,18 @@ static inline int wm_out_of_bounds(uint32_t start, uint32_t count, wm_size size)
 #ifndef WM_HAS_REF_TYPES
 #define WM_HAS_REF_TYPES 0
 #endif
+#ifndef WM_HAS_STORES
+#define WM_HAS_STORES 0
+#endif
+#endif
+
+/*
+ * Stores (decision 25): objects in a store's lists, a module's count of
+ * its instances. 0 (WM_TINY: one program, no kernel to own processes):
+ * the functions of 1.0 alone, nothing of stores in the build.
+ */
+#ifndef WM_HAS_STORES
+#define WM_HAS_STORES 1
 #endif
 
 /*
@@ -119,14 +131,14 @@ static inline int wm_out_of_bounds(uint32_t start, uint32_t count, wm_size size)
 #endif
 #endif
 /*
- * A store counts the bytes allocated for its objects (decision 25): each
- * allocation then carries the store it is charged to and its size, in a
- * header before it, so freeing it, or growing it, charges the same store
- * whatever is being done when. Off where there is no host allocator (AVR):
- * stores still own their objects, and count nothing.
+ * WM_STORE_BYTES (wm.h): a store counts every byte allocated for its
+ * objects (decision 25), for a host that reports them: each allocation then
+ * carries the store it is charged to and its size, in a header before it,
+ * so freeing it, or growing it, charges the same store whatever is being
+ * done when. Needs a host allocator (not on AVR).
  */
-#ifndef WM_STORE_BYTES
-#define WM_STORE_BYTES WM_HAS_ALLOCATOR
+#if WM_STORE_BYTES && !WM_HAS_ALLOCATOR
+#error "WM_STORE_BYTES needs WM_HAS_ALLOCATOR"
 #endif
 
 struct WmStore;
@@ -153,12 +165,22 @@ void wm_free(void* ptr);
 void* wm_store_malloc(struct WmStore* store, size_t size);
 void* wm_store_calloc(struct WmStore* store, size_t count, size_t size);
 extern struct WmStore* wm_charge;
-/* The last allocation failed on a store's limit, not for want of heap: dropping code would not help. */
-extern uint8_t wm_limit_refused;
 #else
 #define wm_store_malloc(store, size) ((void)(store), wm_malloc(size))
 #define wm_store_calloc(store, count, size) ((void)(store), wm_calloc((count), (size)))
-#define wm_limit_refused 0
+#endif
+/*
+ * Whether a memory or table of store may grow by more bytes: the host is
+ * asked (wm_set_store_growing) with what the store's memories and tables
+ * then hold. Yes for an object of no store, or with no host function set:
+ * the check is linked only into a build that sets one.
+ */
+#if WM_HAS_STORES
+extern int (*wm_store_check)(struct WmStore* store, uint8_t kind, size_t more);
+#define wm_store_may_grow(store, kind, more) \
+    (!(store) || !wm_store_check || wm_store_check((store), (kind), (more)))
+#else
+#define wm_store_may_grow(store, kind, more) ((void)(store), (void)(kind), (void)(more), 1)
 #endif
 
 #ifndef WM_HAS_I64
@@ -594,8 +616,6 @@ struct WmStore
 #if WM_STORE_BYTES
     size_t bytes;
     size_t peak;
-    /* 0: none. */
-    size_t limit;
     /* Freed while bytes were still charged to it: kept until they are, so nothing points at a store that is gone. */
     uint8_t freed;
 #endif
@@ -701,6 +721,8 @@ struct WmTable
     uint8_t type;
     /* Made alone in a store: inside a WmStoreTable (in padding, no room taken). */
     uint8_t in_store;
+    /* The store whose host is asked before it grows: its own, or its instance's; NULL for none. */
+    struct WmStore* store;
     uint32_t size;
     uint32_t max;
     uintptr_t* elems;
@@ -1081,12 +1103,28 @@ WmRuntime* wm_runtimes(void);
             }                                                                                                       \
         object->store = NULL;                                                                                       \
     }
+#if WM_HAS_STORES
 WM_STORE_LIST(struct WmInstance, instances)
 WM_STORE_LIST(struct WmMemory, memories)
 WM_STORE_LIST(struct WmRuntime, runtimes)
 WM_STORE_LIST(struct WmModule, modules)
 WM_STORE_LIST(WmStoreTable, tables)
 WM_STORE_LIST(WmStoreGlobal, globals)
+#else
+/* No stores: every object is of none; the store arguments are NULL. */
+#define wm_store_link_instances(store, object) ((void)(store), (void)(object))
+#define wm_store_link_memories(store, object) ((void)(store), (void)(object))
+#define wm_store_link_runtimes(store, object) ((void)(store), (void)(object))
+#define wm_store_link_modules(store, object) ((void)(store), (void)(object))
+#define wm_store_link_tables(store, object) ((void)(store), (void)(object))
+#define wm_store_link_globals(store, object) ((void)(store), (void)(object))
+#define wm_store_unlink_instances(object) ((void)(object))
+#define wm_store_unlink_memories(object) ((void)(object))
+#define wm_store_unlink_runtimes(object) ((void)(object))
+#define wm_store_unlink_modules(object) ((void)(object))
+#define wm_store_unlink_tables(object) ((void)(object))
+#define wm_store_unlink_globals(object) ((void)(object))
+#endif
 
 /* The module's last instance went: its owner is told (it may free it). */
 void wm_module_instance_gone(WmModule* module);

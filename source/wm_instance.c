@@ -329,7 +329,9 @@ static WmResult instantiate(WmInstance** out, WmStore* store, WmModule* m, WmRun
     if (!inst)
         return E_MEMORY;
     inst->module = m;
+#if WM_HAS_STORES
     ++m->instance_count;
+#endif
     wm_store_link_instances(store, inst);
     inst->funcs = (WmFunc**)wm_store_calloc(store, m->func_count + 1u, sizeof(WmFunc*));
     inst->globals = (WmGlobal**)wm_store_calloc(store, m->global_count + 1u, sizeof(WmGlobal*));
@@ -368,8 +370,15 @@ static WmResult instantiate(WmInstance** out, WmStore* store, WmModule* m, WmRun
         WmTable* t = &inst->own_tables[i - m->table_imports];
         const WmTableType* type = &m->tables[i];
         t->type = type->type;
-        t->size = type->limits.min;
+        t->store = store;
         t->max = type->limits.has_max ? type->limits.max : WM_NONE;
+        /* Asked before its size counts in the store's. */
+        if (!wm_store_may_grow(store, WM_EXTERN_TABLE, (size_t)type->limits.min * sizeof(uintptr_t)))
+        {
+            wm_instance_free(inst);
+            return E_MEMORY;
+        }
+        t->size = type->limits.min;
         t->elems = (uintptr_t*)wm_store_calloc(store, t->size + 1u, sizeof(uintptr_t));
         inst->tables[i] = t;
         if (!t->elems)
@@ -500,9 +509,13 @@ void wm_instance_free(WmInstance* inst)
     wm_free(inst->elem_dropped);
     wm_free(inst->data_dropped);
     wm_free(inst);
+#if WM_HAS_STORES
     /* Last: the module's owner may free it now. */
     if (module && --module->instance_count == 0)
         wm_module_instance_gone(module);
+#else
+    (void)module;
+#endif
 }
 
 WmResult wm_instance_export(const WmInstance* inst, const char* name, uint32_t length, WmExtern* out)
@@ -645,10 +658,12 @@ WmTable* wm_table_new_in(WmStore* store, uint8_t type, uint32_t size, uint32_t m
     WmStoreTable* node;
     if (!store)
         return wm_table_new(type, size, max);
-    if (!(node = (WmStoreTable*)wm_store_calloc(store, 1, sizeof(WmStoreTable))))
+    if (!wm_store_may_grow(store, WM_EXTERN_TABLE, (size_t)size * sizeof(uintptr_t)) ||
+        !(node = (WmStoreTable*)wm_store_calloc(store, 1, sizeof(WmStoreTable))))
         return NULL;
     node->table.type = type;
     node->table.in_store = 1;
+    node->table.store = store;
     node->table.size = size;
     node->table.max = max;
     if (!(node->table.elems = (uintptr_t*)wm_store_calloc(store, size + 1u, sizeof(uintptr_t))))
@@ -717,6 +732,7 @@ static WmAllocator allocator;
 
 void wm_set_allocator(WmAllocator a) { allocator = a; }
 
+#if WM_STORE_BYTES
 static void* raw_realloc(void* ptr, size_t size)
 {
     if (allocator)
@@ -732,7 +748,6 @@ static void raw_free(void* ptr)
         free(ptr);
 }
 
-#if WM_STORE_BYTES
 /* Before every allocation: the store charged and the size, padded to keep the block aligned. */
 typedef union WmAllocHeader
 {
@@ -746,13 +761,6 @@ typedef union WmAllocHeader
 } WmAllocHeader;
 
 WmStore* wm_charge;
-uint8_t wm_limit_refused;
-
-static int room(WmStore* store, size_t more)
-{
-    wm_limit_refused = store && store->limit && (more > store->limit || store->bytes > store->limit - more);
-    return !wm_limit_refused;
-}
 
 static void charge(WmStore* store, size_t add, size_t take)
 {
@@ -766,7 +774,7 @@ static void charge(WmStore* store, size_t add, size_t take)
 void* wm_store_malloc(WmStore* store, size_t size)
 {
     WmAllocHeader* h;
-    if (!room(store, size) || size > (size_t)-1 - sizeof(WmAllocHeader))
+    if (size > (size_t)-1 - sizeof(WmAllocHeader))
         return NULL;
     if (!(h = (WmAllocHeader*)raw_realloc(NULL, sizeof(WmAllocHeader) + size)))
         return NULL;
@@ -801,7 +809,7 @@ void* wm_realloc(void* ptr, size_t size)
     h = (WmAllocHeader*)ptr - 1;
     store = h->info.store;
     old = h->info.size;
-    if ((size > old && !room(store, size - old)) || size > (size_t)-1 - sizeof(WmAllocHeader))
+    if (size > (size_t)-1 - sizeof(WmAllocHeader))
         return NULL;
     if (!(h = (WmAllocHeader*)raw_realloc(h, sizeof(WmAllocHeader) + size)))
         return NULL;
@@ -825,24 +833,32 @@ void wm_free(void* ptr)
         wm_free(store);
 }
 #else
-void* wm_malloc(size_t size) { return raw_realloc(NULL, size); }
+void* wm_malloc(size_t size) { return allocator ? allocator(NULL, size ? size : 1u) : malloc(size); }
 
 void* wm_calloc(size_t count, size_t size)
 {
     void* p;
+    if (!allocator)
+        return calloc(count, size);
     if (size && count > (size_t)-1 / size)
         return NULL;
-    if ((p = raw_realloc(NULL, count * size)))
-        memset(p, 0, count * size);
+    size_t bytes = count * size;
+    p = allocator(NULL, bytes ? bytes : 1u);
+    if (p)
+        memset(p, 0, bytes);
     return p;
 }
 
-void* wm_realloc(void* ptr, size_t size) { return raw_realloc(ptr, size); }
+void* wm_realloc(void* ptr, size_t size) { return allocator ? allocator(ptr, size ? size : 1u) : realloc(ptr, size); }
 
 void wm_free(void* ptr)
 {
-    if (ptr)
-        raw_free(ptr);
+    if (!ptr)
+        return;
+    if (allocator)
+        allocator(ptr, 0);
+    else
+        free(ptr);
 }
 #endif
 

@@ -1674,8 +1674,7 @@ WmResult wm_module_load_in(WmModule** out, WmStore* store, const uint8_t* bytes,
     WmStore* charged = wm_charge;
     wm_charge = store;
 #endif
-    while ((result = load_module(out, bytes, size)) && !strncmp(result, "exhaustion", 10) && !wm_limit_refused &&
-           wm_code_drop_one())
+    while ((result = load_module(out, bytes, size)) && !strncmp(result, "exhaustion", 10) && wm_code_drop_one())
         ;
 #if WM_STORE_BYTES
     wm_charge = charged;
@@ -1685,6 +1684,7 @@ WmResult wm_module_load_in(WmModule** out, WmStore* store, const uint8_t* bytes,
     return result;
 }
 
+#if WM_HAS_STORES
 void wm_module_on_unused(WmModule* m, void (*unused)(void* context, WmModule* module), void* context)
 {
     m->unused = unused;
@@ -1698,6 +1698,7 @@ void wm_module_instance_gone(WmModule* m)
     if (m->unused)
         m->unused(m->unused_context, m);
 }
+#endif
 
 void wm_module_free(WmModule* m)
 {

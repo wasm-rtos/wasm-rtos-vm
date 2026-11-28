@@ -222,8 +222,7 @@ static int frame_in_block(const WmMemory* memory, uint32_t index)
 static void* frames_calloc(WmStore* store, size_t count, size_t size)
 {
     void* p;
-    /* A store's limit is not the heap's: dropping code would not make room under it. */
-    while (!(p = wm_store_calloc(store, count, size)) && !wm_limit_refused && wm_code_drop_one())
+    while (!(p = wm_store_calloc(store, count, size)) && wm_code_drop_one())
         ;
     return p;
 }
@@ -231,7 +230,7 @@ static void* frames_calloc(WmStore* store, size_t count, size_t size)
 static void* frames_realloc(void* ptr, size_t size)
 {
     void* p;
-    while (!(p = wm_realloc(ptr, size)) && !wm_limit_refused && wm_code_drop_one())
+    while (!(p = wm_realloc(ptr, size)) && wm_code_drop_one())
         ;
     return p;
 }
@@ -319,7 +318,7 @@ static uint8_t* new_frame(WmMemory* memory, uint32_t index)
      * cache when it has none (records are in the heap, not in the pool).
      */
     while (!(frame = g_pool ? pool_take(memory, index) : (uint8_t*)wm_store_calloc(memory->store, WM_FRAME, 1)))
-        if (wm_limit_refused || (!(pager->room && pager->room(pager->context, 1)) && (g_pool || !wm_code_drop_one())))
+        if (!(pager->room && pager->room(pager->context, 1)) && (g_pool || !wm_code_drop_one()))
             return NULL;
     ++g_resident;
     return frame;
@@ -591,9 +590,12 @@ WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_l
 
 WmMemory* wm_memory_new_in(WmStore* store, uint32_t pages, uint32_t max_pages, uint8_t page_log2)
 {
-    WmMemory* mem = (WmMemory*)wm_store_calloc(store, 1, sizeof(WmMemory));
     wm_size size = (wm_size)pages << page_log2;
-    if (!mem)
+    WmMemory* mem;
+    /* The store's host says how much its programs may have (decision 25). */
+    if (!wm_store_may_grow(store, WM_EXTERN_MEMORY, (size_t)size))
+        return NULL;
+    if (!(mem = (WmMemory*)wm_store_calloc(store, 1, sizeof(WmMemory))))
         return NULL;
     /* Its pieces are charged to the store from the first (the store joins the list once it is made). */
     mem->store = store;
@@ -695,6 +697,9 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
         return WM_NONE;
     if (delta == 0)
         return old;
+    /* The store's host says how much its programs may have (decision 25). */
+    if (!wm_store_may_grow(mem->store, WM_EXTERN_MEMORY, (size_t)((wm_size)delta << mem->page_log2)))
+        return WM_NONE;
     WM_MEMORY_CHANGES(mem);
 #if WM_HAS_MMU
     if (mem->data && in_pool(mem->data))

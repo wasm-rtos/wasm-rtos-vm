@@ -4,8 +4,8 @@
  * one call whatever the order they were made in; the heap is as before.
  * A store counts what is its own and not what is the engine's; a failed
  * instance stays in it; a module of the engine tells its owner when its
- * last instance goes, in any store; a limit refuses as a full heap does,
- * without dropping code; releasing a store keeps its memory, and
+ * last instance goes, in any store; the host refuses a store's memory or
+ * table growth as a full heap would, without dropping code; releasing a store keeps its memory, and
  * instances made again on it go on from what it holds; a store freed with
  * a linker's bytes still charged goes with the last of them.
  */
@@ -80,6 +80,25 @@ static WmMemory* memory_of(WmInstance* inst)
 /* Whether this build counts a store's bytes (not where WM_STORE_BYTES is 0, as on AVR): byte checks only then. */
 static int g_counts;
 #define BYTES(test) (!g_counts || (test))
+
+/* The host of test's stores: the capped one may hold g_cap bytes of memories and tables; what was asked, kept. */
+static WmStore* g_capped;
+static size_t g_cap;
+static int g_asked;
+static uint8_t g_kind;
+static size_t g_bytes;
+static void* g_host;
+
+static int growing(void* host, WmStore* store, uint8_t kind, size_t bytes)
+{
+    ++g_asked;
+    if (store != g_capped)
+        return 1;
+    g_host = host;
+    g_kind = kind;
+    g_bytes = bytes;
+    return bytes <= g_cap;
+}
 
 /* A module's owner, told when its last instance goes: it frees it then. */
 static int g_unused;
@@ -193,34 +212,46 @@ int main(void)
     }
     check(heap() == base, "the heap as before");
 
-    /* A limit refuses as a full heap does; the other store goes on; code is not dropped for it. */
-    store = g_counts ? wm_store_new(NULL) : NULL;
-    if (store)
-    {
+    /* The host decides how much a store's memories and tables may hold: asked before they are made or grow. */
+    store = wm_store_new(&g_cap);
     other = wm_store_new(NULL);
+    wm_set_store_growing(growing);
     {
         WmRuntime* r1 = wm_runtime_new_in(store, 4096, 16);
         WmRuntime* r2 = wm_runtime_new_in(other, 4096, 16);
-        WmInstance *a = NULL, *b = NULL;
+        WmInstance *a = NULL, *b = NULL, *plain = NULL;
+        WmRuntime* loose = wm_runtime_new(4096, 16);
         size_t code;
-        check(!wm_instance_new(&b, other, prog, r2, NULL, NULL) && call(r2, b, "bump", 0) == 2,
-              "a program in the other store runs, its code made");
+        WmResult refused;
+        g_capped = store;
+        check(!wm_instance_new(&b, other, prog, r2, NULL, NULL) && call(r2, b, "bump", 0) == 2 && g_asked > 0,
+              "a program in the other store runs, its code made; its host was asked");
         code = wm_code_cache_bytes();
-        wm_store_limit(store, wm_store_bytes(store) + 1024);
-        WmResult refused = wm_instance_new(&a, store, prog, r1, NULL, NULL);
-        check(refused && !strncmp(refused, "exhaustion", 10) && a == NULL && wm_code_cache_bytes() == code,
-              "over its limit a store's instance is refused as when the heap is full; no code dropped");
-        wm_store_release(store);
-        r1 = wm_runtime_new_in(store, 4096, 16);
-        wm_store_limit(store, 0);
-        check(r1 && !wm_instance_new(&a, store, prog, r1, NULL, NULL), "without the limit it is made");
-        wm_store_limit(store, wm_store_bytes(store) + 1024);
-        check(call(r1, a, "grow", 1) == 0xFFFFFFFFu && call(r1, a, "grow", 0) == 1,
-              "memory.grow over the limit gives -1, the memory as it was");
+        g_cap = 32 * 1024;
+        refused = wm_instance_new(&a, store, prog, r1, NULL, NULL);
+        check(refused && !strncmp(refused, "exhaustion", 10) && a == NULL && g_kind == WM_EXTERN_MEMORY &&
+                  g_bytes == 64 * 1024 + 2 * sizeof(uintptr_t) && g_host == &g_cap && wm_code_cache_bytes() == code,
+              "refused by the host: no instance, as when the heap is full; it was told the store's memory and table");
+        g_cap = 64 * 1024 + 2 * sizeof(uintptr_t);
+        check(!wm_instance_new(&a, store, prog, r1, NULL, NULL), "allowed exactly what it holds, it is made");
+        check(call(r1, a, "grow", 1) == 0xFFFFFFFFu && g_bytes == 128 * 1024 + 2 * sizeof(uintptr_t) &&
+                  call(r1, a, "grow", 0) == 1,
+              "memory.grow the host refuses gives -1, the memory as it was");
+        check(call(r1, a, "tgrow", 1) == 0xFFFFFFFFu && g_kind == WM_EXTERN_TABLE,
+              "table.grow the host refuses gives -1");
+        g_cap += sizeof(uintptr_t);
+        check(call(r1, a, "tgrow", 1) == 2 && call(r1, a, "tgrow", 1) == 0xFFFFFFFFu,
+              "one element more allowed: the table grows by it, and not again");
         check(call(r2, b, "bump", 0) == 3 && call(r2, b, "grow", 1) == 1, "the other store goes on and grows");
+        g_asked = 0;
+        check(!wm_instantiate(&plain, prog, loose, NULL, NULL) && call(loose, plain, "grow", 1) == 1 && g_asked == 0,
+              "an instance of no store is not asked");
+        wm_instance_free(plain);
+        wm_runtime_free(loose);
+        wm_set_store_growing(NULL);
+        g_capped = NULL;
         wm_store_free(store);
         wm_store_free(other);
-    }
     }
     check(heap() == base, "the heap as before");
 

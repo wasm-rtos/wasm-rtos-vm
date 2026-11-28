@@ -31,6 +31,15 @@ typedef struct WmTable WmTable;
 typedef struct WmMemory WmMemory;
 typedef struct WmStore WmStore;
 
+/*
+ * 1: a store counts every byte allocated for its objects (wm_store_bytes),
+ * a header of a pointer and a size before each allocation; for a host that
+ * reports them. 0, the default: stores own their objects and count none.
+ */
+#ifndef WM_STORE_BYTES
+#define WM_STORE_BYTES 0
+#endif
+
 /* Value types, as encoded in the binary format. */
 #define WM_I32 0x7F
 #define WM_I64 0x7E
@@ -193,21 +202,27 @@ WmStore* wm_store_new(void* host);
 void wm_store_free(WmStore* store);
 void* wm_store_host(const WmStore* store);
 /*
- * Bytes allocated for the store's objects, and the most it has held: its
- * instances, memories (their frames in RAM from the heap, not from a frame
- * pool), tables, globals, runtimes, modules loaded for it, and what a
- * linker allocates for it (wm_store_allocate). What is the engine's is
- * charged to no store: modules loaded with no store, predecoded code, host
- * functions. 0 in builds without a host allocator (AVR).
+ * With WM_STORE_BYTES, bytes allocated for the store's objects, and the
+ * most it has held: its instances, memories (their frames in RAM from the
+ * heap, not from a frame pool), tables, globals, runtimes, modules loaded
+ * for it, and what a linker allocates for it (wm_store_allocate). What is
+ * the engine's is charged to no store: modules loaded with no store,
+ * predecoded code, host functions. 0 without it.
  */
 size_t wm_store_bytes(const WmStore* store);
 size_t wm_store_peak_bytes(const WmStore* store);
 /*
- * At most bytes charged to the store (0: no limit). An allocation over it
- * fails as one does when the heap is full: a module does not load or
- * instantiate, memory.grow gives -1. The other stores go on.
+ * Asked before a memory or a table of a store is made or grows (memory.grow,
+ * table.grow, an instance's own, the host's wm_memory_grow): kind is
+ * WM_EXTERN_MEMORY or WM_EXTERN_TABLE, bytes what the store's memories and
+ * tables would then hold (a table's elements at a pointer's size). 0 says
+ * no: memory.grow and table.grow give -1, an instance or a memory is not
+ * made ("exhaustion"). As the pager's reserve, the host decides how much a
+ * program may have: what a program can grow by while it runs; what an
+ * instance takes besides is fixed when it is made. NULL, the default: yes.
  */
-void wm_store_limit(WmStore* store, size_t bytes);
+typedef int (*WmStoreGrowing)(void* host, WmStore* store, uint8_t kind, size_t bytes);
+void wm_set_store_growing(WmStoreGrowing growing);
 /* As wm_allocate, charged to store: for a linker's own records, freed before the store or with wm_allocate. */
 void* wm_store_allocate(WmStore* store, void* ptr, size_t size);
 /*

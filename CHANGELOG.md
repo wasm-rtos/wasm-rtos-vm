@@ -6,8 +6,10 @@
   `wm_store_free`, objects made in a store (`wm_instance_new`,
   `wm_memory_new_in`, `wm_table_new_in`, `wm_global_new_in`,
   `wm_runtime_new_in`, `wm_module_load_in`) go with it in any order, or
-  alone. A store counts its bytes (`wm_store_bytes`) and can be held to a
-  limit (`wm_store_limit`); `wm_store_release` keeps only its memories,
+  alone. The host is asked before a store's memory or table is made or
+  grows (`wm_set_store_growing`) and decides how much a program may have;
+  with `WM_STORE_BYTES=1` a store counts every byte (`wm_store_bytes`).
+  `wm_store_release` keeps only its memories,
   for instances made again on them (`wm_instance_new_with_memory`). A
   module of the engine counts its instances and tells its owner of the
   last (`wm_module_on_unused`). The functions of 1.0 are unchanged.
