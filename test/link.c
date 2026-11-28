@@ -69,7 +69,7 @@ int main(void)
     uint8_t* prog_bytes = load("test/link_prog.wasm", 64, &prog_size);
     WmModule *lib = NULL, *prog = NULL;
     WmInstance *lib_inst = NULL, *inst = NULL, *other = NULL;
-    WmRuntime* rt = wm_runtime_new(64 * 1024, 100);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64 * 1024, 100);
     WmFunc* twice = wm_host_function_new(i32, 1, i32, 1, host_twice, NULL);
     WmExternType t;
     WmExtern e;
@@ -77,11 +77,11 @@ int main(void)
     const uint8_t* bytes;
     WmResult r;
 
-    g_base = wm_global_new(WM_I64, 0, 1u);
+    g_base = wm_global_new(test_store(), WM_I64, 0, 1u);
     add_section(prog_bytes, &prog_size, "wasm-rtos.test", "abc");
     add_section(prog_bytes, &prog_size, "other", "x");
     add_section(prog_bytes, &prog_size, "wasm-rtos.test", "de");
-    check(!wm_module_load(&lib, lib_bytes, lib_size) && !wm_module_load(&prog, prog_bytes, prog_size),
+    check(!wm_module_load(&lib, NULL, lib_bytes, lib_size) && !wm_module_load(&prog, NULL, prog_bytes, prog_size),
           "both modules load, the program with custom sections added at its end");
 
     /* Imports. */
@@ -129,7 +129,7 @@ int main(void)
           "a prefix of a name is not the name; a module without them has none");
 
     /* Linking late. */
-    check(!wm_instantiate(&lib_inst, lib, rt, NULL, NULL) && !wm_instantiate(&inst, prog, rt, resolve, NULL),
+    check(!wm_instance_new(&lib_inst, test_store(), lib, rt, NULL, NULL) && !wm_instance_new(&inst, test_store(), prog, rt, resolve, NULL),
           "the library, then the program with its functions unresolved");
     call(rt, inst, "run", &r);
     check(r != NULL, "an unlinked import traps");
@@ -143,7 +143,7 @@ int main(void)
     check(wm_instance_link_function(inst, 3, export_func(lib_inst, "seven")) != NULL &&
               wm_instance_link_function(inst, 1, NULL) != NULL,
           "past the function imports, or nothing, is refused");
-    check(!wm_instantiate(&other, prog, rt, resolve, NULL) &&
+    check(!wm_instance_new(&other, test_store(), prog, rt, resolve, NULL) &&
               wm_instance_link_function(inst, 2, export_func(other, "twice")) != NULL,
           "another instance's import, still unlinked, is refused as the target");
     check(wm_instance_link_function(inst, 1, export_func(lib_inst, "seven")) == NULL &&
@@ -178,14 +178,14 @@ int main(void)
     check(wm_instance_export(inst, "table", 5, &e) == NULL && wm_table_size(e.as.table) == 1 &&
               wm_table_get(e.as.table, 0) != NULL && wm_table_get(e.as.table, 1) == NULL,
           "the program's table: 1 entry, set by its element segment; past it, NULL");
-    table = wm_table_new(WM_FUNCREF, 2u, 2u);
+    table = wm_table_new(test_store(), WM_FUNCREF, 2u, 2u);
     check(wm_table_get(table, 0) == NULL && wm_table_set(table, 1, export_func(lib_inst, "seven")) == NULL &&
               wm_table_get(table, 1) == export_func(lib_inst, "seven"),
           "a new table: null, then set and read back");
     check(wm_table_set(table, 2, NULL) != NULL && wm_table_set(table, 1, NULL) == NULL && wm_table_get(table, 1) == NULL,
           "past its end refused; set to null");
     wm_table_free(table);
-    table = wm_table_new(WM_EXTERNREF, 1u, 1u);
+    table = wm_table_new(test_store(), WM_EXTERNREF, 1u, 1u);
     check(wm_table_set(table, 0, twice) != NULL && wm_table_get(table, 0) == NULL, "an externref table: refused");
     wm_table_free(table);
 

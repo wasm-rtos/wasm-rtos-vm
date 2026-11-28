@@ -5,6 +5,15 @@
 #include <stdio.h>
 #include "../source/wm.h"
 
+/* The store this program's objects are made in (decision 25): one for the whole run. */
+static WmStore* test_store(void)
+{
+    static WmStore* store;
+    if (!store)
+        store = wm_store_new(NULL);
+    return store;
+}
+
 int main(int argc, char** argv)
 {
     static uint8_t bytes[4096];
@@ -12,11 +21,11 @@ int main(int argc, char** argv)
     uint32_t size = f ? (uint32_t)fread(bytes, 1, sizeof(bytes), f) : 0;
     WmModule* module = NULL;
     WmInstance* inst = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     WmResult why;
     if (f)
         fclose(f);
-    if (!size || wm_module_load(&module, bytes, size) || wm_instantiate(&inst, module, rt, NULL, NULL))
+    if (!size || wm_module_load(&module, NULL, bytes, size) || wm_instance_new(&inst, test_store(), module, rt, NULL, NULL))
     {
         printf("FAIL load the module\n");
         return 1;

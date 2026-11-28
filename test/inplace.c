@@ -142,7 +142,7 @@ static WmResult run_sliced(WmRuntime** rt, int mode, int snapshots, WmFunc* f, u
             if ((r = wm_snapshot_write(*rt, g_inst, put, NULL)))
                 return r;
             wm_runtime_free(*rt);
-            *rt = wm_runtime_new(64u * 1024u, 100u);
+            *rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
             set_mode(*rt, mode);
             if ((r = wm_snapshot_read(*rt, g_inst, get, NULL)))
                 return r;
@@ -197,14 +197,15 @@ int main(int argc, char** argv)
     uint32_t size = f ? (uint32_t)fread(bytes, 1, sizeof(bytes), f) : 0;
     WmModule* module = NULL;
     WmRuntime* rt;
+    (void)test_store(); /* made before the count starts: it lasts the whole test */
     wm_set_allocator(counted);
-    rt = wm_runtime_new(64u * 1024u, 100u);
+    rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     if (f)
         fclose(f);
     g_back = wm_host_function_new(i32, 1, i32, 1, host_back, NULL);
     wm_set_code_allocator(code_allocator);
 
-    check(size && !wm_module_load(&module, bytes, size) && !wm_instantiate(&g_inst, module, rt, resolve, NULL),
+    check(size && !wm_module_load(&module, NULL, bytes, size) && !wm_instance_new(&g_inst, test_store(), module, rt, resolve, NULL),
           "instantiate");
     if (!g_inst)
         return 1;
@@ -275,7 +276,7 @@ int main(int argc, char** argv)
             }
     }
 
-    wm_instance_free(g_inst);
+    test_instance_free(g_inst);
     wm_module_free(module);
     check(wm_code_cache_bytes() == 0, "a module freed takes its records along");
 
@@ -286,7 +287,7 @@ int main(int argc, char** argv)
         fclose(f);
     module = NULL;
     g_inst = NULL;
-    check(size && !wm_module_load(&module, bytes, size) && !wm_instantiate(&g_inst, module, rt, resolve, NULL),
+    check(size && !wm_module_load(&module, NULL, bytes, size) && !wm_instance_new(&g_inst, test_store(), module, rt, resolve, NULL),
           "instantiate the loop");
     if (g_inst)
     {
@@ -302,7 +303,7 @@ int main(int argc, char** argv)
         check(!run_turned(rt, sum, 300, &run, &first), "sum(300), making none, then records");
         same(&usual, &run, "sum(300), making none, then records");
         check(first == 0 && wm_code_cache_bytes() > 0, "the stopped loop moved to its records");
-        wm_instance_free(g_inst);
+        test_instance_free(g_inst);
         wm_module_free(module);
     }
     wm_runtime_free(rt);

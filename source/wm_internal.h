@@ -48,18 +48,6 @@ static inline int wm_out_of_bounds(uint32_t start, uint32_t count, wm_size size)
 #ifndef WM_HAS_REF_TYPES
 #define WM_HAS_REF_TYPES 0
 #endif
-#ifndef WM_HAS_STORES
-#define WM_HAS_STORES 0
-#endif
-#endif
-
-/*
- * Stores (decision 25): objects in a store's lists, a module's count of
- * its instances. 0 (WM_TINY: one program, no kernel to own processes):
- * the functions of 1.0 alone, nothing of stores in the build.
- */
-#ifndef WM_HAS_STORES
-#define WM_HAS_STORES 1
 #endif
 
 /*
@@ -175,13 +163,9 @@ extern struct WmStore* wm_charge;
  * then hold. Yes for an object of no store, or with no host function set:
  * the check is linked only into a build that sets one.
  */
-#if WM_HAS_STORES
 extern int (*wm_store_check)(struct WmStore* store, uint8_t kind, size_t more);
 #define wm_store_may_grow(store, kind, more) \
     (!(store) || !wm_store_check || wm_store_check((store), (kind), (more)))
-#else
-#define wm_store_may_grow(store, kind, more) ((void)(store), (void)(kind), (void)(more), 1)
-#endif
 
 #ifndef WM_HAS_I64
 #define WM_HAS_I64 1
@@ -739,7 +723,7 @@ struct WmMemory
 {
     /* The memory in one block; NULL when it is paged. */
     uint8_t* data;
-    /* Its store, or NULL: an instance's own or the caller's (the functions of 1.0). */
+    /* Its store. */
     struct WmStore* store;
     struct WmMemory* store_next;
     uint32_t pages;
@@ -858,7 +842,7 @@ WmResult wm_memory_copy(WmMemory* memory, uint32_t to, uint32_t from, uint32_t l
 struct WmInstance
 {
     WmModule* module;
-    /* Its store, or NULL (wm_instantiate): it owns its memory itself then. */
+    /* Its store: its memory, made or kept, is the store's. */
     struct WmStore* store;
     struct WmInstance* store_next;
     WmFunc** funcs;
@@ -870,7 +854,6 @@ struct WmInstance
     WmTable** tables;
     WmTable* own_tables;
     WmMemory* memory;
-    uint8_t owns_memory;
     uint8_t* elem_dropped;
     uint8_t* data_dropped;
     uint8_t started;
@@ -1103,28 +1086,12 @@ WmRuntime* wm_runtimes(void);
             }                                                                                                       \
         object->store = NULL;                                                                                       \
     }
-#if WM_HAS_STORES
 WM_STORE_LIST(struct WmInstance, instances)
 WM_STORE_LIST(struct WmMemory, memories)
 WM_STORE_LIST(struct WmRuntime, runtimes)
 WM_STORE_LIST(struct WmModule, modules)
 WM_STORE_LIST(WmStoreTable, tables)
 WM_STORE_LIST(WmStoreGlobal, globals)
-#else
-/* No stores: every object is of none; the store arguments are NULL. */
-#define wm_store_link_instances(store, object) ((void)(store), (void)(object))
-#define wm_store_link_memories(store, object) ((void)(store), (void)(object))
-#define wm_store_link_runtimes(store, object) ((void)(store), (void)(object))
-#define wm_store_link_modules(store, object) ((void)(store), (void)(object))
-#define wm_store_link_tables(store, object) ((void)(store), (void)(object))
-#define wm_store_link_globals(store, object) ((void)(store), (void)(object))
-#define wm_store_unlink_instances(object) ((void)(object))
-#define wm_store_unlink_memories(object) ((void)(object))
-#define wm_store_unlink_runtimes(object) ((void)(object))
-#define wm_store_unlink_modules(object) ((void)(object))
-#define wm_store_unlink_tables(object) ((void)(object))
-#define wm_store_unlink_globals(object) ((void)(object))
-#endif
 
 /* The module's last instance went: its owner is told (it may free it). */
 void wm_module_instance_gone(WmModule* module);

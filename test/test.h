@@ -18,6 +18,26 @@ static inline void check(int ok, const char* what)
     g_failures += !ok;
 }
 
+/*
+ * The store a test's objects are made in when it needs no store of its own
+ * (decision 25): made on first use, freed when the program exits.
+ */
+static inline WmStore* test_store(void)
+{
+    static WmStore* store;
+    if (!store)
+        store = wm_store_new(NULL);
+    return store;
+}
+
+/* An instance and the memory it made, for a test that counts what is freed: an instance's memory is its store's. */
+static inline void test_instance_free(WmInstance* instance)
+{
+    WmMemory* memory = instance ? wm_instance_memory(instance) : NULL;
+    wm_instance_free(instance);
+    wm_memory_free(memory);
+}
+
 /* The function an instance exports by that name, or NULL. */
 static inline WmFunc* export_func(WmInstance* inst, const char* name)
 {

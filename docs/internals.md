@@ -179,9 +179,9 @@ results. A CRC-32 ends the stream; fuzzing builds
 
 A state snapshot (`wm_snapshot_write_state`) is all of it but the memory's
 bytes, for a program swapped out with its memory left to the pager: the
-instance gives the memory up (`wm_instance_detach_memory`), everything else
-is freed, and a new instance of the module takes it back
-(`wm_instantiate_with_memory`, no data segments, no start function) before
+memory stays in the instance's store (`wm_store_release` frees everything
+else), and a new instance of the module takes it back
+(`wm_instance_new_with_memory`, no data segments, no start function) before
 the state loads.
 
 ## Paged memory

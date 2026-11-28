@@ -48,12 +48,10 @@ wm_get_fuel
 wm_global_free
 wm_global_get
 wm_global_new
-wm_global_new_in
 wm_global_set
 wm_global_type
 wm_host_function_free
 wm_host_function_new
-wm_instance_detach_memory
 wm_instance_export
 wm_instance_free
 wm_instance_link_function
@@ -61,8 +59,6 @@ wm_instance_memory
 wm_instance_new
 wm_instance_new_with_memory
 wm_instance_start
-wm_instantiate
-wm_instantiate_with_memory
 wm_is_fuel_enabled
 wm_is_suspended
 wm_memory_block_frames
@@ -80,8 +76,6 @@ wm_memory_frames
 wm_memory_free
 wm_memory_grow
 wm_memory_new
-wm_memory_new_in
-wm_memory_new_paged
 wm_memory_next
 wm_memory_pin
 wm_memory_pointer
@@ -97,7 +91,6 @@ wm_module_import_type
 wm_module_imports
 wm_module_instance_count
 wm_module_load
-wm_module_load_in
 wm_module_memories
 wm_module_on_unused
 wm_module_predecoded
@@ -107,7 +100,6 @@ wm_pager_resident
 wm_resume
 wm_runtime_free
 wm_runtime_new
-wm_runtime_new_in
 wm_runtime_stack
 wm_set_allocator
 wm_set_code_allocator
@@ -131,7 +123,6 @@ wm_table_free
 wm_table_get
 wm_table_grow
 wm_table_new
-wm_table_new_in
 wm_table_set
 wm_table_size
 wm_trace

@@ -2006,8 +2006,8 @@ void* wm_store_host(const WmStore* store);
 1. **Objects made in a store belong to it**: instances, memories, tables,
    globals, runtimes, and modules loaded for it alone. New functions take
    the store first, as wasm-c-api's do (`wasm_instance_new(store, ...)`):
-   `wm_instance_new`, `wm_memory_new_in`, `wm_table_new_in`,
-   `wm_global_new_in`, `wm_runtime_new_in`, `wm_module_load_in`. Freeing
+   `wm_instance_new`, `wm_memory_new`, `wm_table_new`, `wm_global_new`,
+   `wm_runtime_new`, `wm_module_load` (item 8). Freeing
    the store frees them all: no order to keep, no flags of who owns a
    memory or a table. An instance that failed stays in the store until it
    goes. One object can still be freed alone (`wm_instance_free` and the
@@ -2062,12 +2062,17 @@ void* wm_store_host(const WmStore* store);
 7. **Host functions stay the engine's**, made once and shared by every
    store. wasm-c-api makes them per store (`wasm_func_new(store, ...)`);
    here that would cost each task its imports again in RAM.
-8. **The functions of 1.0 keep working as now**: objects they make belong
-   to no store and keep today's rules (`wm_instantiate`,
-   `wm_instance_detach_memory`, `wm_instantiate_with_memory`). The
-   interpreter, the kernel and dylink move to stores; a host that never
-   makes one (wasm-rtos-hw, examples, the site's simulator) is unchanged.
-   The old ones are marked as for hosts without a store in `wm.h`.
+8. **One model: every instance, memory, table, global and runtime is made
+   in a store**, the store first as wasm-c-api's functions take it:
+   `wm_instance_new(&i, store, module, ...)`, `wm_memory_new(store, ...)`,
+   `wm_runtime_new(store, ...)`, `wm_module_load(&m, store, ...)` (NULL:
+   the engine's). The functions without a store go before 1.0 is tagged:
+   `wm_instantiate`, `wm_instantiate_with_memory`,
+   `wm_instance_detach_memory`, `wm_memory_new_paged`, and the old
+   `wm_memory_new`, `wm_table_new`, `wm_global_new`, `wm_runtime_new`,
+   `wm_module_load` without a store. The user: «надо все переводить на
+   лучшее так понятней и релиза еще не было лучше мы релизнем хорошую
+   версию чем непонятную со старыми фишками которые понятно только нам».
 
 What stays outside wasm-c-api, as extensions: fuel, runtimes that stop
 and go on, snapshots, paging, code images, an instance on a memory kept
@@ -2124,7 +2129,10 @@ own).
   store pointer in each table. With `WM_STORE_BYTES` the header too.
 - Code: an estimate of 400 to 800 bytes; `WM_TINY` (28386 bytes now)
   measured before and after.
-- Two ways for a while: the functions without a store stay until a 2.0.
+- 1.0's promise, "names are only added", is broken once, before 1.0 is
+  tagged (as decision 23 took dylink's names out): every host of the
+  engine moves (the kernel, dylink, wasm-rtos-hw, the examples, the site's
+  copy of the kernel).
 
 ### Steps
 
@@ -2154,7 +2162,7 @@ With what building and measuring it found:
   for a store charges a store without an object at hand (`wm_charge`,
   set for that load alone). A store freed with bytes still charged to it
   (a linker's records not freed yet) is kept until the last of them goes.
-- **Asking**: in `wm_memory_new_in` and `wm_memory_grow`, in `grow_table`
+- **Asking**: in `wm_memory_new` and `wm_memory_grow`, in `grow_table`
   (`table.grow` and `wm_table_grow`), and before an instance's own tables
   and memory are made; a table knows its store for it. Restoring a
   snapshot's table sizes is not asked: it puts back what was allowed.
@@ -2168,11 +2176,11 @@ With what building and measuring it found:
   instance of it failed (kernel decision 18).
 - `wm_instance_detach_memory` gives NULL for an instance of a store: its
   memory is the store's.
-- **Not in `WM_TINY`** (`WM_HAS_STORES=0`): an Uno runs one program on the
-  functions of 1.0 and has no kernel to own processes, and the lists and
-  counts cost it about 700 bytes of 1.3 KiB left. A build that wants
-  stores there sets it. The walk of a store for the host is linked only
-  into a build that calls `wm_set_store_growing`.
+- **One model in every build, the Uno's too**: first built with the
+  functions of 1.0 beside stores, and then without stores in `WM_TINY`
+  (`WM_HAS_STORES=0`); both went, for one model everywhere. The walk of a
+  store for the host is linked only into a build that calls
+  `wm_set_store_growing`.
 
 ### Checks
 
@@ -2194,12 +2202,11 @@ With what building and measuring it found:
   and a program and its library made again on it go on from what it held;
   another store's memory refused; a linker's record keeps a freed store
   until it goes.
-- Size: `WM_TINY` on an ATmega328P 28666 bytes, 280 more than before
-  stores (the functions of 1.0 now wrappers of those with a store); 29136
-  with stores in it and 29656 with the walk always linked, as first
-  built. The engine on a Cortex-M4 (`-Os`, all objects whole) about 1.4
-  KiB more. The hot loops are untouched; growing a memory or a table asks
-  a pointer first.
+- Size: `WM_TINY` on an ATmega328P 29256 bytes of the budget's 30720,
+  870 more than before stores (28386): the lists and the count of a
+  module's instances in every build, as one model asks. The engine on a
+  Cortex-M4 (`-Os`, all objects whole) about 1.4 KiB more. The hot loops
+  are untouched; growing a memory or a table asks a pointer first.
 - ESP32 as built now (growth asked, no header), the same board: 24 of 24,
   nothing leaked, 18 programs at once as before stores; with the card, a
   task linked with its library 29768 bytes of heap and the second 26704,

@@ -14,6 +14,15 @@
 
 #include "../source/wm.h"
 
+/* The store this program's objects are made in (decision 25): one for the whole run. */
+static WmStore* test_store(void)
+{
+    static WmStore* store;
+    if (!store)
+        store = wm_store_new(NULL);
+    return store;
+}
+
 static uint8_t* slurp(const char* path, uint32_t* size)
 {
     FILE* f = fopen(path, "rb");
@@ -82,7 +91,7 @@ int main(int argc, char** argv)
     uint8_t* bytes;
     WmModule* m;
     WmInstance* in;
-    WmRuntime* rt = wm_runtime_new(64 * 1024, 1000);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64 * 1024, 1000);
     WmExtern f;
     WmResult r;
     uint32_t result = 0;
@@ -96,7 +105,7 @@ int main(int argc, char** argv)
     }
     printf("%u-bit pointers\n", (unsigned)(sizeof(void*) * 8u));
     bytes = slurp(argv[2], &size);
-    if (!bytes || (r = wm_module_load(&m, bytes, size)) || (r = wm_instantiate(&in, m, rt, resolve, NULL)) ||
+    if (!bytes || (r = wm_module_load(&m, NULL, bytes, size)) || (r = wm_instance_new(&in, test_store(), m, rt, resolve, NULL)) ||
         (r = wm_instance_export(in, argv[3], (uint32_t)strlen(argv[3]), &f)))
     {
         printf("error %s\n", bytes ? r : "cannot read the program");
@@ -149,6 +158,7 @@ int main(int argc, char** argv)
 }
 
 #include "../source/wm_internal.h"
+
 
 static void link_stubs(WmInstance* inst, WmFunc** stubs)
 {

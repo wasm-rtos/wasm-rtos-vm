@@ -311,11 +311,7 @@ static WmResult make_own_funcs(WmInstance* inst)
     return NULL;
 }
 
-/*
- * An instance of m, in store or none; with kept a memory from an earlier
- * instance: its own, which it takes (the store keeps it, when in one), or
- * the one it imports.
- */
+/* An instance of m in store; with kept a memory of the store from an earlier instance: its own, or the one it imports. */
 static WmResult instantiate(WmInstance** out, WmStore* store, WmModule* m, WmRuntime* runtime, WmResolver resolver,
                             void* context, WmMemory* kept)
 {
@@ -325,13 +321,13 @@ static WmResult instantiate(WmInstance** out, WmStore* store, WmModule* m, WmRun
     uint32_t own_globals = m->global_count - m->global_imports;
 
     *out = NULL;
+    if (!store)
+        return WM_ERR_INVALID("invalid: an instance is made in a store");
     inst = (WmInstance*)wm_store_calloc(store, 1, sizeof(WmInstance));
     if (!inst)
         return E_MEMORY;
     inst->module = m;
-#if WM_HAS_STORES
     ++m->instance_count;
-#endif
     wm_store_link_instances(store, inst);
     inst->funcs = (WmFunc**)wm_store_calloc(store, m->func_count + 1u, sizeof(WmFunc*));
     inst->globals = (WmGlobal**)wm_store_calloc(store, m->global_count + 1u, sizeof(WmGlobal*));
@@ -404,20 +400,19 @@ static WmResult instantiate(WmInstance** out, WmStore* store, WmModule* m, WmRun
             wm_instance_free(inst);
             return E_INCOMPATIBLE;
         }
+        /* The store's, kept when the instance goes. */
         inst->memory = kept;
-        /* In a store the memory is the store's, kept when the instance goes. */
-        inst->owns_memory = !store;
     }
     else if (m->memory_count > m->memory_imports)
     {
-        inst->memory = wm_memory_new_in(store, m->memory.min, m->memory.has_max ? m->memory.max : WM_NONE,
-                                        m->memory.page_log2);
+        /* Made in the store: it stays there when the instance goes. */
+        inst->memory = wm_memory_new(store, m->memory.min, m->memory.has_max ? m->memory.max : WM_NONE,
+                                     m->memory.page_log2);
         if (!inst->memory)
         {
             wm_instance_free(inst);
             return E_MEMORY;
         }
-        inst->owns_memory = !store;
     }
 
 #if WM_PREDECODE
@@ -432,12 +427,6 @@ static WmResult instantiate(WmInstance** out, WmStore* store, WmModule* m, WmRun
     if (runtime)
         return wm_instance_start(inst, runtime);
     return NULL;
-}
-
-WmResult wm_instantiate(WmInstance** out, WmModule* m, WmRuntime* runtime, WmResolver resolver,
-                        void* context)
-{
-    return instantiate(out, NULL, m, runtime, resolver, context, NULL);
 }
 
 WmResult wm_instance_new(WmInstance** out, WmStore* store, WmModule* m, WmRuntime* runtime, WmResolver resolver,
@@ -461,24 +450,12 @@ static WmResult instantiate_with_memory(WmInstance** out, WmStore* store, WmModu
     return result;
 }
 
-WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* m, WmMemory* memory, WmResolver resolver,
-                                    void* context)
-{
-    return instantiate_with_memory(out, NULL, m, memory, resolver, context);
-}
-
 WmResult wm_instance_new_with_memory(WmInstance** out, WmStore* store, WmModule* m, WmMemory* memory,
                                      WmResolver resolver, void* context)
 {
     return instantiate_with_memory(out, store, m, memory, resolver, context);
 }
 
-WmMemory* wm_instance_detach_memory(WmInstance* inst)
-{
-    WmMemory* memory = inst->owns_memory ? inst->memory : NULL;
-    inst->owns_memory = 0;
-    return memory;
-}
 
 WmResult wm_instance_start(WmInstance* inst, WmRuntime* runtime)
 {
@@ -498,8 +475,6 @@ void wm_instance_free(WmInstance* inst)
     if (inst->own_tables)
         for (uint32_t i = 0; i < inst->module->table_count - inst->module->table_imports; ++i)
             wm_free(inst->own_tables[i].elems);
-    if (inst->owns_memory)
-        wm_memory_free(inst->memory);
     wm_free(inst->funcs);
     wm_free(inst->own_funcs);
     wm_free(inst->globals);
@@ -509,13 +484,9 @@ void wm_instance_free(WmInstance* inst)
     wm_free(inst->elem_dropped);
     wm_free(inst->data_dropped);
     wm_free(inst);
-#if WM_HAS_STORES
     /* Last: the module's owner may free it now. */
     if (module && --module->instance_count == 0)
         wm_module_instance_gone(module);
-#else
-    (void)module;
-#endif
 }
 
 WmResult wm_instance_export(const WmInstance* inst, const char* name, uint32_t length, WmExtern* out)
@@ -582,24 +553,10 @@ void wm_func_type(const WmFunc* f, const uint8_t** params, uint32_t* param_count
     *result_count = f->type->result_count;
 }
 
-WmGlobal* wm_global_new(uint8_t type, uint8_t mutable_, uint64_t value)
-{
-    WmGlobal* g = (WmGlobal*)wm_calloc(1, sizeof(WmGlobal));
-    if (g)
-    {
-        g->type = type;
-        g->mutable_ = mutable_;
-        g->value = value;
-    }
-    return g;
-}
-
-WmGlobal* wm_global_new_in(WmStore* store, uint8_t type, uint8_t mutable_, uint64_t value)
+WmGlobal* wm_global_new(WmStore* store, uint8_t type, uint8_t mutable_, uint64_t value)
 {
     WmStoreGlobal* node;
-    if (!store)
-        return wm_global_new(type, mutable_, value);
-    if (!(node = (WmStoreGlobal*)wm_store_calloc(store, 1, sizeof(WmStoreGlobal))))
+    if (!store || !(node = (WmStoreGlobal*)wm_store_calloc(store, 1, sizeof(WmStoreGlobal))))
         return NULL;
     wm_store_link_globals(store, node);
     node->global.type = type;
@@ -612,11 +569,9 @@ WmGlobal* wm_global_new_in(WmStore* store, uint8_t type, uint8_t mutable_, uint6
 void wm_global_free(WmGlobal* g)
 {
     WmStoreGlobal* node;
+    /* Only one made alone: an instance's own globals go with it. */
     if (!g || !g->in_store)
-    {
-        wm_free(g);
         return;
-    }
     node = (WmStoreGlobal*)((uint8_t*)g - offsetof(WmStoreGlobal, global));
     wm_store_unlink_globals(node);
     wm_free(node);
@@ -636,29 +591,10 @@ int wm_func_equal(const WmFunc* a, const WmFunc* b)
                    : a->code && a->code == b->code && a->instance == b->instance;
 }
 
-WmTable* wm_table_new(uint8_t type, uint32_t size, uint32_t max)
-{
-    WmTable* t = (WmTable*)wm_calloc(1, sizeof(WmTable));
-    if (!t)
-        return NULL;
-    t->type = type;
-    t->size = size;
-    t->max = max;
-    t->elems = (uintptr_t*)wm_calloc(size + 1u, sizeof(uintptr_t));
-    if (!t->elems)
-    {
-        wm_free(t);
-        return NULL;
-    }
-    return t;
-}
-
-WmTable* wm_table_new_in(WmStore* store, uint8_t type, uint32_t size, uint32_t max)
+WmTable* wm_table_new(WmStore* store, uint8_t type, uint32_t size, uint32_t max)
 {
     WmStoreTable* node;
-    if (!store)
-        return wm_table_new(type, size, max);
-    if (!wm_store_may_grow(store, WM_EXTERN_TABLE, (size_t)size * sizeof(uintptr_t)) ||
+    if (!store || !wm_store_may_grow(store, WM_EXTERN_TABLE, (size_t)size * sizeof(uintptr_t)) ||
         !(node = (WmStoreTable*)wm_store_calloc(store, 1, sizeof(WmStoreTable))))
         return NULL;
     node->table.type = type;
@@ -678,14 +614,10 @@ WmTable* wm_table_new_in(WmStore* store, uint8_t type, uint32_t size, uint32_t m
 void wm_table_free(WmTable* t)
 {
     WmStoreTable* node;
-    if (!t)
+    /* Only one made alone: an instance's own tables go with it. */
+    if (!t || !t->in_store)
         return;
     wm_free(t->elems);
-    if (!t->in_store)
-    {
-        wm_free(t);
-        return;
-    }
     node = (WmStoreTable*)((uint8_t*)t - offsetof(WmStoreTable, table));
     wm_store_unlink_tables(node);
     wm_free(node);
@@ -891,14 +823,9 @@ void wm_set_makes_code(WmRuntime* runtime, int makes)
 #endif
 }
 
-WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames)
+WmRuntime* wm_runtime_new(WmStore* store, uint32_t stack_bytes, uint32_t max_frames)
 {
-    return wm_runtime_new_in(NULL, stack_bytes, max_frames);
-}
-
-WmRuntime* wm_runtime_new_in(WmStore* store, uint32_t stack_bytes, uint32_t max_frames)
-{
-    WmRuntime* rt = (WmRuntime*)wm_store_calloc(store, 1, sizeof(WmRuntime));
+    WmRuntime* rt = store ? (WmRuntime*)wm_store_calloc(store, 1, sizeof(WmRuntime)) : NULL;
     uint32_t slots = stack_bytes / 4u;
     if (!rt)
         return NULL;

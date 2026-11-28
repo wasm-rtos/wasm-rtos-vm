@@ -140,9 +140,10 @@ int run(const uint8_t* bytes, uint32_t size)
     uint32_t n = 5;
 
     g_print = wm_host_function_new(i32, 1, NULL, 0, print, NULL);
-    WmRuntime* rt = wm_runtime_new(8 * 1024, 64);   /* 8 KiB value stack, 64 calls deep */
-    if ((r = wm_module_load(&module, bytes, size)) ||
-        (r = wm_instantiate(&instance, module, rt, resolve, NULL)) ||
+    WmStore* store = wm_store_new(NULL);                    /* what the program makes is the store's */
+    WmRuntime* rt = wm_runtime_new(store, 8 * 1024, 64);    /* 8 KiB value stack, 64 calls deep */
+    if ((r = wm_module_load(&module, store, bytes, size)) ||
+        (r = wm_instance_new(&instance, store, module, rt, resolve, NULL)) ||
         (r = wm_instance_export(instance, "count", 5, &count)))
         return printf("%s\n", r), 1;
 
@@ -168,10 +169,31 @@ Every public function of `wm.h`. Errors are static strings that start with
 their kind: `"malformed:"`, `"invalid:"`, `"unlinkable:"`, `"trap:"`,
 `"exhaustion:"` or `"unsupported:"`; `NULL` is success.
 
+### Stores
+
+```c
+WmStore* wm_store_new(void* host);         /* the owner of what a process makes (decision 25) */
+void     wm_store_free(WmStore* store);    /* all of it, in whatever order it was made */
+void*    wm_store_host(const WmStore* store);
+void     wm_store_release(WmStore* store); /* all but its memories, for instances made again on them */
+WmMemory* wm_store_memory(const WmStore* store, uint32_t index);
+
+/* Asked before a store's memory or table is made or grows: what they would then hold. */
+typedef int (*WmStoreGrowing)(void* host, WmStore* store, uint8_t kind, size_t bytes);
+void     wm_set_store_growing(WmStoreGrowing growing);
+
+size_t   wm_store_bytes(const WmStore* store);       /* with WM_STORE_BYTES=1: every byte of its objects */
+size_t   wm_store_peak_bytes(const WmStore* store);
+void*    wm_store_allocate(WmStore* store, void* ptr, size_t size);   /* a linker's records, charged to it */
+```
+
 ### Modules and instances
 
 ```c
-WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size);  /* bytes must outlive the module */
+/* In store, the store's alone; store NULL: the engine's, shared by any. bytes must outlive the module. */
+WmResult wm_module_load(WmModule** out, WmStore* store, const uint8_t* bytes, uint32_t size);
+void     wm_module_on_unused(WmModule* module, void (*unused)(void* context, WmModule* module), void* context);
+uint32_t wm_module_instance_count(const WmModule* module);
 void     wm_module_free(WmModule* module);
 uint32_t wm_module_code_bytes(const WmModule* module);   /* RAM its code takes besides the bytes */
 WmResult wm_module_predecoded(const WmModule* module);   /* NULL: runs in the fast loop; else why not */
@@ -181,8 +203,8 @@ int      wm_module_import_type(const WmModule* module, const char* name,
 
 typedef WmResult (*WmResolver)(void* context, const char* module, uint32_t module_length,
                                const char* name, uint32_t name_length, uint8_t kind, WmExtern* out);
-WmResult wm_instantiate(WmInstance** out, const WmModule* module, WmRuntime* runtime,
-                        WmResolver resolver, void* context);   /* runtime NULL: start later */
+WmResult wm_instance_new(WmInstance** out, WmStore* store, WmModule* module, WmRuntime* runtime,
+                         WmResolver resolver, void* context);   /* runtime NULL: start later */
 WmResult wm_instance_start(WmInstance* instance, WmRuntime* runtime);
 void     wm_instance_free(WmInstance* instance);
 WmResult wm_instance_export(const WmInstance* instance, const char* name, uint32_t length, WmExtern* out);
@@ -201,12 +223,12 @@ void     wm_func_type(const WmFunc* func, const uint8_t** params, uint32_t* para
                       const uint8_t** results, uint32_t* result_count);
 uint32_t wm_type_slots(uint8_t type);                    /* 2 for i64 and f64 */
 
-WmGlobal* wm_global_new(uint8_t type, uint8_t mutable_, uint64_t value);
+WmGlobal* wm_global_new(WmStore* store, uint8_t type, uint8_t mutable_, uint64_t value);
 void      wm_global_free(WmGlobal* global);
 uint8_t   wm_global_type(const WmGlobal* global);
 uint64_t  wm_global_get(const WmGlobal* global);
 
-WmTable* wm_table_new(uint8_t type, uint32_t size, uint32_t max);
+WmTable* wm_table_new(WmStore* store, uint8_t type, uint32_t size, uint32_t max);
 void     wm_table_free(WmTable* table);
 uint32_t wm_table_grow(WmTable* table, uint32_t delta);
 ```
@@ -214,7 +236,7 @@ uint32_t wm_table_grow(WmTable* table, uint32_t delta);
 ### Calls, fuel and stops
 
 ```c
-WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);
+WmRuntime* wm_runtime_new(WmStore* store, uint32_t stack_bytes, uint32_t max_frames);
 void       wm_runtime_free(WmRuntime* runtime);
 uint8_t*   wm_runtime_stack(const WmRuntime* runtime, uint32_t* bytes);
 
@@ -251,17 +273,16 @@ WmResult wm_snapshot_read(WmRuntime* runtime, WmInstance* instance, WmSnapshotRe
 /* All but the memory's bytes, for a program whose memory stays with a pager: */
 WmResult  wm_snapshot_write_state(const WmRuntime* runtime, const WmInstance* instance,
                                   WmSnapshotWrite write, void* context);
-WmMemory* wm_instance_detach_memory(WmInstance* instance);
-WmResult  wm_instantiate_with_memory(WmInstance** out, const WmModule* module, WmMemory* memory,
-                                     WmResolver resolver, void* context);
+/* The memory stays in the store (wm_store_release); a new instance takes it, nothing written into it: */
+WmResult  wm_instance_new_with_memory(WmInstance** out, WmStore* store, WmModule* module, WmMemory* memory,
+                                      WmResolver resolver, void* context);
 extern const char wm_snapshot_invalid[];
 ```
 
 ### Memory
 
 ```c
-WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages);
-WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_log2);
+WmMemory* wm_memory_new(WmStore* store, uint32_t pages, uint32_t max_pages, uint8_t page_log2);   /* 16: 64 KiB pages */
 void      wm_memory_free(WmMemory* memory);
 uint32_t  wm_memory_grow(WmMemory* memory, uint32_t delta);
 uint8_t*  wm_memory_data(const WmMemory* memory, uint32_t* size);   /* NULL when paged */
@@ -348,7 +369,7 @@ any of them, and the memories, tables and globals they share, once each.
 
 ```c
 static const WmWasiHost host = { .now_ns = now_ns, .sleep_ms = sleep_ms, .write = write_out };
-/* in the resolver given to wm_instantiate: */
+/* in the resolver given to wm_instance_new: */
 WmResult r = wm_wasi_resolve(&host, module, module_length, name, name_length, &out->as.func);
 if (!r && !out->as.func) /* not WASI, or a call it does not answer: */
     r = wm_wasi_resolve_absent(program, module, module_length, name, &out->as.func); /* ENOSYS */

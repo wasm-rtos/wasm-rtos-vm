@@ -131,14 +131,14 @@ int main(void)
     }
     wm_store_free(store);
     printf("%s\n", g_counts ? "a store's bytes are counted" : "a store's bytes are not counted in this build");
-    check(prog_size && lib_size && trap_size && !wm_module_load(&prog, prog_bytes, prog_size) &&
-              !wm_module_load(&lib, lib_bytes, lib_size) && !wm_module_load(&trap, trap_bytes, trap_size),
+    check(prog_size && lib_size && trap_size && !wm_module_load(&prog, NULL, prog_bytes, prog_size) &&
+              !wm_module_load(&lib, NULL, lib_bytes, lib_size) && !wm_module_load(&trap, NULL, trap_bytes, trap_size),
           "modules of the engine: a program, a library that imports its memory, one whose start traps");
     base = heap();
 
     /* Everything in one store, freed in one call: the heap as before, whatever the order. */
     store = wm_store_new(&base);
-    rt = wm_runtime_new_in(store, 16 * 1024, 64);
+    rt = wm_runtime_new(store, 16 * 1024, 64);
     check(store && wm_store_host(store) == &base && rt && BYTES(wm_store_bytes(store) > 16 * 1024),
           "a store, its host, and a runtime in it: charged to it");
     before = wm_store_bytes(store);
@@ -148,8 +148,8 @@ int main(void)
     check(!wm_instance_new(&l, store, lib, rt, resolve, memory_of(p)) && call(rt, p, "bump", 0) == 2 &&
               call(rt, l, "peek", 0) == 2,
           "the library on the program's memory, in the same store");
-    check(wm_table_new_in(store, WM_FUNCREF, 4, 8) && wm_global_new_in(store, WM_I32, 1, 7) &&
-              wm_memory_new_in(store, 1, 1, 16) && wm_store_memory(store, 1) != NULL,
+    check(wm_table_new(store, WM_FUNCREF, 4, 8) && wm_global_new(store, WM_I32, 1, 7) &&
+              wm_memory_new(store, 1, 1, 16) && wm_store_memory(store, 1) != NULL,
           "a table, a global and a second memory made alone in it");
     check(wm_module_instance_count(prog) == 1 && wm_module_instance_count(lib) == 1,
           "each module counts its instance");
@@ -162,13 +162,13 @@ int main(void)
     store = wm_store_new(NULL);
     {
         WmModule* engine = NULL;
-        check(!wm_module_load(&engine, prog_bytes, prog_size) && BYTES(wm_store_bytes(store) == 0),
+        check(!wm_module_load(&engine, NULL, prog_bytes, prog_size) && BYTES(wm_store_bytes(store) == 0),
               "a module of the engine is charged to no store");
         wm_module_free(engine);
     }
-    check(!wm_module_load_in(&own, store, prog_bytes, prog_size) && BYTES(wm_store_bytes(store) > 0),
+    check(!wm_module_load(&own, store, prog_bytes, prog_size) && BYTES(wm_store_bytes(store) > 0),
           "a module loaded for the store is charged to it");
-    rt = wm_runtime_new_in(store, 4096, 16);
+    rt = wm_runtime_new(store, 4096, 16);
     check(rt && !wm_instance_new(&p, store, own, rt, NULL, NULL) && call(rt, p, "bump", 0) == 2,
           "an instance of the store's own module");
     wm_instance_free(p);
@@ -184,7 +184,7 @@ int main(void)
 
     /* A start function that traps: the instance stays in the store, and goes with it. */
     store = wm_store_new(NULL);
-    rt = wm_runtime_new_in(store, 4096, 16);
+    rt = wm_runtime_new(store, 4096, 16);
     check(wm_instance_new(&t, store, trap, rt, NULL, NULL) != NULL && t != NULL &&
               wm_module_instance_count(trap) == 1,
           "a start function that traps: the instance is left in the store");
@@ -196,10 +196,10 @@ int main(void)
     other = wm_store_new(NULL);
     {
         WmModule* shared = NULL;
-        WmRuntime* r1 = wm_runtime_new_in(store, 4096, 16);
-        WmRuntime* r2 = wm_runtime_new_in(other, 4096, 16);
+        WmRuntime* r1 = wm_runtime_new(store, 4096, 16);
+        WmRuntime* r2 = wm_runtime_new(other, 4096, 16);
         WmInstance *a = NULL, *b = NULL;
-        check(!wm_module_load(&shared, prog_bytes, prog_size) && !wm_instance_new(&a, store, shared, r1, NULL, NULL) &&
+        check(!wm_module_load(&shared, NULL, prog_bytes, prog_size) && !wm_instance_new(&a, store, shared, r1, NULL, NULL) &&
                   !wm_instance_new(&b, other, shared, r2, NULL, NULL) && wm_module_instance_count(shared) == 2,
               "one module of the engine, an instance in each of two stores");
         wm_module_on_unused(shared, free_unused, &shared);
@@ -217,10 +217,9 @@ int main(void)
     other = wm_store_new(NULL);
     wm_set_store_growing(growing);
     {
-        WmRuntime* r1 = wm_runtime_new_in(store, 4096, 16);
-        WmRuntime* r2 = wm_runtime_new_in(other, 4096, 16);
-        WmInstance *a = NULL, *b = NULL, *plain = NULL;
-        WmRuntime* loose = wm_runtime_new(4096, 16);
+        WmRuntime* r1 = wm_runtime_new(store, 4096, 16);
+        WmRuntime* r2 = wm_runtime_new(other, 4096, 16);
+        WmInstance *a = NULL, *b = NULL;
         size_t code;
         WmResult refused;
         g_capped = store;
@@ -243,11 +242,6 @@ int main(void)
         check(call(r1, a, "tgrow", 1) == 2 && call(r1, a, "tgrow", 1) == 0xFFFFFFFFu,
               "one element more allowed: the table grows by it, and not again");
         check(call(r2, b, "bump", 0) == 3 && call(r2, b, "grow", 1) == 1, "the other store goes on and grows");
-        g_asked = 0;
-        check(!wm_instantiate(&plain, prog, loose, NULL, NULL) && call(loose, plain, "grow", 1) == 1 && g_asked == 0,
-              "an instance of no store is not asked");
-        wm_instance_free(plain);
-        wm_runtime_free(loose);
         wm_set_store_growing(NULL);
         g_capped = NULL;
         wm_store_free(store);
@@ -260,8 +254,8 @@ int main(void)
     other = wm_store_new(NULL);
     {
         WmMemory* kept;
-        WmMemory* foreign = wm_memory_new_in(other, 1, 4, 16);
-        rt = wm_runtime_new_in(store, 4096, 16);
+        WmMemory* foreign = wm_memory_new(other, 1, 4, 16);
+        rt = wm_runtime_new(store, 4096, 16);
         check(!wm_instance_new(&p, store, prog, rt, NULL, NULL) && !wm_instance_new(&l, store, lib, rt, resolve, memory_of(p)) &&
                   call(rt, p, "bump", 0) == 2 && call(rt, p, "bump", 0) == 3,
               "a program and its library, the program's byte counted to 3");
@@ -270,14 +264,13 @@ int main(void)
         check(kept && wm_store_memory(store, 0) == kept && wm_store_memory(store, 1) == NULL &&
                   wm_module_instance_count(prog) == 0 && wm_module_instance_count(lib) == 0,
               "released: instances and runtime gone, the memory stays the store's");
-        rt = wm_runtime_new_in(store, 4096, 16);
+        rt = wm_runtime_new(store, 4096, 16);
         check(wm_instance_new_with_memory(&p, store, prog, foreign, NULL, NULL) != NULL && p == NULL,
               "another store's memory is refused");
         check(!wm_instance_new_with_memory(&p, store, prog, kept, NULL, NULL) &&
                   !wm_instance_new_with_memory(&l, store, lib, kept, resolve, NULL) && memory_of(p) == kept &&
                   call(rt, l, "peek", 0) == 3 && call(rt, p, "bump", 0) == 4,
               "made again on it, program and library: no data written over it, the count goes on (4)");
-        check(wm_instance_detach_memory(p) == NULL, "an instance of a store owns no memory to detach");
         wm_store_free(store);
         wm_store_free(other);
     }

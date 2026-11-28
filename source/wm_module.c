@@ -1661,12 +1661,7 @@ static WmResult load_module(WmModule** out, const uint8_t* bytes, uint32_t size)
 }
 
 /* Memory of programs before code (decision 3): with no room for a module, predecoded code goes first. */
-WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size)
-{
-    return wm_module_load_in(out, NULL, bytes, size);
-}
-
-WmResult wm_module_load_in(WmModule** out, WmStore* store, const uint8_t* bytes, uint32_t size)
+WmResult wm_module_load(WmModule** out, WmStore* store, const uint8_t* bytes, uint32_t size)
 {
     WmResult result;
 #if WM_STORE_BYTES
@@ -1684,7 +1679,6 @@ WmResult wm_module_load_in(WmModule** out, WmStore* store, const uint8_t* bytes,
     return result;
 }
 
-#if WM_HAS_STORES
 void wm_module_on_unused(WmModule* m, void (*unused)(void* context, WmModule* module), void* context)
 {
     m->unused = unused;
@@ -1698,7 +1692,6 @@ void wm_module_instance_gone(WmModule* m)
     if (m->unused)
         m->unused(m->unused_context, m);
 }
-#endif
 
 void wm_module_free(WmModule* m)
 {

@@ -18,6 +18,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The store this program's objects are made in (decision 25): one for the whole run. */
+static WmStore* test_store(void)
+{
+    static WmStore* store;
+    if (!store)
+        store = wm_store_new(NULL);
+    return store;
+}
+
 #define MAX_INSTANCES 4096
 
 typedef struct Named
@@ -145,12 +154,12 @@ static void make_spectest(void)
     g_print[6] = wm_host_function_new(f64_f64, 2, NULL, 0, print_host, NULL);
     memcpy(&fb, &f, 4);
     memcpy(&db, &d, 8);
-    g_globals[0] = wm_global_new(WM_I32, 0, 666);
-    g_globals[1] = wm_global_new(WM_I64, 0, 666);
-    g_globals[2] = wm_global_new(WM_F32, 0, fb);
-    g_globals[3] = wm_global_new(WM_F64, 0, db);
-    g_table = wm_table_new(WM_FUNCREF, 10, 20);
-    g_memory = wm_memory_new(1, 2);
+    g_globals[0] = wm_global_new(test_store(), WM_I32, 0, 666);
+    g_globals[1] = wm_global_new(test_store(), WM_I64, 0, 666);
+    g_globals[2] = wm_global_new(test_store(), WM_F32, 0, fb);
+    g_globals[3] = wm_global_new(test_store(), WM_F64, 0, db);
+    g_table = wm_table_new(test_store(), WM_FUNCREF, 10, 20);
+    g_memory = wm_memory_new(test_store(), 1, 2, 16);
 }
 
 static int text_is(const char* s, uint32_t length, const char* text)
@@ -303,7 +312,7 @@ static void command(char* line)
             printf("error cannot read %s\n", words[1]);
             return;
         }
-        result = wm_module_load(&module, bytes, size);
+        result = wm_module_load(&module, NULL, bytes, size);
         if (result || words[0][0] == 'c')
         {
             printf(result ? "error %s\n" : "ok\n", result);
@@ -317,7 +326,7 @@ static void command(char* line)
         map_image(module, g_module_count);
 #endif
         g_bytes[g_module_count++] = bytes;
-        result = wm_instantiate(&instance, module, g_runtime, resolve, NULL);
+        result = wm_instance_new(&instance, test_store(), module, g_runtime, resolve, NULL);
         if (result)
         {
             printf("error %s\n", result);
@@ -526,7 +535,7 @@ int main(void)
     if (WM_SPEC_IMAGE == 2)
         wm_code_cache_limit(1);
 #endif
-    g_runtime = wm_runtime_new(64u * 1024u, 1000u);
+    g_runtime = wm_runtime_new(test_store(), 64u * 1024u, 1000u);
 #ifdef WM_SPEC_IN_PLACE
     if (WM_SPEC_IN_PLACE == 1)
         wm_set_makes_code(g_runtime, 0);

@@ -4,7 +4,7 @@
  * memory kept apart from the program, both instances freed, then both built
  * again on that memory. Nothing is written over what the program left: the
  * library's data stays as it was changed, and the program's too. The memory
- * is bound to the library's import and stays the caller's.
+ * is bound to the library's import and stays the store's.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,34 +47,36 @@ int main(void)
     uint8_t* big_bytes = load("test/kept_big.wasm", &big_size);
     WmModule *prog = NULL, *lib = NULL, *big = NULL;
     WmInstance *p = NULL, *l = NULL, *b = NULL;
-    WmRuntime* rt = wm_runtime_new(16 * 1024, 64);
+    WmRuntime* rt = wm_runtime_new(test_store(), 16 * 1024, 64);
     WmMemory* kept;
     WmExtern e;
 
-    check(!wm_module_load(&prog, prog_bytes, prog_size) && !wm_module_load(&lib, lib_bytes, lib_size) &&
-              !wm_module_load(&big, big_bytes, big_size),
+    check(!wm_module_load(&prog, NULL, prog_bytes, prog_size) && !wm_module_load(&lib, NULL, lib_bytes, lib_size) &&
+              !wm_module_load(&big, NULL, big_bytes, big_size),
           "a program that defines a memory, libraries that import it");
-    check(!wm_instantiate(&p, prog, rt, NULL, NULL) && !wm_instance_export(p, "memory", 6, &e) &&
-              (g_memory = e.as.memory) != NULL && !wm_instantiate(&l, lib, rt, resolve, NULL) && g_asked == 1,
+    check(!wm_instance_new(&p, test_store(), prog, rt, NULL, NULL) && !wm_instance_export(p, "memory", 6, &e) &&
+              (g_memory = e.as.memory) != NULL && !wm_instance_new(&l, test_store(), lib, rt, resolve, NULL) && g_asked == 1,
           "both instantiated, the library on the program's memory");
     check(call(rt, l, "bump") == 'M' && call(rt, l, "bump") == 'N', "the library's data changed: L, then M, then N");
 
-    kept = wm_instance_detach_memory(p);
-    check(kept == g_memory && wm_instance_detach_memory(l) == NULL, "the memory kept apart from the program; the library owns none");
+    kept = g_memory;
     wm_instance_free(l);
     wm_instance_free(p);
     l = p = NULL;
+    check(wm_store_memory(test_store(), 0) == kept && wm_store_memory(test_store(), 1) == NULL,
+          "both instances gone, the memory stays in their store: the one the program made");
     g_asked = 0;
     g_memory = NULL;
 
-    check(!wm_instantiate_with_memory(&p, prog, kept, NULL, NULL) && wm_instance_memory(p) == kept,
+    check(!wm_instance_new_with_memory(&p, test_store(), prog, kept, NULL, NULL) && wm_instance_memory(p) == kept,
           "the program built again takes the kept memory, as before");
-    check(!wm_instantiate_with_memory(&l, lib, kept, resolve, NULL) && wm_instance_memory(l) == kept && g_asked == 0,
+    check(!wm_instance_new_with_memory(&l, test_store(), lib, kept, resolve, NULL) && wm_instance_memory(l) == kept &&
+              g_asked == 0,
           "the library built again on it: bound to its import, the resolver not asked");
     check(call(rt, l, "bump") == 'O' && call(rt, p, "first") == 'p',
           "nothing written over: the library's data goes on from N, the program's is there");
-    check(wm_instance_detach_memory(l) == NULL, "the library still owns no memory");
-    check(wm_instantiate_with_memory(&b, big, kept, resolve, NULL) != NULL && g_asked == 0,
+    check(wm_store_memory(test_store(), 1) == NULL, "still one memory in the store");
+    check(wm_instance_new_with_memory(&b, test_store(), big, kept, resolve, NULL) != NULL && g_asked == 0,
           "a library whose import wants more pages than the kept memory has is refused");
     wm_instance_free(b);
 

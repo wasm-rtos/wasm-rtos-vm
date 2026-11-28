@@ -79,15 +79,15 @@ int main(void)
     FILE* file = fopen("test/wasi.wasm", "rb");
     static uint8_t bytes[4096];
     size_t size = fread(bytes, 1, sizeof(bytes), file);
-    WmRuntime* rt = wm_runtime_new(64 * 1024, 1000);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64 * 1024, 1000);
     WmInstance* instance = NULL;
     uint32_t r32 = 0, arg = 1;
     uint64_t r64 = 0;
     WmResult r;
     fclose(file);
 
-    check(!wm_module_load(&g_module, bytes, (uint32_t)size), "loads");
-    r = wm_instantiate(&instance, g_module, rt, resolve, NULL);
+    check(!wm_module_load(&g_module, NULL, bytes, (uint32_t)size), "loads");
+    r = wm_instance_new(&instance, test_store(), g_module, rt, resolve, NULL);
     check(!r, r ? r : "links, absent calls too");
     if (r)
         return 1;

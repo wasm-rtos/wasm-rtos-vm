@@ -1,8 +1,6 @@
 /* Stores (decision 25): the owner of what a process makes. */
 #include "wm_internal.h"
 
-#if WM_HAS_STORES
-
 WmStore* wm_store_new(void* host)
 {
     /* The store itself is charged to none: it outlives what is charged to it. */
@@ -128,5 +126,4 @@ void* wm_store_allocate(WmStore* store, void* ptr, size_t size)
     (void)store;
     return wm_allocate(ptr, size);
 }
-#endif
 #endif

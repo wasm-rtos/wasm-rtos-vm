@@ -581,17 +581,12 @@ static int grow_frames(WmMemory* memory, uint32_t frame_count)
 
 /* ---- Memories ---- */
 
-WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages) { return wm_memory_new_paged(pages, max_pages, 16); }
-
-WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_log2)
-{
-    return wm_memory_new_in(NULL, pages, max_pages, page_log2);
-}
-
-WmMemory* wm_memory_new_in(WmStore* store, uint32_t pages, uint32_t max_pages, uint8_t page_log2)
+WmMemory* wm_memory_new(WmStore* store, uint32_t pages, uint32_t max_pages, uint8_t page_log2)
 {
     wm_size size = (wm_size)pages << page_log2;
     WmMemory* mem;
+    if (!store)
+        return NULL;
     /* The store's host says how much its programs may have (decision 25). */
     if (!wm_store_may_grow(store, WM_EXTERN_MEMORY, (size_t)size))
         return NULL;

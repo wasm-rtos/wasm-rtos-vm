@@ -82,10 +82,10 @@ static uint32_t import_index(const WmModule* m, const char* name)
 static int build(Host* h, WmModule* lib, WmModule* prog, int link)
 {
     memset(h, 0, sizeof(*h));
-    h->mem = wm_memory_new(1, 1);
-    h->acc = wm_global_new(WM_I32, 1, 0);
+    h->mem = wm_memory_new(test_store(), 1, 1, 16);
+    h->acc = wm_global_new(test_store(), WM_I32, 1, 0);
     h->nine = wm_host_function_new(NULL, 0, (const uint8_t[]){WM_I32}, 1, host_nine, NULL);
-    if (wm_instantiate(&h->lib, lib, NULL, resolve, h) || wm_instantiate(&h->prog, prog, NULL, resolve, h))
+    if (wm_instance_new(&h->lib, test_store(), lib, NULL, resolve, h) || wm_instance_new(&h->prog, test_store(), prog, NULL, resolve, h))
         return 0;
     return !link || (!wm_instance_link_function(h->prog, import_index(prog, "work"), export_func(h->lib, "work")) &&
                      !wm_instance_link_function(h->lib, import_index(lib, "tick"), export_func(h->prog, "tick")));
@@ -116,12 +116,12 @@ int main(void)
     uint8_t* lib_bytes = load("test/group_lib.wasm", &lib_size);
     uint8_t* prog_bytes = load("test/group_prog.wasm", &prog_size);
     WmModule *lib = NULL, *prog = NULL, *other = NULL;
-    WmRuntime* rt = wm_runtime_new(64 * 1024, 100);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64 * 1024, 100);
     Host h;
     int ok = 1;
     char what[96];
 
-    check(!wm_module_load(&lib, lib_bytes, lib_size) && !wm_module_load(&prog, prog_bytes, prog_size),
+    check(!wm_module_load(&lib, NULL, lib_bytes, lib_size) && !wm_module_load(&prog, NULL, prog_bytes, prog_size),
           "a library and a program");
     check(build(&h, lib, prog, 1) && !wm_call(rt, export_func(h.prog, "run"), (uint32_t[]){N}, &result) &&
               result == WHOLE,
@@ -130,7 +130,7 @@ int main(void)
 
     for (uint32_t k = 0; k < sizeof(fuels) / sizeof(fuels[0]); ++k)
     {
-        WmRuntime* again = wm_runtime_new(64 * 1024, 100);
+        WmRuntime* again = wm_runtime_new(test_store(), 64 * 1024, 100);
         WmResult r;
         g_length = g_at = 0;
         ok = build(&h, lib, prog, 1);
@@ -163,7 +163,7 @@ int main(void)
     /* The library with one byte more (a custom section at its end): another module, another hash. */
     lib_bytes[lib_size] = 0, lib_bytes[lib_size + 1] = 1, lib_bytes[lib_size + 2] = 0;
     g_at = 0;
-    check(!wm_module_load(&other, lib_bytes, lib_size + 3) && build(&h, other, prog, 1) &&
+    check(!wm_module_load(&other, NULL, lib_bytes, lib_size + 3) && build(&h, other, prog, 1) &&
               wm_snapshot_read(rt, h.prog, get, NULL) == wm_snapshot_invalid,
           "a library that is not the one saved: refused");
     unbuild(&h);
