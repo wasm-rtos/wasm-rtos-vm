@@ -59,7 +59,7 @@ int main(void)
     uint8_t byte = 0;
     uint32_t first = 0;
     wm_set_pager(&pager);
-    memory = wm_memory_new(1, 4);
+    memory = wm_memory_new(test_store(), 1, 4, 16);
     check(memory != NULL && wm_memory_frames(memory) > 1, "a paged memory");
     if (!memory)
         return 1;

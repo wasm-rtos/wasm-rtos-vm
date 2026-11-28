@@ -47,11 +47,11 @@ static WmInstance* stopped(WmRuntime* rt, uint32_t fuel)
     WmInstance* inst;
     WmExtern run;
     uint32_t arg = DEPTH, result;
-    if (wm_instantiate(&inst, g_module, rt, NULL, NULL))
+    if (wm_instance_new(&inst, test_store(), g_module, rt, NULL, NULL))
         return NULL;
     if (wm_instance_export(inst, "run", 3, &run))
     {
-        wm_instance_free(inst);
+        fuzz_instance_free(inst);
         return NULL;
     }
     wm_set_fuel(rt, fuel);
@@ -64,12 +64,12 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
     const char* seeds = getenv("FUZZ_SEEDS");
     (void)argc, (void)argv;
     fuzz_init();
-    if (wm_module_load(&g_module, test_fuzz_snapshot_wasm, test_fuzz_snapshot_wasm_len))
+    if (wm_module_load(&g_module, NULL, test_fuzz_snapshot_wasm, test_fuzz_snapshot_wasm_len))
         abort();
     for (uint32_t fuel = 50; seeds && fuel <= 3200; fuel *= 2u)
     {
         char path[512];
-        WmRuntime* rt = wm_runtime_new(64u * 1024u, 1000u);
+        WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 1000u);
         WmInstance* inst = rt ? stopped(rt, fuel) : NULL;
         Buffer b = {NULL, 0, 0, NULL};
         snprintf(path, sizeof(path), "%s/stopped-%u", seeds, fuel);
@@ -80,7 +80,7 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
             fclose(b.out);
         }
         if (inst)
-            wm_instance_free(inst);
+            fuzz_instance_free(inst);
         if (rt)
             wm_runtime_free(rt);
     }
@@ -90,8 +90,8 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
     /* The instance stopped on one runtime; the snapshot read into a fresh one, as hosts do. */
-    WmRuntime* first = wm_runtime_new(64u * 1024u, 1000u);
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 1000u);
+    WmRuntime* first = wm_runtime_new(test_store(), 64u * 1024u, 1000u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 1000u);
     WmInstance* inst = first && rt ? stopped(first, 300) : NULL;
     Buffer b = {data, size, 0, NULL};
     uint32_t result;
@@ -101,7 +101,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         (void)wm_resume(rt, &result);
     }
     if (inst)
-        wm_instance_free(inst);
+        fuzz_instance_free(inst);
     if (rt)
         wm_runtime_free(rt);
     if (first)

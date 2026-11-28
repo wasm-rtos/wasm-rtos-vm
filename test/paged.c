@@ -48,9 +48,9 @@ int main(int argc, char** argv)
     if (f)
         fclose(f);
     wm_set_allocator(limited);
-    rt = wm_runtime_new(16384, 64);
-    check(size && !wm_module_load(&module, bytes, size), "load the module");
-    check(module && !wm_instantiate(&inst, module, rt, NULL, NULL), "instantiate with one page in one block");
+    rt = wm_runtime_new(test_store(), 16384, 64);
+    check(size && !wm_module_load(&module, NULL, bytes, size), "load the module");
+    check(module && !wm_instance_new(&inst, test_store(), module, rt, NULL, NULL), "instantiate with one page in one block");
     if (!inst)
         return 1;
     check(wm_memory_data(wm_instance_memory(inst), NULL) != NULL, "the memory starts in one block");
@@ -70,7 +70,7 @@ int main(int argc, char** argv)
         /* The same sums, in a memory that never was paged. */
         WmInstance* other = NULL;
         g_block_limit = (size_t)-1;
-        if (!wm_instantiate(&other, module, rt, NULL, NULL))
+        if (!wm_instance_new(&other, test_store(), module, rt, NULL, NULL))
         {
             call1(rt, other, "grow", 3, 0, 0);
             call1(rt, other, "fill", 4, 0, 0);

@@ -119,10 +119,11 @@ int main(void)
     WmInstance* inst = NULL;
     WmRuntime* rt;
 
+    (void)test_store(); /* made before the count starts: it lasts the whole test */
     wm_set_allocator(counted);
     size = make_module(bytes);
-    rt = wm_runtime_new(16u * 1024u, 64u);
-    check(!wm_module_load(&module, bytes, size) && !wm_instantiate(&inst, module, rt, NULL, NULL), "instantiate");
+    rt = wm_runtime_new(test_store(), 16u * 1024u, 64u);
+    check(!wm_module_load(&module, NULL, bytes, size) && !wm_instance_new(&inst, test_store(), module, rt, NULL, NULL), "instantiate");
     if (!inst)
         return 1;
     if (wm_module_predecoded(module))
@@ -153,7 +154,7 @@ int main(void)
     check(wm_code_cache_bytes() >= 40000u, "padded kept its own records while it ran");
     g_limit = (size_t)-1;
 
-    wm_instance_free(inst);
+    test_instance_free(inst);
     wm_module_free(module);
     wm_runtime_free(rt);
     check(g_used == 0, "everything given back");

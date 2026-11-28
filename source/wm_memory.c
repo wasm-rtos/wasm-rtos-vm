@@ -219,10 +219,10 @@ static int frame_in_block(const WmMemory* memory, uint32_t index)
  * predecoded code goes first, one function's records at a time: it is
  * made again when called, while a program's memory cannot be refused.
  */
-static void* frames_calloc(size_t count, size_t size)
+static void* frames_calloc(WmStore* store, size_t count, size_t size)
 {
     void* p;
-    while (!(p = wm_calloc(count, size)) && wm_code_drop_one())
+    while (!(p = wm_store_calloc(store, count, size)) && wm_code_drop_one())
         ;
     return p;
 }
@@ -310,14 +310,14 @@ static uint8_t* new_frame(WmMemory* memory, uint32_t index)
     const WmPager* pager = memory->pager;
     uint8_t* frame;
     if (!pager)
-        return (uint8_t*)frames_calloc(WM_FRAME, 1);
+        return (uint8_t*)frames_calloc(memory->store, WM_FRAME, 1);
     if (!ring_room() || (pager->room && !pager->room(pager->context, 0)))
         return NULL;
     /*
      * The pager's choice first (a frame to storage); without a pool the code
      * cache when it has none (records are in the heap, not in the pool).
      */
-    while (!(frame = g_pool ? pool_take(memory, index) : (uint8_t*)wm_calloc(WM_FRAME, 1)))
+    while (!(frame = g_pool ? pool_take(memory, index) : (uint8_t*)wm_store_calloc(memory->store, WM_FRAME, 1)))
         if (!(pager->room && pager->room(pager->context, 1)) && (g_pool || !wm_code_drop_one()))
             return NULL;
     ++g_resident;
@@ -437,14 +437,14 @@ static int make_paged(WmMemory* memory, uint32_t frame_count)
 {
     wm_size size = WM_MEMORY_SIZE(memory);
     uint32_t whole = (uint32_t)(size >> WM_FRAME_LOG2);
-    uint8_t** frames = (uint8_t**)frames_calloc(frame_count + 1u, sizeof(uint8_t*));
+    uint8_t** frames = (uint8_t**)frames_calloc(memory->store, frame_count + 1u, sizeof(uint8_t*));
     if (!frames)
         return 0;
     for (uint32_t i = 0; i < whole; ++i)
         frames[i] = memory->data + ((wm_size)i << WM_FRAME_LOG2);
     if (size & (WM_FRAME - 1u))
     {
-        frames[whole] = (uint8_t*)frames_calloc(WM_FRAME, 1);
+        frames[whole] = (uint8_t*)frames_calloc(memory->store, WM_FRAME, 1);
         if (!frames[whole])
         {
             wm_free(frames);
@@ -467,9 +467,9 @@ static int take_pager(WmMemory* memory)
     uint32_t reserved = memory->frame_count - memory->block_frames;
     if (!g_pager)
         return 1;
-    memory->marks = (uint16_t*)frames_calloc(memory->frame_count + 1u, sizeof(uint16_t));
-    memory->slots = (uint32_t*)frames_calloc((size_t)memory->frame_count + 1u, sizeof(uint32_t));
-    memory->ring_place = (uint32_t*)frames_calloc((size_t)memory->frame_count + 1u, sizeof(uint32_t));
+    memory->marks = (uint16_t*)frames_calloc(memory->store, memory->frame_count + 1u, sizeof(uint16_t));
+    memory->slots = (uint32_t*)frames_calloc(memory->store, (size_t)memory->frame_count + 1u, sizeof(uint32_t));
+    memory->ring_place = (uint32_t*)frames_calloc(memory->store, (size_t)memory->frame_count + 1u, sizeof(uint32_t));
     if (!memory->marks || !memory->slots || !memory->ring_place || !g_pager->reserve(g_pager->context, (int32_t)reserved))
     {
         wm_free(memory->marks);
@@ -524,7 +524,7 @@ static int make_frames(WmMemory* memory, uint32_t first, uint32_t count)
 {
     for (uint32_t i = first; i < count; ++i)
     {
-        memory->frames[i] = (uint8_t*)frames_calloc(WM_FRAME, 1);
+        memory->frames[i] = (uint8_t*)frames_calloc(memory->store, WM_FRAME, 1);
         if (!memory->frames[i])
         {
             while (i-- > first)
@@ -581,26 +581,31 @@ static int grow_frames(WmMemory* memory, uint32_t frame_count)
 
 /* ---- Memories ---- */
 
-WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages) { return wm_memory_new_paged(pages, max_pages, 16); }
-
-WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_log2)
+WmMemory* wm_memory_new(WmStore* store, uint32_t pages, uint32_t max_pages, uint8_t page_log2)
 {
-    WmMemory* mem = (WmMemory*)wm_calloc(1, sizeof(WmMemory));
     wm_size size = (wm_size)pages << page_log2;
-    if (!mem)
+    WmMemory* mem;
+    if (!store)
         return NULL;
+    /* The store's host says how much its programs may have (decision 25). */
+    if (!wm_store_may_grow(store, WM_EXTERN_MEMORY, (size_t)size))
+        return NULL;
+    if (!(mem = (WmMemory*)wm_store_calloc(store, 1, sizeof(WmMemory))))
+        return NULL;
+    /* Its pieces are charged to the store from the first (the store joins the list once it is made). */
+    mem->store = store;
     mem->pages = pages;
     mem->max_pages = max_pages;
     mem->page_log2 = page_log2;
 #if WM_HAS_MMU
     /* Without a pager: one block from the heap, if it has one. */
     if (!WM_MEMORY_ALWAYS_PAGED && !g_pager)
-        mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
+        mem->data = (uint8_t*)wm_store_calloc(store, (size_t)size + 1u, 1);
     if (!mem->data)
     {
         /* No block that large: paged, the frames made now, or reserved and made when touched. */
         uint32_t count = frames_for(size);
-        mem->frames = (uint8_t**)frames_calloc(count + 1u, sizeof(uint8_t*));
+        mem->frames = (uint8_t**)frames_calloc(store, count + 1u, sizeof(uint8_t*));
         mem->frame_count = count;
         if (!mem->frames || !(g_pager ? take_pager(mem) : make_frames(mem, 0, count)))
         {
@@ -614,13 +619,15 @@ WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_l
             (void)wm_memory_block_in(mem);
     }
 #else
-    mem->data = (uint8_t*)wm_calloc((size_t)size + 1u, 1);
+    mem->data = (uint8_t*)wm_store_calloc(store, (size_t)size + 1u, 1);
     if (!mem->data)
     {
         wm_free(mem);
         return NULL;
     }
 #endif
+    mem->store = NULL;
+    wm_store_link_memories(store, mem);
     return mem;
 }
 
@@ -628,6 +635,7 @@ void wm_memory_free(WmMemory* mem)
 {
     if (!mem)
         return;
+    wm_store_unlink_memories(mem);
 #if WM_HAS_MMU
     space_release(mem);
     if (is_pager_block(mem))
@@ -684,6 +692,9 @@ uint32_t wm_memory_grow(WmMemory* mem, uint32_t delta)
         return WM_NONE;
     if (delta == 0)
         return old;
+    /* The store's host says how much its programs may have (decision 25). */
+    if (!wm_store_may_grow(mem->store, WM_EXTERN_MEMORY, (size_t)((wm_size)delta << mem->page_log2)))
+        return WM_NONE;
     WM_MEMORY_CHANGES(mem);
 #if WM_HAS_MMU
     if (mem->data && in_pool(mem->data))
@@ -1008,7 +1019,7 @@ uint32_t wm_memory_block_frames(const WmMemory* memory) { return is_pager_block(
 static WmResult heap_block_in(WmMemory* memory)
 {
     uint8_t* data;
-    if (!(data = (uint8_t*)wm_calloc(((size_t)memory->frame_count << WM_FRAME_LOG2) + 1u, 1)))
+    if (!(data = (uint8_t*)wm_store_calloc(memory->store, ((size_t)memory->frame_count << WM_FRAME_LOG2) + 1u, 1)))
         return E_MEMORY;
     /* Every frame into the block first: until all are, the frames stay the memory. */
     for (uint32_t i = 0; i < memory->frame_count; ++i)

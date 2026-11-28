@@ -600,6 +600,9 @@ static uint32_t grow_table(WmTable* t, uint32_t delta, uintptr_t init)
     uintptr_t* elems;
     if (delta > 10000000u || size > 10000000u || (t->max != WM_NONE && size > t->max))
         return WM_NONE;
+    /* The store's host says how much its programs may have (decision 25). */
+    if (!wm_store_may_grow(t->store, WM_EXTERN_TABLE, (size_t)delta * sizeof(uintptr_t)))
+        return WM_NONE;
     elems = (uintptr_t*)wm_realloc(t->elems, ((size_t)size + 1u) * sizeof(uintptr_t));
     if (!elems)
         return WM_NONE;

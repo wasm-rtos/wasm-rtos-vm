@@ -69,7 +69,7 @@ static WmResult run_sliced(WmRuntime** rt, WmFunc* f, uint32_t arg, uint32_t* re
         if ((r = wm_snapshot_write(*rt, g_inst, put, NULL)))
             return r;
         wm_runtime_free(*rt);
-        *rt = wm_runtime_new(64u * 1024u, 100u);
+        *rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
         wm_code_cache_trim(0);
         if ((r = wm_snapshot_read(*rt, g_inst, get, NULL)))
             return r;
@@ -88,13 +88,13 @@ int main(int argc, char** argv)
     FILE* f = fopen(argc > 1 ? argv[1] : "test/code.wasm", "rb");
     uint32_t size = f ? (uint32_t)fread(bytes, 1, sizeof(bytes), f) : 0;
     WmModule* module = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     uint32_t result = 0, arg;
     if (f)
         fclose(f);
     g_back = wm_host_function_new(i32, 1, i32, 1, host_back, NULL);
 
-    check(size && !wm_module_load(&module, bytes, size) && !wm_instantiate(&g_inst, module, rt, resolve, NULL),
+    check(size && !wm_module_load(&module, NULL, bytes, size) && !wm_instance_new(&g_inst, test_store(), module, rt, resolve, NULL),
           "instantiate");
     if (!g_inst)
         return 1;

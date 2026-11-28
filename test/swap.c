@@ -262,7 +262,7 @@ int main(int argc, char** argv)
     WmModule* module = NULL;
     WmInstance* inst = NULL;
     WmInstance* other = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     WmMemory* memory;
     uint32_t sum, value = 0;
     uint8_t* p = NULL;
@@ -270,8 +270,8 @@ int main(int argc, char** argv)
         fclose(f);
 
     wm_set_pager(&g_pager);
-    check(size && !wm_module_load(&module, bytes, size), "load the module");
-    check(module && !wm_instantiate(&inst, module, rt, NULL, NULL), "instantiate");
+    check(size && !wm_module_load(&module, NULL, bytes, size), "load the module");
+    check(module && !wm_instance_new(&inst, test_store(), module, rt, NULL, NULL), "instantiate");
     if (!inst)
         return 1;
     memory = wm_instance_memory(inst);
@@ -313,7 +313,7 @@ int main(int argc, char** argv)
     }
 
     /* A second memory shares the same RAM. */
-    check(!wm_instantiate(&other, module, rt, NULL, NULL), "instantiate a second memory");
+    check(!wm_instance_new(&other, test_store(), module, rt, NULL, NULL), "instantiate a second memory");
     call1(rt, other, "fill", 1, 0, 0);
     check(call1(rt, inst, "sum", 4, 0, 0) == sum, "the first memory's contents survive the second one's use");
     check(wm_pager_resident() <= BUDGET, "both memories together keep to the budget");
@@ -424,7 +424,7 @@ int main(int argc, char** argv)
         uint32_t count = spaces + 4u;
         WmInstance** many = (WmInstance**)calloc(count, sizeof(WmInstance*));
         uint32_t made = 0, right = 0;
-        for (; many && made < count && !wm_instantiate(&many[made], module, rt, NULL, NULL); ++made)
+        for (; many && made < count && !wm_instance_new(&many[made], test_store(), module, rt, NULL, NULL); ++made)
             ;
         for (uint32_t i = 0; i < made; ++i)
         {
@@ -433,13 +433,13 @@ int main(int argc, char** argv)
         }
         check(made == count && right == count, "more memories than address space numbers all work, page 0 too");
         for (uint32_t i = 0; i < made; ++i)
-            wm_instance_free(many[i]);
+            test_instance_free(many[i]);
         free(many);
     }
 
     /* Freeing a memory lets its RAM, slots and reservation go. */
-    wm_instance_free(other);
-    wm_instance_free(inst);
+    test_instance_free(other);
+    test_instance_free(inst);
     check(g_reserved == 0 && wm_pager_resident() == 0 && slots_used() == 0 && !wm_memory_next(NULL),
           "freed memories leave no frames, slots or reservations");
     printf("  %lu frames taken out, %lu written, %lu brought back\n", g_taken, g_written, g_back);

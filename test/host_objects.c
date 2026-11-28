@@ -9,8 +9,8 @@
 
 int main(void)
 {
-    WmGlobal* global = wm_global_new(WM_I32, 1, 42u);
-    WmTable* table = wm_table_new(WM_FUNCREF, 2u, 4u);
+    WmGlobal* global = wm_global_new(test_store(), WM_I32, 1, 42u);
+    WmTable* table = wm_table_new(test_store(), WM_FUNCREF, 2u, 4u);
 
     check(global != NULL && wm_global_type(global) == WM_I32 && wm_global_get(global) == 42u,
           "a mutable i32 global holds what it was made with");

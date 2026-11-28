@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Stores** (decision 25), as wasm-c-api's, and one model of ownership:
+  every instance, memory, table, global and runtime is made in a store
+  (`wm_store_new`), the store first: `wm_instance_new(&i, store, ...)`,
+  `wm_memory_new(store, ...)`, `wm_table_new(store, ...)`,
+  `wm_global_new(store, ...)`, `wm_runtime_new(store, ...)`,
+  `wm_module_load(&m, store, ...)` (NULL: the engine's, shared), and goes
+  with it (`wm_store_free`) in any order, or alone. **Gone before 1.0 is
+  tagged**: `wm_instantiate`, `wm_instantiate_with_memory`,
+  `wm_instance_detach_memory`, `wm_memory_new_paged`, and the functions
+  above without a store. The host is asked before a store's memory or table is made or
+  grows (`wm_set_store_growing`) and decides how much a program may have;
+  with `WM_STORE_BYTES=1` a store counts every byte (`wm_store_bytes`).
+  `wm_store_release` keeps only its memories,
+  for instances made again on them (`wm_instance_new_with_memory`). A
+  module of the engine counts its instances and tells its owner of the
+  last (`wm_module_on_unused`). The functions of 1.0 are unchanged.
 - **A kept memory the module imports** (decision 24):
   `wm_instantiate_with_memory` binds a memory kept apart to a module's
   memory import too (the resolver is not asked for it; it stays the

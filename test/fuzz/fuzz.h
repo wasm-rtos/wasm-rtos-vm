@@ -87,6 +87,8 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
 typedef struct FuzzImports
 {
     WmModule* module;
+    /* Where the instance and its imports are made: freed with them, one store a run. */
+    WmStore* store;
     WmExtern made[FUZZ_MADE];
     uint32_t count;
 } FuzzImports;
@@ -117,17 +119,17 @@ static inline WmResult fuzz_resolve(void* context, const char* module, uint32_t 
     {
         const WmLimits* l = &m->memory;
         uint32_t max = l->has_max ? l->max : l->min;
-        out->as.memory = l->page_log2 == 16 ? wm_memory_new(l->min, max) : wm_memory_new_paged(l->min, max, l->page_log2);
+        out->as.memory = l->page_log2 == 16 ? wm_memory_new(imports->store, l->min, max, 16) : wm_memory_new(imports->store, l->min, max, l->page_log2);
     }
     else if (kind == WM_EXTERN_TABLE)
     {
         const WmTableType* t = &m->tables[import->index];
-        out->as.table = wm_table_new(t->type, t->limits.min, t->limits.has_max ? t->limits.max : t->limits.min);
+        out->as.table = wm_table_new(imports->store, t->type, t->limits.min, t->limits.has_max ? t->limits.max : t->limits.min);
     }
     else
     {
         const WmGlobalType* g = &m->globals[import->index];
-        out->as.global = wm_global_new(g->type, g->mutable_, 0);
+        out->as.global = wm_global_new(imports->store, g->type, g->mutable_, 0);
     }
     if (!out->as.memory)
         return "fuzz: no memory for an import";
@@ -135,19 +137,30 @@ static inline WmResult fuzz_resolve(void* context, const char* module, uint32_t 
     return NULL;
 }
 
+/* The instance and everything made for it, in its store. */
 static inline void fuzz_imports_free(FuzzImports* imports)
 {
-    for (uint32_t i = 0; i < imports->count; ++i)
-    {
-        WmExtern* e = &imports->made[i];
-        if (e->kind == WM_EXTERN_MEMORY)
-            wm_memory_free(e->as.memory);
-        else if (e->kind == WM_EXTERN_TABLE)
-            wm_table_free(e->as.table);
-        else
-            wm_global_free(e->as.global);
-    }
+    wm_store_free(imports->store);
+    imports->store = NULL;
     imports->count = 0;
+}
+
+/* The store a fuzzer's runtimes are made in: one for the whole run (they are freed one by one). */
+static inline WmStore* test_store(void)
+{
+    static WmStore* store;
+    if (!store)
+        store = wm_store_new(NULL);
+    return store;
+}
+
+/* An instance of test_store() and the memory it made there: an instance's memory is its store's. */
+static inline void fuzz_instance_free(WmInstance* inst)
+{
+    WmMemory* memory;
+    wm_instance_free(inst);
+    while ((memory = wm_store_memory(test_store(), 0)) != NULL)
+        wm_memory_free(memory);
 }
 
 /* A function import nothing was linked to: returns zeros. */
@@ -176,10 +189,13 @@ static inline WmResult fuzz_instantiate(const uint8_t* data, size_t size, int in
     WmResult r;
     imports->count = 0;
     imports->module = NULL;
+    imports->store = NULL;
     *out = NULL;
     if (size > 0xFFFFFFFFu)
         return "fuzz: too large";
-    if ((r = wm_module_load(&imports->module, data, (uint32_t)size)))
+    if (!(imports->store = wm_store_new(NULL)))
+        return "fuzz: no store";
+    if ((r = wm_module_load(&imports->module, NULL, data, (uint32_t)size)))
         return r;
     /* The module runs in place: it is never predecoded. */
     if (in_place)
@@ -187,11 +203,9 @@ static inline WmResult fuzz_instantiate(const uint8_t* data, size_t size, int in
         imports->module->predecode_tried = 1;
         imports->module->predecode_result = "fuzz: in place";
     }
-    if ((r = wm_instantiate(out, imports->module, NULL, fuzz_resolve, imports)))
+    if ((r = wm_instance_new(out, imports->store, imports->module, NULL, fuzz_resolve, imports)))
     {
-        /* A segment out of bounds leaves the instance (wm.h): its imports are ours, freed with it. */
-        if (*out)
-            wm_instance_free(*out);
+        /* A segment out of bounds leaves the instance in the store (wm.h): it goes with its imports. */
         *out = NULL;
         fuzz_imports_free(imports);
         wm_module_free(imports->module);
@@ -204,8 +218,7 @@ static inline WmResult fuzz_instantiate(const uint8_t* data, size_t size, int in
 
 static inline void fuzz_free(WmInstance* inst, FuzzImports* imports)
 {
-    if (inst)
-        wm_instance_free(inst);
+    (void)inst;
     fuzz_imports_free(imports);
     if (imports->module)
         wm_module_free(imports->module);

@@ -52,7 +52,7 @@ static const WmPager g_pager = {NULL, reserve, room, write_frame, read_frame, dr
 /* A memory of so many frames, its byte pages the size of a frame. */
 static WmMemory* frames_memory(uint32_t frames)
 {
-    return wm_memory_new_paged(frames * wm_frame_size(), 0xFFFFFFFFu, 0);
+    return wm_memory_new(test_store(), frames * wm_frame_size(), 0xFFFFFFFFu, 0);
 }
 
 /* Frame i of memory m filled with its mark: tag, then i. */
@@ -156,9 +156,9 @@ int main(int argc, char** argv)
     if (f)
         fclose(f);
     g_between = wm_host_function_new(NULL, 0, NULL, 0, between, NULL);
-    rt = wm_runtime_new(16u * 1024u, 64u);
+    rt = wm_runtime_new(test_store(), 16u * 1024u, 64u);
     g_allow_blocks = 0;
-    check(size && !wm_module_load(&module, bytes, size) && !wm_instantiate(&inst, module, rt, resolve, NULL),
+    check(size && !wm_module_load(&module, NULL, bytes, size) && !wm_instance_new(&inst, test_store(), module, rt, resolve, NULL),
           "instantiate the program, its memory paged");
     g_program_memory = wm_instance_memory(inst);
     g_other = frames_memory(8);
@@ -207,7 +207,7 @@ int main(int argc, char** argv)
     }
     check(r == NULL && result == whole && slices > 0, "and the sum ends as it would have");
     wm_disable_fuel(rt);
-    wm_instance_free(inst);
+    test_instance_free(inst);
     wm_module_free(module);
 
     /* 5. A block of the pool grows in place, or goes out and grows paged; freed, the pool is whole. */

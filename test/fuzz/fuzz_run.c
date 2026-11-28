@@ -14,7 +14,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     fuzz_init();
     if (fuzz_instantiate(data, size, 0, &imports, &inst))
         return 0;
-    rt = wm_runtime_new(64u * 1024u, 1000u);
+    rt = wm_runtime_new(test_store(), 64u * 1024u, 1000u);
     if (!rt)
     {
         fuzz_free(inst, &imports);
@@ -31,7 +31,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         if (!f || f->param_slots > FUZZ_RESULT_SLOTS || f->result_slots > FUZZ_RESULT_SLOTS)
             continue;
         wm_runtime_free(rt);
-        if (!(rt = wm_runtime_new(64u * 1024u, 1000u)))
+        if (!(rt = wm_runtime_new(test_store(), 64u * 1024u, 1000u)))
             break;
         wm_set_fuel(rt, FUZZ_FUEL);
         (void)wm_call(rt, f, args, results);

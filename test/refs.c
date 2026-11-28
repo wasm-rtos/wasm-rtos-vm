@@ -58,11 +58,11 @@ static void change(uint32_t at, uint32_t delta)
 /* The image read into a fresh instance and runtime, run to the end: the result, or ~0 when refused. */
 static uint32_t load(WmModule* module)
 {
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     WmInstance* inst = NULL;
     uint32_t result = ~0u;
     g_at = 0;
-    if (!wm_instantiate(&inst, module, rt, NULL, NULL) && !wm_snapshot_read(rt, inst, get, NULL))
+    if (!wm_instance_new(&inst, test_store(), module, rt, NULL, NULL) && !wm_snapshot_read(rt, inst, get, NULL))
     {
         wm_set_fuel(rt, 1000000u);
         if (wm_resume(rt, &result))
@@ -81,13 +81,13 @@ int main(int argc, char** argv)
     FILE* f = fopen(argc > 1 ? argv[1] : "test/refs.wasm", "rb");
     uint32_t size = f ? (uint32_t)fread(bytes, 1, sizeof(bytes), f) : 0;
     WmModule* module = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     WmInstance* inst = NULL;
     WmExtern run;
     uint32_t result = 0;
     if (f)
         fclose(f);
-    if (!size || wm_module_load(&module, bytes, size) || wm_instantiate(&inst, module, rt, NULL, NULL) ||
+    if (!size || wm_module_load(&module, NULL, bytes, size) || wm_instance_new(&inst, test_store(), module, rt, NULL, NULL) ||
         wm_instance_export(inst, "run", 3, &run))
     {
         printf("FAIL cannot load test/refs.wasm\n");

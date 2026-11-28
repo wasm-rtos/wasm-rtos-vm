@@ -32,7 +32,7 @@ int LLVMFuzzerInitialize(int* argc, char*** argv)
         WmModule* module;
         FILE* out;
         snprintf(path, sizeof(path), "%s/image", seeds);
-        if (wm_module_load(&module, test_fuzz_snapshot_wasm, test_fuzz_snapshot_wasm_len) || !(out = fopen(path, "wb")))
+        if (wm_module_load(&module, NULL, test_fuzz_snapshot_wasm, test_fuzz_snapshot_wasm_len) || !(out = fopen(path, "wb")))
             abort();
         if (wm_code_image_write(module, file_write, out))
             abort();
@@ -54,9 +54,9 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     if (!image)
         return 0;
     memcpy(image, data, size);
-    if (!wm_module_load(&module, test_fuzz_snapshot_wasm, test_fuzz_snapshot_wasm_len) &&
-        !wm_code_image_map(module, image, (uint32_t)size) && (rt = wm_runtime_new(64u * 1024u, 1000u)) &&
-        !wm_instantiate(&inst, module, rt, NULL, NULL) && !wm_instance_export(inst, "run", 3, &run))
+    if (!wm_module_load(&module, NULL, test_fuzz_snapshot_wasm, test_fuzz_snapshot_wasm_len) &&
+        !wm_code_image_map(module, image, (uint32_t)size) && (rt = wm_runtime_new(test_store(), 64u * 1024u, 1000u)) &&
+        !wm_instance_new(&inst, test_store(), module, rt, NULL, NULL) && !wm_instance_export(inst, "run", 3, &run))
     {
         /* From the image, and copied in from it. */
         wm_set_fuel(rt, FUZZ_FUEL);
@@ -66,7 +66,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         (void)wm_call(rt, run.as.func, &arg, &result);
     }
     if (inst)
-        wm_instance_free(inst);
+        fuzz_instance_free(inst);
     if (rt)
         wm_runtime_free(rt);
     wm_module_free(module);

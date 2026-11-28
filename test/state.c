@@ -38,13 +38,13 @@ int main(int argc, char** argv)
     uint32_t size = f ? (uint32_t)fread(bytes, 1, sizeof(bytes), f) : 0;
     WmModule* module = NULL;
     WmInstance* inst = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     WmMemory* memory;
     uint32_t args[3] = {4, 0, 0}, whole = 0, result = 0, before, state_length;
     if (f)
         fclose(f);
 
-    check(size && !wm_module_load(&module, bytes, size) && !wm_instantiate(&inst, module, rt, NULL, NULL), "instantiate");
+    check(size && !wm_module_load(&module, NULL, bytes, size) && !wm_instance_new(&inst, test_store(), module, rt, NULL, NULL), "instantiate");
     if (!inst)
         return 1;
     check(wm_call(rt, export_func(inst, "grow"), (uint32_t[]){3, 0, 0}, &result) == NULL && result == 1, "grow to 4 pages");
@@ -58,18 +58,18 @@ int main(int argc, char** argv)
     state_length = g_length;
     wm_memory_read(wm_instance_memory(inst), 65536, &before, 4);
 
-    /* Everything goes but the memory. */
-    memory = wm_instance_detach_memory(inst);
-    check(memory != NULL, "the memory is kept apart from the instance");
+    /* Everything goes but the memory, which is the store's. */
+    memory = wm_instance_memory(inst);
     wm_instance_free(inst);
+    check(memory != NULL && wm_store_memory(test_store(), 0) == memory, "the instance gone, its memory stays in the store");
     wm_runtime_free(rt);
     wm_module_free(module);
     module = NULL;
     inst = NULL;
 
     /* Back in a new instance of the module, with that memory. */
-    rt = wm_runtime_new(64u * 1024u, 100u);
-    check(!wm_module_load(&module, bytes, size) && !wm_instantiate_with_memory(&inst, module, memory, NULL, NULL) &&
+    rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
+    check(!wm_module_load(&module, NULL, bytes, size) && !wm_instance_new_with_memory(&inst, test_store(), module, memory, NULL, NULL) &&
               wm_instance_memory(inst) == memory,
           "a new instance takes the memory");
     {

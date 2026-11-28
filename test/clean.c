@@ -113,7 +113,7 @@ static WmMemory* fresh(WmModule* module, WmRuntime* rt, WmInstance** inst)
     if (*inst)
         wm_instance_free(*inst);
     *inst = NULL;
-    if (wm_instantiate(inst, module, rt, NULL, NULL))
+    if (wm_instance_new(inst, test_store(), module, rt, NULL, NULL))
         return NULL;
     wm_call(rt, export_func(*inst, "grow"), &(uint32_t){1}, &grown);
     wm_call(rt, export_func(*inst, "fill"), &pages, &result);
@@ -128,7 +128,7 @@ int main(void)
     uint32_t bytes_in = 2u * 65536u, nonzero = 0;
     WmModule *module = NULL, *other_module = NULL;
     WmInstance *inst = NULL, *other = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     WmMemory* memory;
     uint8_t *before, *after;
     unsigned long written;
@@ -139,7 +139,7 @@ int main(void)
         return 0;
     }
     wm_set_pager(&g_pager);
-    check(size && !wm_module_load(&module, bytes, size), "load the module");
+    check(size && !wm_module_load(&module, NULL, bytes, size), "load the module");
     memory = fresh(module, rt, &inst);
     check(memory && wm_memory_block_frames(memory) == bytes_in / wm_frame_size(), "its memory of two pages is one block");
     if (!memory)
@@ -182,7 +182,7 @@ int main(void)
     {
         static const char* what[] = {"a run of its code", "a host write", "its code called from another instance",
                                      "growing it", "a host pointer into it"};
-        check(other_size && !wm_module_load(&other_module, other_bytes, other_size), "load a module that calls into it");
+        check(other_size && !wm_module_load(&other_module, NULL, other_bytes, other_size), "load a module that calls into it");
         for (int k = 0; k < 5; ++k)
         {
             char line[160];
@@ -200,7 +200,7 @@ int main(void)
                 if (other)
                     wm_instance_free(other);
                 other = NULL;
-                if (!wm_instantiate(&other, other_module, rt, resolve, NULL))
+                if (!wm_instance_new(&other, test_store(), other_module, rt, resolve, NULL))
                     wm_call(rt, export_func(other, "run"), &(uint32_t){2}, NULL);
             }
             else if (k == 3)
@@ -263,7 +263,7 @@ int main(void)
         g_blocks = 0;
         wm_instance_free(inst);
         inst = NULL;
-        check(!wm_instantiate(&inst, module, rt, NULL, NULL), "a paged memory");
+        check(!wm_instance_new(&inst, test_store(), module, rt, NULL, NULL), "a paged memory");
         memory = wm_instance_memory(inst);
         g_paged = memory;
         wm_call(rt, export_func(inst, "grow"), &(uint32_t){1}, &result);

@@ -73,7 +73,7 @@ int main(int argc, char** argv)
     uint32_t frames_per_page = 65536u / wm_frame_size();
     WmModule* module = NULL;
     WmInstance* inst = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     WmMemory* memory;
     uint32_t pages = 1, whole = 0, result = 0, slices = 0, value = 0;
     unsigned long written;
@@ -87,7 +87,7 @@ int main(int argc, char** argv)
     }
     wm_set_pager(&g_pager);
 
-    check(size && !wm_module_load(&module, bytes, size) && !wm_instantiate(&inst, module, rt, NULL, NULL), "instantiate");
+    check(size && !wm_module_load(&module, NULL, bytes, size) && !wm_instance_new(&inst, test_store(), module, rt, NULL, NULL), "instantiate");
     if (!inst)
         return 1;
     memory = wm_instance_memory(inst);
@@ -141,12 +141,12 @@ int main(int argc, char** argv)
     check(r == NULL && result == whole && slices > 3,
           "the sum goes on paged, then in one block again, and ends as it would have");
     wm_disable_fuel(rt);
-    wm_instance_free(inst);
+    test_instance_free(inst);
     wm_module_free(module);
     check(wm_pager_resident() == 0 && g_reserved == 0, "freed: nothing in RAM, nothing reserved");
 
     /* Frames never written need no copy. */
-    memory = wm_memory_new(2, 4);
+    memory = wm_memory_new(test_store(), 2, 4, 16);
     check(wm_memory_block_frames(memory) == 2u * frames_per_page, "a new memory of 2 pages is one block");
     value = 0x5A5A5A5Au;
     wm_memory_write(memory, 65536u + 12u, &value, 4);
@@ -161,7 +161,7 @@ int main(int argc, char** argv)
     wm_memory_free(memory);
 
     /* A pinned range and a failed write keep the block. */
-    memory = wm_memory_new(1, 4);
+    memory = wm_memory_new(test_store(), 1, 4, 16);
     value = 7;
     wm_memory_write(memory, 0, &value, 4);
     check(wm_memory_pin(memory, 0, 16, 1) == NULL && wm_memory_block_out(memory) != NULL && wm_memory_data(memory, NULL),
@@ -197,7 +197,7 @@ int main(int argc, char** argv)
 
     /* Without room in the budget a memory is paged from the start. */
     g_block_budget = 0;
-    memory = wm_memory_new(1, 1);
+    memory = wm_memory_new(test_store(), 1, 1, 16);
     check(wm_memory_data(memory, NULL) == NULL && wm_memory_block_frames(memory) == 0,
           "without room in the budget a memory is paged at once");
     wm_memory_free(memory);

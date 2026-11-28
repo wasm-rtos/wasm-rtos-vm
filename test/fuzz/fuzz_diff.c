@@ -140,7 +140,7 @@ static void call(WmRuntime** rt, WmInstance* inst, WmFunc* f, uint32_t slice, in
             Buffer b = {NULL, 0, 0};
             WmRuntime* fresh;
             snapshot = 0;
-            if (!wm_snapshot_write(*rt, inst, buffer_write, &b) && (fresh = wm_runtime_new(64u * 1024u, 1000u)))
+            if (!wm_snapshot_write(*rt, inst, buffer_write, &b) && (fresh = wm_runtime_new(test_store(), 64u * 1024u, 1000u)))
             {
                 WmResult read = wm_snapshot_read(fresh, inst, buffer_read, &b);
                 if (read)
@@ -175,7 +175,7 @@ static void run(const uint8_t* data, size_t size, int way, uint32_t slice, Outco
     memset(o, 0, sizeof(*o));
     if ((o->instantiated = fuzz_instantiate(data, size, way == IN_PLACE, &imports, &inst)))
         return;
-    if ((rt = wm_runtime_new(64u * 1024u, 1000u)))
+    if ((rt = wm_runtime_new(test_store(), 64u * 1024u, 1000u)))
     {
         Call* start = &o->calls[o->call_count++];
         wm_set_fuel(rt, FUZZ_FUEL);
@@ -187,7 +187,7 @@ static void run(const uint8_t* data, size_t size, int way, uint32_t slice, Outco
             if (!f || f->param_slots > FUZZ_RESULT_SLOTS || f->result_slots > FUZZ_RESULT_SLOTS)
                 continue;
             wm_runtime_free(rt);
-            if (!(rt = wm_runtime_new(64u * 1024u, 1000u)))
+            if (!(rt = wm_runtime_new(test_store(), 64u * 1024u, 1000u)))
                 break;
             call(&rt, inst, f, way == SLICED ? slice : 0, way == SLICED, &o->calls[o->call_count++]);
         }

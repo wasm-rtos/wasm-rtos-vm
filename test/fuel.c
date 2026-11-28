@@ -62,7 +62,7 @@ int main(void)
     size_t size = fread(bytes, 1, sizeof bytes, file);
     WmModule* m;
     WmInstance* in = NULL;
-    WmRuntime* rt = wm_runtime_new(64 * 1024, 1000);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64 * 1024, 1000);
     WmExtern count, fib, waits, stops, traps;
     uint32_t result, slices;
     uint64_t whole_used, used;
@@ -70,7 +70,7 @@ int main(void)
     fclose(file);
     g_wait = wm_host_function_new(NULL, 0, i32, 1, host_wait, NULL);
     g_stop = wm_host_function_new(NULL, 0, NULL, 0, host_stop, NULL);
-    check(!wm_module_load(&m, bytes, (uint32_t)size) && !wm_instantiate(&in, m, rt, resolve, NULL) &&
+    check(!wm_module_load(&m, NULL, bytes, (uint32_t)size) && !wm_instance_new(&in, test_store(), m, rt, resolve, NULL) &&
               !wm_instance_export(in, "count", 5, &count) && !wm_instance_export(in, "fib", 3, &fib) &&
               !wm_instance_export(in, "waits", 5, &waits) && !wm_instance_export(in, "stops", 5, &stops) &&
               !wm_instance_export(in, "traps", 5, &traps),

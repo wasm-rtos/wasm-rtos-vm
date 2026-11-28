@@ -36,7 +36,7 @@ for name in "${names[@]}"; do
     case "$name" in
         proc_disabled) flags+=(-DOS_HAS_PROCESSES=0) ;;
         preempt_memory_grow) flags+=(-DOS_TASK_SLICE_FUEL=1ULL) ;;
-        task_memory_usage) flags+=(-DOS_HAS_MEMORY_ACCOUNTING=1) ;;
+        task_memory_usage | task_store) flags+=(-DOS_HAS_MEMORY_ACCOUNTING=1 -DWM_STORE_BYTES=1) ;;
         snapshot_portable) flags+=(-DOS_TASK_SLICE_FUEL=997ULL) ;;
     esac
     if ! "$CC_BIN" -std=c11 -O1 -g ${SANITIZE:+-fsanitize=address,undefined} -w -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L \

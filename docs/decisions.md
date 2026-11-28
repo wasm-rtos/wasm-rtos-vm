@@ -1957,3 +1957,288 @@ segments are written again; on the boards, a linked task swapped out
 inside the library and back (ESP32, Black Pill). The loops' machine code
 is the same (Mac, Xtensa); `WM_TINY` 28386 bytes, 56 more (the import
 binding, run when a module is instantiated).
+
+## 25. A store owns what a process makes
+
+**Decided and built (2026-11-28).** The user, after a shared
+module charged to a task that was gone: «я хочу сделать правильней»,
+«сначала продумай архитектуру наилучшим образом … можем ли мы переделать
+архитектуру эту к стандарту», and on this paper: «лучше сразу нормально
+делай» (built directly, measured as it is built, no sketch first).
+
+### Problem
+
+The engine has no notion of a process, so whoever holds a group of
+objects decides alone who frees what, and each did it its own way:
+
+| What | Who frees it now |
+|---|---|
+| A module | the caller, after every instance of it; a shared one by a count of its own: the kernel's programs (`module_users`, kernel decision 9), dylink's libraries (`users`, `DylinkOptions.release`, wasm-rtos-dylink decision 2) |
+| A memory | the instance that defines it (`owns_memory`); kept apart for swap it belongs to nobody (`wm_instance_detach_memory`, decision 24) until a new instance takes it |
+| Tables, globals shared between instances | the linker: `owns_memory`, `owns_table` and a list of globals in dylink.c, instances freed first |
+| An instance that failed after its imports were linked | "stays as long as the tables it is in" |
+| Host functions | the kernel, never (shared by every task) |
+| Interpreter memory charged to a task | the kernel: a global "account now" switched in six places (`OS_HEAP_ENTER`), an account pointer in a header before every allocation |
+
+Each rule is right where it stands; together they are six rules for one
+question, and where two of them meet, a hole: a shared module is charged
+to the task that parsed it, and freed after that task is gone the
+kernel writes into the freed task (AddressSanitizer; kernel decision 9
+since 2026-11-13, dylink decision 2 since today). The same lack of a
+process is why a program importing a memory a loader made cannot swap
+out (kernel decision 17: nobody owns the memory to keep it apart), and
+why the kernel cannot hold a task to a memory limit: it can only count,
+and only with `OS_HAS_MEMORY_ACCOUNTING`.
+
+### Decision
+
+**A store, as in wasm-c-api (`wasm_store_t`): the owner of everything a
+process makes.** A task of the kernel is one store; a linker builds its
+instances in the store it is given.
+
+```c
+typedef struct WmStore WmStore;
+WmStore* wm_store_new(void* host);          /* host: the owner's, given back to the allocator */
+void wm_store_free(WmStore* store);         /* everything in it, in the order the engine needs */
+void* wm_store_host(const WmStore* store);
+```
+
+1. **Objects made in a store belong to it**: instances, memories, tables,
+   globals, runtimes, and modules loaded for it alone. New functions take
+   the store first, as wasm-c-api's do (`wasm_instance_new(store, ...)`):
+   `wm_instance_new`, `wm_memory_new`, `wm_table_new`, `wm_global_new`,
+   `wm_runtime_new`, `wm_module_load` (item 8). Freeing
+   the store frees them all: no order to keep, no flags of who owns a
+   memory or a table. An instance that failed stays in the store until it
+   goes. One object can still be freed alone (`wm_instance_free` and the
+   others work on an object of a store), which wasm-c-api does not allow:
+   a library unloaded from a running program (ABI 1.9 later) and a long
+   task that makes and drops instances need it.
+2. **A module loaded with no store is the engine's**, shared by any
+   number of stores, as wasm-c-api shares one (`wasm_module_share`,
+   `wasm_module_obtain`). It counts its instances, and tells its owner
+   when the last one goes:
+   ```c
+   void wm_module_on_unused(WmModule* module, void (*unused)(void* context, WmModule* module), void* context);
+   ```
+   The owner (a program of the kernel, a library of the loader) frees it
+   or keeps it then. This is the one count the engine keeps: instances
+   point to their module and a module to nothing, so it has no cycles.
+   It replaces the kernel's `module_users` and dylink's `users` and
+   `release`.
+3. **The host is asked before a store's memory or table grows**, as the
+   pager's `reserve` is asked before frames are promised: how much a
+   program may have is the host's policy, not the engine's.
+   `wm_set_store_growing(growing)`: before a memory or a table of a store
+   is made or grows (`memory.grow`, `table.grow`, an instance's own, the
+   host's `wm_memory_grow`), `growing(host, store, kind, bytes)` is told
+   what the store's memories and tables would then hold, walked from its
+   objects (a handful: nothing is kept that could drift). No: `memory.grow`
+   and `table.grow` give -1, an instance or memory is not made. That is
+   what a program can grow by while it runs; what an instance takes
+   besides is fixed by its module when it is made, and a creation that
+   finds no room fails alone already. Nothing is counted for it, so it
+   holds in every build, AVR too.
+4. **A store counts every byte of its objects only when asked to**
+   (`WM_STORE_BYTES=1`, for a host that reports them):
+   `wm_store_bytes(store)` and the most it has held. What is the engine's
+   (its modules, the code cache, host functions, WASI's functions) is
+   charged to no store. Each allocation then carries the store it is
+   charged to and its size in a header, taken from the object it is for,
+   and a store outlives what is charged to it, so nothing is ever charged
+   to a store that is gone. Off by default: the header is 8 bytes of every
+   allocation on the boards.
+5. **Swap: a store gives back all but its memories.**
+   `wm_store_release(store)` frees its instances, tables, globals,
+   runtimes and the modules loaded for it, and keeps its memories with
+   their frames and slots. A new instance is made in the same store on
+   one of them (`wm_instance_new_with_memory`, decision 24's rules: no
+   data segments written, no start function), found with
+   `wm_store_memory(store, index)`. The memory never belongs to nobody,
+   so a memory a loader made swaps out like a program's own.
+6. **Snapshots do not change.** They are still of an instance and those
+   linked to it, found by their links (decision 23), in the same format:
+   a store is not written into them and is not needed to read one back.
+7. **Host functions stay the engine's**, made once and shared by every
+   store. wasm-c-api makes them per store (`wasm_func_new(store, ...)`);
+   here that would cost each task its imports again in RAM.
+8. **One model: every instance, memory, table, global and runtime is made
+   in a store**, the store first as wasm-c-api's functions take it:
+   `wm_instance_new(&i, store, module, ...)`, `wm_memory_new(store, ...)`,
+   `wm_runtime_new(store, ...)`, `wm_module_load(&m, store, ...)` (NULL:
+   the engine's). The functions without a store go before 1.0 is tagged:
+   `wm_instantiate`, `wm_instantiate_with_memory`,
+   `wm_instance_detach_memory`, `wm_memory_new_paged`, and the old
+   `wm_memory_new`, `wm_table_new`, `wm_global_new`, `wm_runtime_new`,
+   `wm_module_load` without a store. The user: «надо все переводить на
+   лучшее так понятней и релиза еще не было лучше мы релизнем хорошую
+   версию чем непонятную со старыми фишками которые понятно только нам».
+
+What stays outside wasm-c-api, as extensions: fuel, runtimes that stop
+and go on, snapshots, paging, code images, an instance on a memory kept
+from another, objects freed alone, host functions of the engine. A
+`wasm.h` of wasm-c-api's own names can sit on `wm.h` later, in a file of
+its own that a build carries only when it calls it (a decision of its
+own).
+
+### Why
+
+- One owner for everything a process has: each of the six rules above
+  becomes "it is the store's", and the hole cannot happen rather than
+  being patched.
+- The standard's model where it fits these boards, its names where we
+  add functions: a store, a shared module, objects made in a store.
+- A limit per task is what "one program does not take the system down"
+  needs for memory, and the host decides it: the engine asks, as it asks
+  the pager, and knows from its objects what the store holds.
+- Nothing on the hot path changes: calls, fuel, memory access and the
+  code cache are as they are; only making and freeing objects do.
+
+### Instead
+
+- **A count on every object** (a memory, a table, a function, an
+  instance): a table holds an instance's functions and the instance its
+  table, a cycle that is never freed, which is every dylink.0 process; it
+  does not fix charging either.
+- **Charge shared modules to no task in the kernel** (about 20 lines):
+  fixes the hole, and leaves the other five rules, the swap of a
+  loader's memory and the missing limit.
+- **The limit as a number of every byte in the store, the header always
+  on** (built first): about 300 bytes more a task on the boards (8 bytes
+  of each of some 26 allocations), every allocation paying for a count
+  only a report needs, and the policy in the engine, not the host.
+- **Counting each object's bytes by hand** (no header): some 50 places to
+  keep right, a wrong one silently off; for 200 bytes a task.
+- **A store freed only whole**, as wasm-c-api's: no library could be
+  unloaded from a running program, and a long task that makes instances
+  would grow.
+- **A store as one block of RAM** (an arena): fewer pieces in the heap,
+  but memories and tables grow and objects are freed alone. Possible
+  later inside a store, nothing in the API changes.
+- **The store in snapshots, as the list of instances**: decision 23 found
+  them by their links so that no linker has to hand a list; the format
+  stays.
+- **All of wasm-c-api now** (`wasm_*_vec_t`, `wasm_valtype_t` objects,
+  copies of every reference): many small allocations, too much for an
+  ATmega328P. Later, as a layer.
+
+### Cost
+
+- RAM: a store (about 32 bytes), and a store pointer and a link in each
+  object of one (8 bytes on 32-bit, a handful of objects per task), a
+  store pointer in each table. With `WM_STORE_BYTES` the header too.
+- Code: an estimate of 400 to 800 bytes; `WM_TINY` (28386 bytes now)
+  measured before and after.
+- 1.0's promise, "names are only added", is broken once, before 1.0 is
+  tagged (as decision 23 took dylink's names out): every host of the
+  engine moves (the kernel, dylink, wasm-rtos-hw, the examples, the site's
+  copy of the kernel).
+
+### Steps
+
+| # | What | Where |
+|---|---|---|
+| 1 | Measured as built: `WM_TINY`, Cortex-M4, lines that go in the kernel and dylink; this paper corrected by what is found | source, measured |
+| 2 | `WmStore`, objects in a store, freed with it or alone | `wm_instance.c`, `wm_memory.c`, `wm.h` |
+| 3 | Modules of the engine: the count of instances, `wm_module_on_unused` | `wm_module.c` |
+| 4 | Bytes and limit of a store; the allocator told the store | `wm_heap.c`, `wm.h` |
+| 5 | `wm_store_release`, `wm_store_memory`, `wm_instance_new_with_memory` | `wm_instance.c` |
+| 6 | Tests: everything of a store freed in any order (ASan); a failed instance; a module's last instance tells its owner, in any store; limits refused as the heap's are; swap through release, also of an imported memory; old functions unchanged; each rule broken on purpose fails | `test/` |
+| 7 | Kernel decision 18, dylink decision 3 on it; the boards (ESP32, Black Pill, Uno) | other repositories |
+
+### Built
+
+With what building and measuring it found:
+
+- **Built first with the count always on and a limit on it**
+  (`wm_store_limit`), then changed (items 3 and 4 above): measured on the
+  boards, a task paid about 300 bytes for a count only a report reads,
+  and the limit was the engine's policy. The engine now asks the host,
+  and counts only with `WM_STORE_BYTES=1`.
+- **Counting, when on: each allocation is charged to the store of the
+  object it is for**, given by that object (`wm_store_calloc(store,
+  ...)`), and kept in a header with its size, so growing or freeing it
+  later charges the same store whatever runs then. Only loading a module
+  for a store charges a store without an object at hand (`wm_charge`,
+  set for that load alone). A store freed with bytes still charged to it
+  (a linker's records not freed yet) is kept until the last of them goes.
+- **Asking**: in `wm_memory_new` and `wm_memory_grow`, in `grow_table`
+  (`table.grow` and `wm_table_grow`), and before an instance's own tables
+  and memory are made; a table knows its store for it. Restoring a
+  snapshot's table sizes is not asked: it puts back what was allowed.
+  Refused growth drops no code: it is not the heap's.
+- **Tables and globals made alone in a store** are nodes around the
+  object, flagged in its padding: those an instance embeds grow by the
+  store pointer only.
+- **The module's count is of instances, not of holders**: a host that
+  keeps a pointer to a module of the engine with no instance of it (the
+  kernel between parsing and instantiating) asks for it again after an
+  instance of it failed (kernel decision 18).
+- `wm_instance_detach_memory` gives NULL for an instance of a store: its
+  memory is the store's.
+- **One model in every build, the Uno's too**: first built with the
+  functions of 1.0 beside stores, and then without stores in `WM_TINY`
+  (`WM_HAS_STORES=0`); both went, for one model everywhere. The walk of a
+  store for the host is linked only into a build that calls
+  `wm_set_store_growing`.
+
+### Checks
+
+- `tools/check.sh` passes whole: the spec suite (27437) in every build it
+  has, swapping, snapshots between builds, the code cache and images, the
+  kernel's 92 tests, also with every memory paged.
+- `test/store.c`, 37 checks, with AddressSanitizer, with UBSan, without
+  predecoding, with every memory paged, with every byte counted
+  (`WM_STORE_BYTES=1`, its byte checks only there): a program and a library that imports its
+  memory, a table, a global, a second memory and a runtime in one store,
+  freed in one call, the heap as before; a module of the engine charged
+  to no store, one loaded for the store charged to it; a start function
+  that traps leaves its instance in the store, which frees it; a module's
+  owner told once, after the last instance in either of two stores; the
+  host told the store's memory and table bytes, refusing an instance as a
+  full heap would, then memory.grow and table.grow (-1), allowing one
+  element more, no code dropped, the other store growing, an instance of
+  no store never asked; released, a store keeps its memory,
+  and a program and its library made again on it go on from what it held;
+  another store's memory refused; a linker's record keeps a freed store
+  until it goes.
+- Size: `WM_TINY` on an ATmega328P 29256 bytes of the budget's 30720,
+  870 more than before stores (28386): the lists and the count of a
+  module's instances in every build, as one model asks. The engine on a
+  Cortex-M4 (`-Os`, all objects whole) about 1.4 KiB more. The hot loops
+  are untouched; growing a memory or a table asks a pointer first.
+- ESP32 as built now (growth asked, no header), the same board: 24 of 24,
+  nothing leaked, 18 programs at once as before stores; with the card, a
+  task linked with its library 29768 bytes of heap and the second 26704,
+  28 more than before stores (29740, 26676; 30236 and 27104 with the
+  header); 500 round trips 95 ms (88 before stores, 113 with the header:
+  where the code lies in the flash cache, no work more a message).
+- Black Pill as built now: the same 21 of 22 (CoreMark does not fit,
+  before stores too), nothing leaked; a task with CoreMark's module 96
+  bytes more than before stores (26776 free after it, 26872 before,
+  26592 with the header); 500 round trips 74 ms as before; 10 programs at
+  once (9 before: where the last creation fails moved, not a gain).
+  As first built, with the header on every allocation:
+- ESP32 (esp32dev), the kernel's board checks before and after, on the
+  same board: 24 of 24 both, nothing leaked. A task takes about 340 bytes
+  more of heap (the header before each allocation, the store): 17
+  programs at once where 18 fitted. 500 round trips through queues 88 ms
+  before, 113 after, every run the same; with `WM_STORE_BYTES=0` 95 ms
+  and 18 programs. No allocation is made per message (about 8000 in the
+  whole run of the checks, before and after alike on a computer), so the
+  time is where the code lies in the 32 KiB flash cache, which moved the
+  same exchange from 45 to 89 ms before when the interpreter's loop grew;
+  CoreMark 21.40 before, 21.94 after.
+- Black Pill (STM32F411, the engine's heap of 104 KiB), before and after:
+  the same 21 of 22 (CoreMark does not fit, before as after); fib(24)
+  318 ms both, 500 round trips 74 and 75 ms; 9 programs at once both; a
+  task with CoreMark's module 280 bytes more.
+- What a task costs, measured on a computer with the same heap (TLSF, an
+  arena of 104 KiB) and the board checks' program: 12288 bytes before,
+  12888 after, 12440 with `WM_STORE_BYTES=0`; 26 allocations live in a
+  task (25 before: the store). The header is 16 bytes on 64-bit, 8 on the
+  boards, and the heap takes for each block what it took before plus the
+  header, no more: the cost is the header times the allocations a task
+  keeps, about 2.5 percent on the boards. 8 tasks fit the arena before,
+  7 after. Fewer, larger allocations would lower it, and the heap's own
+  overhead with it.

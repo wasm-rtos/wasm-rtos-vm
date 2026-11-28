@@ -102,7 +102,7 @@ static WmResult map_copy(const uint8_t* bytes, uint32_t size, const uint32_t* im
     static uint32_t copy[(1 << 12) + 1];
     WmModule* module;
     WmResult r;
-    if (wm_module_load(&module, bytes, size))
+    if (wm_module_load(&module, NULL, bytes, size))
         return "test: cannot load";
     memcpy((uint8_t*)copy + offset, image, image_size);
     r = wm_code_image_map(module, (const uint8_t*)copy + offset, image_size);
@@ -134,7 +134,7 @@ static WmResult run_sliced(WmRuntime** rt, WmFunc* f, uint32_t arg, WmInstance* 
         if ((r = wm_snapshot_write(*rt, g_inst, put, NULL)))
             return r;
         wm_runtime_free(*rt);
-        *rt = wm_runtime_new(64u * 1024u, 100u);
+        *rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
         if ((r = wm_snapshot_read(*rt, next, get, NULL)))
             return r;
         wm_set_fuel(*rt, 37);
@@ -154,7 +154,7 @@ int main(int argc, char** argv)
     uint32_t other_size = g ? (uint32_t)fread(other, 1, sizeof(other), g) : 0;
     WmModule *module = NULL, *plain = NULL;
     WmInstance* in_place = NULL;
-    WmRuntime* rt = wm_runtime_new(64u * 1024u, 100u);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
     uint32_t result = 0, arg, words;
     WmResult r;
     if (f)
@@ -164,7 +164,7 @@ int main(int argc, char** argv)
     g_back = wm_host_function_new(i32, 1, i32, 1, host_back, NULL);
     wm_set_code_allocator(code_allocator);
 
-    check(size && !wm_module_load(&module, bytes, size), "load");
+    check(size && !wm_module_load(&module, NULL, bytes, size), "load");
     if (!module)
         return 1;
     r = wm_code_image_write(module, put_code, NULL);
@@ -199,8 +199,8 @@ int main(int argc, char** argv)
 
     check(!wm_code_image_map(module, g_code, g_code_size), "the image maps before the first instance");
     check(wm_code_image_map(module, g_code, g_code_size) != NULL, "and only once");
-    check(!wm_instantiate(&g_inst, module, rt, resolve, NULL), "instantiate");
-    check(!wm_module_load(&plain, bytes, size) && !wm_instantiate(&in_place, plain, rt, resolve, NULL),
+    check(!wm_instance_new(&g_inst, test_store(), module, rt, resolve, NULL), "instantiate");
+    check(!wm_module_load(&plain, NULL, bytes, size) && !wm_instance_new(&in_place, test_store(), plain, rt, resolve, NULL),
           "a second instance, without the image");
     if (!g_inst || !in_place)
         return 1;
@@ -237,7 +237,7 @@ int main(int argc, char** argv)
         if (r == wm_fuel_exhausted && !(r = wm_snapshot_write(rt, g_inst, put, NULL)))
         {
             wm_runtime_free(rt);
-            rt = wm_runtime_new(64u * 1024u, 100u);
+            rt = wm_runtime_new(test_store(), 64u * 1024u, 100u);
             if (!(r = wm_snapshot_read(rt, in_place, get, NULL)))
                 r = wm_resume(rt, &result);
         }

@@ -1661,18 +1661,43 @@ static WmResult load_module(WmModule** out, const uint8_t* bytes, uint32_t size)
 }
 
 /* Memory of programs before code (decision 3): with no room for a module, predecoded code goes first. */
-WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size)
+WmResult wm_module_load(WmModule** out, WmStore* store, const uint8_t* bytes, uint32_t size)
 {
     WmResult result;
+#if WM_STORE_BYTES
+    /* Everything allocated while it loads is the module's or freed before it returns: charged to its store. */
+    WmStore* charged = wm_charge;
+    wm_charge = store;
+#endif
     while ((result = load_module(out, bytes, size)) && !strncmp(result, "exhaustion", 10) && wm_code_drop_one())
         ;
+#if WM_STORE_BYTES
+    wm_charge = charged;
+#endif
+    if (!result)
+        wm_store_link_modules(store, *out);
     return result;
+}
+
+void wm_module_on_unused(WmModule* m, void (*unused)(void* context, WmModule* module), void* context)
+{
+    m->unused = unused;
+    m->unused_context = context;
+}
+
+uint32_t wm_module_instance_count(const WmModule* m) { return m->instance_count; }
+
+void wm_module_instance_gone(WmModule* m)
+{
+    if (m->unused)
+        m->unused(m->unused_context, m);
 }
 
 void wm_module_free(WmModule* m)
 {
     if (!m)
         return;
+    wm_store_unlink_modules(m);
 #if WM_PREDECODE
     if (WM_RUNS_FAST(m))
         wm_code_remove_module(m);

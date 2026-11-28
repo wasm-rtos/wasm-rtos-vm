@@ -29,6 +29,16 @@ typedef struct WmFunc WmFunc;
 typedef struct WmGlobal WmGlobal;
 typedef struct WmTable WmTable;
 typedef struct WmMemory WmMemory;
+typedef struct WmStore WmStore;
+
+/*
+ * 1: a store counts every byte allocated for its objects (wm_store_bytes),
+ * a header of a pointer and a size before each allocation; for a host that
+ * reports them. 0, the default: stores own their objects and count none.
+ */
+#ifndef WM_STORE_BYTES
+#define WM_STORE_BYTES 0
+#endif
 
 /* Value types, as encoded in the binary format. */
 #define WM_I32 0x7F
@@ -69,8 +79,14 @@ void wm_set_allocator(WmAllocator allocator);
 /* Allocate as the engine does, through that allocator (as realloc; size 0 frees): for a host's linker, counted alike. */
 void* wm_allocate(void* ptr, size_t size);
 
-/* Decode and validate. The bytes must stay valid while the module is used. */
-WmResult wm_module_load(WmModule** out, const uint8_t* bytes, uint32_t size);
+/*
+ * Decode and validate. The bytes must stay valid while the module is used.
+ * In store, the module is that store's alone and goes with it; with store
+ * NULL it is the engine's: any number of stores make instances of it, and
+ * whoever loaded it frees it after its last instance (wm_module_on_unused
+ * says when).
+ */
+WmResult wm_module_load(WmModule** out, WmStore* store, const uint8_t* bytes, uint32_t size);
 void wm_module_free(WmModule* module);
 /* Bytes the module's code takes besides the module itself: side table, predecoded records, local offsets. */
 uint32_t wm_module_code_bytes(const WmModule* module);
@@ -176,31 +192,87 @@ uint32_t wm_module_custom_sections(const WmModule* module, const char* name, uin
                                    const uint8_t** bytes, uint32_t* size);
 
 /*
- * Instantiate: imports, segments, then the start function, run on runtime.
- * With runtime NULL the start function waits for wm_instance_start, so
- * imports can be linked first. A failure once the imports are linked (a
- * segment out of bounds, a trap in the start function) leaves *out set:
- * the instance's functions may already be in imported tables, so it stays
- * as long as those do, and is then freed with wm_instance_free.
+ * Stores (decision 25), as wasm-c-api's wasm_store_t: the owner of what a
+ * process makes. Every instance, memory, table, global and runtime is made
+ * in a store, and modules may be: they go with it, in whatever order they
+ * were made and linked; one can still be freed alone with its own free
+ * function. What is the engine's belongs to no store: modules loaded with
+ * none, host functions. host is the owner's, for the owner's own use.
  */
-WmResult wm_instantiate(WmInstance** out, WmModule* module, WmRuntime* runtime, WmResolver resolver,
-                        void* context);
+WmStore* wm_store_new(void* host);
+void wm_store_free(WmStore* store);
+void* wm_store_host(const WmStore* store);
+/*
+ * With WM_STORE_BYTES, bytes allocated for the store's objects, and the
+ * most it has held: its instances, memories (their frames in RAM from the
+ * heap, not from a frame pool), tables, globals, runtimes, modules loaded
+ * for it, and what a linker allocates for it (wm_store_allocate). What is
+ * the engine's is charged to no store: modules loaded with no store,
+ * predecoded code, host functions. 0 without it.
+ */
+size_t wm_store_bytes(const WmStore* store);
+size_t wm_store_peak_bytes(const WmStore* store);
+/*
+ * Asked before a memory or a table of a store is made or grows (memory.grow,
+ * table.grow, an instance's own, the host's wm_memory_grow): kind is
+ * WM_EXTERN_MEMORY or WM_EXTERN_TABLE, bytes what the store's memories and
+ * tables would then hold (a table's elements at a pointer's size). 0 says
+ * no: memory.grow and table.grow give -1, an instance or a memory is not
+ * made ("exhaustion"). As the pager's reserve, the host decides how much a
+ * program may have: what a program can grow by while it runs; what an
+ * instance takes besides is fixed when it is made. NULL, the default: yes.
+ */
+typedef int (*WmStoreGrowing)(void* host, WmStore* store, uint8_t kind, size_t bytes);
+void wm_set_store_growing(WmStoreGrowing growing);
+/* As wm_allocate, charged to store: for a linker's own records, freed before the store or with wm_allocate. */
+void* wm_store_allocate(WmStore* store, void* ptr, size_t size);
+/*
+ * Everything in the store but its memories goes: instances, tables,
+ * globals, runtimes, modules loaded for it. The memories stay, their frames
+ * where they are (a swapped-out task leaves them to the pager), for
+ * instances made again on them (wm_instance_new_with_memory).
+ */
+void wm_store_release(WmStore* store);
+/* The store's memories, oldest first: NULL past the last. */
+WmMemory* wm_store_memory(const WmStore* store, uint32_t index);
+
+/*
+ * Call unused(context, module) each time the module's last instance goes,
+ * in any store: its owner may free it then, or keep it for the next. NULL
+ * calls nothing.
+ */
+void wm_module_on_unused(WmModule* module, void (*unused)(void* context, WmModule* module), void* context);
+/* Instances of the module now, in every store and none. */
+uint32_t wm_module_instance_count(const WmModule* module);
+
+/*
+ * Instantiate in store: imports, segments, then the start function, run on
+ * runtime. With runtime NULL the start function waits for
+ * wm_instance_start, so imports can be linked first. A memory the module
+ * defines is made in the store, and stays there when the instance goes
+ * (wm_store_release keeps it for an instance made again on it). A failure
+ * once the imports are linked (a segment out of bounds, a trap in the start
+ * function) leaves *out set: its functions may already be in imported
+ * tables, so it stays in the store until the store goes, or until
+ * wm_instance_free.
+ */
+WmResult wm_instance_new(WmInstance** out, WmStore* store, WmModule* module, WmRuntime* runtime,
+                         WmResolver resolver, void* context);
+WmResult wm_instance_new(WmInstance** out, WmStore* store, WmModule* module, WmRuntime* runtime,
+                         WmResolver resolver, void* context);
+/*
+ * An instance in store on memory, one of the store's (wm_store_memory) that
+ * an earlier instance of the same module had: no data segments written into
+ * it, no start function; the program goes on from a state snapshot
+ * (wm_snapshot_write_state), a task back from swap. A module that imports
+ * its memory has memory bound to that import instead (the resolver is not
+ * asked for it), with no data segments written either: a library rebuilt
+ * on a program's memory (decision 24).
+ */
+WmResult wm_instance_new_with_memory(WmInstance** out, WmStore* store, WmModule* module, WmMemory* memory,
+                                     WmResolver resolver, void* context);
 WmResult wm_instance_start(WmInstance* instance, WmRuntime* runtime);
 void wm_instance_free(WmInstance* instance);
-/*
- * Keep an instance's memory past it: the instance no longer owns it, and
- * freeing the instance leaves it (NULL when it owns none). A new instance
- * of the same module takes it back with wm_instantiate_with_memory, which
- * writes no data segments into it and runs no start function: the program
- * goes on from a state snapshot (wm_snapshot_write_state). On failure the
- * memory stays the caller's. A module that imports its memory has the
- * memory given here bound to that import instead (the resolver is not asked
- * for it), with no data segments written either, and the memory stays the
- * caller's: a library rebuilt on a program's memory kept apart (decision 24).
- */
-WmMemory* wm_instance_detach_memory(WmInstance* instance);
-WmResult wm_instantiate_with_memory(WmInstance** out, WmModule* module, WmMemory* memory, WmResolver resolver,
-                                    void* context);
 WmResult wm_instance_export(const WmInstance* instance, const char* name, uint32_t length, WmExtern* out);
 /*
  * Bind a function import the resolver left unresolved (index in the
@@ -230,14 +302,15 @@ int wm_func_equal(const WmFunc* a, const WmFunc* b);
 void wm_func_type(const WmFunc* func, const uint8_t** params, uint32_t* param_count, const uint8_t** results,
                   uint32_t* result_count);
 
-WmGlobal* wm_global_new(uint8_t type, uint8_t mutable_, uint64_t value);
+/* Made in store (not NULL), for imports a host gives. */
+WmGlobal* wm_global_new(WmStore* store, uint8_t type, uint8_t mutable_, uint64_t value);
 void wm_global_free(WmGlobal* global);
 uint8_t wm_global_type(const WmGlobal* global);
 uint64_t wm_global_get(const WmGlobal* global);
 /* For the host: a linker fills an immutable global it made before the module that imports it runs. */
 void wm_global_set(WmGlobal* global, uint64_t value);
 
-WmTable* wm_table_new(uint8_t type, uint32_t size, uint32_t max);
+WmTable* wm_table_new(WmStore* store, uint8_t type, uint32_t size, uint32_t max);
 void wm_table_free(WmTable* table);
 /* Grow by delta entries (null): the old size, or 0xFFFFFFFF when it cannot grow. */
 uint32_t wm_table_grow(WmTable* table, uint32_t delta);
@@ -246,9 +319,8 @@ uint32_t wm_table_size(const WmTable* table);
 WmFunc* wm_table_get(const WmTable* table, uint32_t index);
 WmResult wm_table_set(WmTable* table, uint32_t index, WmFunc* func);
 
-WmMemory* wm_memory_new(uint32_t pages, uint32_t max_pages);
-/* page_log2 16 for 64 KiB pages, 0 for 1-byte pages (custom page sizes). */
-WmMemory* wm_memory_new_paged(uint32_t pages, uint32_t max_pages, uint8_t page_log2);
+/* In store (not NULL); page_log2 16 for 64 KiB pages, 0 for 1-byte pages (custom page sizes). */
+WmMemory* wm_memory_new(WmStore* store, uint32_t pages, uint32_t max_pages, uint8_t page_log2);
 void wm_memory_free(WmMemory* memory);
 uint32_t wm_memory_grow(WmMemory* memory, uint32_t delta);
 /*
@@ -434,8 +506,8 @@ WmResult wm_memory_block_out(WmMemory* memory);
  */
 WmResult wm_memory_block_in(WmMemory* memory);
 
-/* An execution stack: stack_bytes for values and locals, max_frames calls deep. */
-WmRuntime* wm_runtime_new(uint32_t stack_bytes, uint32_t max_frames);
+/* An execution stack in store (not NULL): stack_bytes for values and locals, max_frames calls deep. */
+WmRuntime* wm_runtime_new(WmStore* store, uint32_t stack_bytes, uint32_t max_frames);
 void wm_runtime_free(WmRuntime* runtime);
 /* The value stack: bytes long, growing up from the start. A host may fill it to measure how much is used. */
 uint8_t* wm_runtime_stack(const WmRuntime* runtime, uint32_t* bytes);
@@ -512,9 +584,9 @@ typedef WmResult (*WmSnapshotRead)(void* context, void* data, uint32_t size);
 WmResult wm_snapshot_write(const WmRuntime* runtime, const WmInstance* instance, WmSnapshotWrite write, void* context);
 /*
  * A state snapshot: all of it but the memory's bytes, which stay in the
- * memory. It loads only with the same memory, kept apart from the
- * instance (wm_instance_detach_memory) and given to the new one
- * (wm_instantiate_with_memory): a program swapped out, its memory left
+ * memory. It loads only with the same memory, kept in the store when the
+ * instance went (wm_store_release) and given to the new one
+ * (wm_instance_new_with_memory): a program swapped out, its memory left
  * to the pager.
  */
 WmResult wm_snapshot_write_state(const WmRuntime* runtime, const WmInstance* instance, WmSnapshotWrite write,

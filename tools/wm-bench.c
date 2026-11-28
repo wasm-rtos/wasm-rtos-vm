@@ -12,6 +12,15 @@
 
 #include "../source/wm.h"
 
+/* The store this program's objects are made in (decision 25): one for the whole run. */
+static WmStore* test_store(void)
+{
+    static WmStore* store;
+    if (!store)
+        store = wm_store_new(NULL);
+    return store;
+}
+
 static uint32_t now_ms(void)
 {
     struct timespec t;
@@ -61,7 +70,7 @@ int main(int argc, char** argv)
     WmInstance* in;
     WmExtern run;
     WmResult r;
-    WmRuntime* rt = wm_runtime_new(64 * 1024, 1000);
+    WmRuntime* rt = wm_runtime_new(test_store(), 64 * 1024, 1000);
     uint32_t result[2];
     uint64_t slices = 1;
     uint32_t start;
@@ -78,7 +87,7 @@ int main(int argc, char** argv)
         g_clock_step = (uint32_t)strtoul(getenv("WM_BENCH_CLOCK_STEP"), NULL, 0);
     size = fread(bytes, 1, sizeof bytes, f);
     fclose(f);
-    if ((r = wm_module_load(&m, bytes, (uint32_t)size)) || (r = wm_instantiate(&in, m, rt, resolve, m)) ||
+    if ((r = wm_module_load(&m, NULL, bytes, (uint32_t)size)) || (r = wm_instance_new(&in, test_store(), m, rt, resolve, m)) ||
         (r = wm_instance_export(in, "run", 3, &run)))
     {
         printf("error %s\n", r);
