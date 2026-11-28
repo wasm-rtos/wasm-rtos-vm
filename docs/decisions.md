@@ -2192,9 +2192,14 @@ As on paper, with what building it found:
   CoreMark 21.40 before, 21.94 after.
 - Black Pill (STM32F411, the engine's heap of 104 KiB), before and after:
   the same 21 of 22 (CoreMark does not fit, before as after); fib(24)
-  318 ms both, 500 round trips 74 and 75 ms. 9 programs at once both, but
-  free after them 13752 bytes before, 560 after: about 1450 bytes more a
-  task, four times the ESP32's, as the 8 bytes before an allocation push
-  blocks of round sizes (a 4 KiB frame) into the heap's next size class.
-  To be made smaller: a block whose size its object knows (frames, a
-  memory's block, a stack) needs no header.
+  318 ms both, 500 round trips 74 and 75 ms; 9 programs at once both; a
+  task with CoreMark's module 280 bytes more.
+- What a task costs, measured on a computer with the same heap (TLSF, an
+  arena of 104 KiB) and the board checks' program: 12288 bytes before,
+  12888 after, 12440 with `WM_STORE_BYTES=0`; 26 allocations live in a
+  task (25 before: the store). The header is 16 bytes on 64-bit, 8 on the
+  boards, and the heap takes for each block what it took before plus the
+  header, no more: the cost is the header times the allocations a task
+  keeps, about 2.5 percent on the boards. 8 tasks fit the arena before,
+  7 after. Fewer, larger allocations would lower it, and the heap's own
+  overhead with it.
