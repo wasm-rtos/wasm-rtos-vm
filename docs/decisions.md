@@ -2206,6 +2206,11 @@ With what building and measuring it found:
   28 more than before stores (29740, 26676; 30236 and 27104 with the
   header); 500 round trips 95 ms (88 before stores, 113 with the header:
   where the code lies in the flash cache, no work more a message).
+- Black Pill as built now: the same 21 of 22 (CoreMark does not fit,
+  before stores too), nothing leaked; a task with CoreMark's module 96
+  bytes more than before stores (26776 free after it, 26872 before,
+  26592 with the header); 500 round trips 74 ms as before; 10 programs at
+  once (9 before: where the last creation fails moved, not a gain).
   As first built, with the header on every allocation:
 - ESP32 (esp32dev), the kernel's board checks before and after, on the
   same board: 24 of 24 both, nothing leaked. A task takes about 340 bytes
