@@ -2200,6 +2200,13 @@ With what building and measuring it found:
   built. The engine on a Cortex-M4 (`-Os`, all objects whole) about 1.4
   KiB more. The hot loops are untouched; growing a memory or a table asks
   a pointer first.
+- ESP32 as built now (growth asked, no header), the same board: 24 of 24,
+  nothing leaked, 18 programs at once as before stores; with the card, a
+  task linked with its library 29768 bytes of heap and the second 26704,
+  28 more than before stores (29740, 26676; 30236 and 27104 with the
+  header); 500 round trips 95 ms (88 before stores, 113 with the header:
+  where the code lies in the flash cache, no work more a message).
+  As first built, with the header on every allocation:
 - ESP32 (esp32dev), the kernel's board checks before and after, on the
   same board: 24 of 24 both, nothing leaked. A task takes about 340 bytes
   more of heap (the header before each allocation, the store): 17
